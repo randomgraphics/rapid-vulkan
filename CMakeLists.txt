@@ -12,8 +12,10 @@ if (${RAPID_VULKAN_USE_VOLK} AND (${Vulkan_VERSION} VERSION_LESS "1.2.211"))
     message(FATAL_ERROR "[ERROR] Current Vulkan SDK version (${Vulkan_VERSION}) is too old. Please update to 1.2.211 or newer for volk.h")
 endif()
 
+set(CMAKE_CXX_STANDARD 17)
+
 add_library(${PROJECT_NAME} src/rapid-vulkan.cpp)
 
-target_include_directories(${PROJECT_NAME} PUBLIC inc)
+target_include_directories(${PROJECT_NAME} INTERFACE inc)
 target_include_directories(${PROJECT_NAME} PRIVATE ${Vulkan_INCLUDE_DIRS})
-target_compile_definitions(${PROJECT_NAME} PUBLIC RAPID_VULKAN_USE_VOLK=$<${RAPID_VULKAN_USE_VOLK}?1:0>)
+target_compile_definitions(${PROJECT_NAME} PUBLIC RAPID_VULKAN_USE_VOLK=$<BOOL:${RAPID_VULKAN_USE_VOLK}>)

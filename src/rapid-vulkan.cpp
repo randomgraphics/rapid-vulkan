@@ -1,7 +1,7 @@
 #include "../inc/rapid-vulkan.h"
 #include "3rd-party/spriv-reflect/spirv_reflect.c"
 #if RAPID_VULKAN_INCLUDE_VOLK
-#include <Volk/volk.c>
+    #include <Volk/volk.c>
 #endif
 #include <sstream>
 #include <stdexcept>
@@ -11,11 +11,16 @@
 #include <list>
 #include <map>
 
-#define THROW(message)                                         \
-    do {                                                       \
-        std::stringstream ss;                                  \
-        ss << __FILE__ << "(" << __LINE__ << "): " << message; \
-        throw std::runtime_error(ss.str());                    \
+#define RVI_THROW(...)                                             \
+    do {                                                           \
+        std::stringstream ss;                                      \
+        ss << __FILE__ << "(" << __LINE__ << "): " << __VA_ARGS__; \
+        RAPID_VULKAN_THROW(ss.str());                              \
+    } while (false)
+
+#define RVI_VERIFY(condition)                        \
+    do {                                             \
+        if (!(condition)) { RVI_THROW(#condition); } \
     } while (false)
 
 static bool emptyString(const char * p) { return !p || !p[0]; }
@@ -31,7 +36,7 @@ Shader Shader::EMPTY({});
 Shader::Shader(const ConstructParameters & params): _gi(params.gi) {
     if (params.spirv.empty()) return; // Constructing an empty shader module. Not an error.
     _handle = _gi.device.createShaderModule({{}, params.spirv.size() * sizeof(uint32_t), params.spirv.data()}, _gi.allocator);
-    _entry = params.entry;
+    _entry  = params.entry;
 }
 
 Shader::~Shader() { _gi.safeDestroy(_handle); }
@@ -116,8 +121,8 @@ public:
     void finish() {
         if (EXECUTING == _state) {
             RAPID_VULKAN_ASSERT(_fence);
-            _gi.device.waitForFences({_fence}, true, UINT64_MAX);
-            _state = FINISHED;
+            auto result = _gi.device.waitForFences({_fence}, true, UINT64_MAX);
+            _state      = FINISHED;
         }
     }
 
@@ -185,7 +190,7 @@ private:
 private:
     CommandBufferImpl * promote(CommandBuffer * p) const {
         if (!p) return nullptr;
-        auto it = _all.find((CommandBufferImpl*)p);
+        auto it = _all.find((CommandBufferImpl *) p);
         if (it == _all.end()) {
             RAPID_VULKAN_LOG_ERROR("[ERROR] Invalid command buffer pointer: 0x%p.", p);
             return nullptr;
@@ -239,15 +244,14 @@ auto CommandQueue::wait(CommandBuffer * cb) -> void { _impl->wait(cb); }
 // Pipeline Reflection
 // *********************************************************************************************************************
 
-#include <spirv_cross/spirv_reflect.hpp>
 template<typename T, typename FUNC, typename... ARGS>
 static std::vector<T *> enumerateShaderVariables(SpvReflectShaderModule & module, FUNC func, ARGS... args) {
     uint32_t count  = 0;
     auto     result = func(&module, args..., &count, nullptr);
-    PH_REQUIRE(result == SPV_REFLECT_RESULT_SUCCESS);
+    RVI_VERIFY(result == SPV_REFLECT_RESULT_SUCCESS);
     std::vector<T *> v(count);
     result = func(&module, args..., &count, v.data());
-    PH_REQUIRE(result == SPV_REFLECT_RESULT_SUCCESS);
+    RVI_VERIFY(result == SPV_REFLECT_RESULT_SUCCESS);
     return v;
 }
 
@@ -265,21 +269,21 @@ static const char * getDescriptorName(const SpvReflectDescriptorBinding * d) {
     if (name && *name) return name;
     name = d->type_description->type_name;
     if (name && *name) return name;
-    PH_THROW("name is empty."); // TODO: make up a name using descriptors type and binding location.
+    RVI_THROW("name is empty."); // TODO: make up a name using descriptors type and binding location.
 }
 
 static void mergeDescriptorSet(MergedDescriptorSet & merged, const SpvReflectShaderModule & module,
-                               const ConstRange<SpvReflectDescriptorBinding *> & incoming) {
+                               const vk::ArrayProxy<SpvReflectDescriptorBinding *> & incoming) {
     for (const auto & i : incoming) {
         const char * name = getDescriptorName(i);
         auto &       d    = merged.descriptors[name];
         if (d.binding) {
-            PH_ASSERT(0 == strcmp(getDescriptorName(d.binding), name));
+            RAPID_VULKAN_ASSERT(0 == strcmp(getDescriptorName(d.binding), name));
             // check for possible conflict
             if (d.binding->binding != i->binding)
-                PH_LOGW("Shader variable %s has conflicting bindings: %d != %d", name, d.binding->binding, i->binding);
+                RAPID_VULKAN_LOG_ERROR("Shader variable %s has conflicting bindings: %d != %d", name, d.binding->binding, i->binding);
             else if (d.binding->descriptor_type != i->descriptor_type)
-                PH_LOGW("Shader variable %s has conflicting types: %d != %d", name, d.binding->descriptor_type, i->descriptor_type);
+                RAPID_VULKAN_LOG_ERROR("Shader variable %s has conflicting types: %d != %d", name, d.binding->descriptor_type, i->descriptor_type);
         } else {
             d.binding = i;
         }
@@ -289,11 +293,11 @@ static void mergeDescriptorSet(MergedDescriptorSet & merged, const SpvReflectSha
 
 static PipelineReflection::Descriptor convertArray(const MergedDescriptorBinding & src) {
     PipelineReflection::Descriptor dst = {};
-    dst.binding                         = src.binding->binding; // wtf, so many bindings ...
-    dst.descriptorType                  = static_cast<VkDescriptorType>(src.binding->descriptor_type);
-    dst.descriptorCount                 = 1;
+    dst.binding                        = src.binding->binding; // wtf, so many bindings ...
+    dst.descriptorType                 = static_cast<vk::DescriptorType>(src.binding->descriptor_type);
+    dst.descriptorCount                = 1;
     for (uint32_t i = 0; i < src.binding->array.dims_count; ++i) dst.descriptorCount *= src.binding->array.dims[i];
-    dst.stageFlags = src.stageFlags;
+    dst.stageFlags = (vk::ShaderStageFlagBits) src.stageFlags;
     return dst;
 }
 
@@ -308,44 +312,43 @@ static PipelineReflection convertRefl(std::map<uint32_t, MergedDescriptorSet> & 
     if (!descriptors.empty()) {
         refl.descriptors.resize(descriptors.rbegin()->first + 1);
         for (const auto & kv : descriptors) {
-            PH_ASSERT(kv.first < refl.descriptors.size());
+            RAPID_VULKAN_ASSERT(kv.first < refl.descriptors.size());
             refl.descriptors[kv.first] = convertSet(kv.second);
         }
     }
     return refl;
 }
 
-static void convertVertexInputs(PipelineReflection & refl, ConstRange<SpvReflectInterfaceVariable *> vertexInputs) {
+static void convertVertexInputs(PipelineReflection & refl, vk::ArrayProxy<SpvReflectInterfaceVariable *> vertexInputs) {
     for (auto i : vertexInputs) {
         auto name = std::string(i->name);
         if (name.substr(0, 3) == "gl_") continue; // skip OpenGL's reserved inputs.
-        refl.vertex[name] = {i->location, (VkFormat) i->format};
+        refl.vertex[name] = {i->location, (vk::Format) i->format};
     }
 }
 
-static PipelineReflection reflectShaders(vk::ArrayProxy<Shader *> shaders) {
-    PH_ASSERT(!shaders.empty());
+static PipelineReflection reflectShaders(vk::ArrayProxy<Shader *> shaders, const std::string & pipelineName) {
+    RAPID_VULKAN_ASSERT(!shaders.empty());
 
     // The first uint32_t is set index. The 2nd one is shader variable name.
     std::map<uint32_t, MergedDescriptorSet> merged;
 
     std::vector<SpvReflectInterfaceVariable *> vertexInputs;
 
-    Reflection::ConstantLayout constants;
+    PipelineReflection::ConstantLayout constants;
 
     std::vector<SpvReflectShaderModule> modules;
 
-    for (const auto & kv : shaders) {
+    for (const auto & shader : shaders) {
         // Generate reflection data for a shader
-        auto                   shader = kv.second;
-        auto                   spirv  = ((ShaderImpl *) (shader->shader.get()))->spirv();
+        auto                   spirv = shader->spirv();
         SpvReflectShaderModule module;
         SpvReflectResult       result = spvReflectCreateShaderModule(spirv.size() * sizeof(uint32_t), spirv.data(), &module);
-        PH_REQUIRE(result == SPV_REFLECT_RESULT_SUCCESS);
+        RVI_VERIFY(result == SPV_REFLECT_RESULT_SUCCESS);
 
         // Extract descriptor sets from each shader, then merge together.
-        auto sets = enumerateShaderVariables<SpvReflectDescriptorSet>(module, spvReflectEnumerateEntryPointDescriptorSets, shader->entry.c_str());
-        for (const auto & set : sets) mergeDescriptorSet(merged[set->set], module, {set->bindings, set->binding_count});
+        auto sets = enumerateShaderVariables<SpvReflectDescriptorSet>(module, spvReflectEnumerateEntryPointDescriptorSets, shader->entry().c_str());
+        for (const auto & set : sets) mergeDescriptorSet(merged[set->set], module, {set->binding_count, set->bindings});
 
         // enumerate push constants
         auto pc = enumerateShaderVariables<SpvReflectBlockVariable>(module, spvReflectEnumeratePushConstantBlocks);
@@ -354,12 +357,12 @@ static PipelineReflection reflectShaders(vk::ArrayProxy<Shader *> shaders) {
                 auto & range     = constants[c->name];
                 range.offset     = c->offset;
                 range.size       = c->size;
-                range.stageFlags = module.shader_stage;
+                range.stageFlags = (vk::ShaderStageFlags) module.shader_stage;
             } else {
                 auto & range = constants[c->name];
-                PH_ASSERT(range.offset == c->offset);
-                PH_ASSERT(range.size == c->size);
-                range.stageFlags |= module.shader_stage;
+                RAPID_VULKAN_ASSERT(range.offset == c->offset);
+                RAPID_VULKAN_ASSERT(range.size == c->size);
+                range.stageFlags |= (vk::ShaderStageFlags) module.shader_stage;
             }
         }
 
@@ -385,24 +388,72 @@ static PipelineReflection reflectShaders(vk::ArrayProxy<Shader *> shaders) {
     for (auto & m : modules) spvReflectDestroyShaderModule(&m);
 
     // done
-    refl.name = name();
+    refl.name = pipelineName;
     return refl;
 }
 
 // *********************************************************************************************************************
-// Compute Pipeline
+// PipelineLayout
 // *********************************************************************************************************************
 
-ComputePipeline::ComputePipeline(const ConstructParameters & params): _gi(params.cs.gi()) {
-    // create the pipeline
-    vk::ComputePipelineCreateInfo cpci;
-    cpci.setStage({{}, vk::ShaderStageFlagBits::eCompute, params.cs.handle(), params.cs.entry().c_str()});
-    _handle = _gi.device.createComputePipeline(nullptr, cpci, _gi.allocator).value;
+PipelineLayout::PipelineLayout(const GlobalInfo & gi, const PipelineReflection & refl): _gi(gi) {
+    // create descriptor set layouts
+    _sets.resize(refl.descriptors.size());
+    for (size_t i = 0; i < _sets.size(); ++i) {
+        std::vector<VkDescriptorSetLayoutBinding> bindings;
+        std::set<uint32_t>                        occupied; // binding slot that is already occupied.
+        bindings.reserve(refl.size());
+        for (const auto & d : refl) {
+            // we have to check for redundant binding, since it is legit to delcare mutiple varialbes in GLSL on same binding number.
+            if (occupied.find(d.second.binding) != occupied.end()) continue;
+            occupied.insert(d.second.binding);
+            bindings.push_back(d.second);
+        }
+        auto ci = vk::DescriptorSetLayoutCreateInfo() ci.bindingCount = (uint32_t) bindings.size();
+        ci.pBindings                                                  = bindings.data();
+        _sets[i]                                                      = gi.device.createDescriptorSetLayout(ci, gi.allocator);
+    }
+
+    // create push constant array
+    std::vector<VkPushConstantRange> pc;
+    pc.reserve(refl.constants.size());
+    for (const auto & kv : refl.constants) pc.push_back(kv.second);
+
+    // create pipeline layout
+    auto ci                   = vk::PipelineLayoutCreateInfo();
+    ci.setLayoutCount         = (uint32_t) setLayouts.size();
+    ci.pSetLayouts            = setLayouts.data();
+    ci.pushConstantRangeCount = (uint32_t) pc.size();
+    ci.pPushConstantRanges    = pc.data();
+    _handle                   = gi.device.createPipelineLayout(ci, gi.allocator);
+    setVkObjectName(gi.device, _handle.get(), refl.name.c_str());
 }
 
-void ComputePipeline::bind(vk::CommandBuffer cb, const PipelineArguments &) {
-    cb.bindPipeline(vk::PipelineBindPoint::eCompute, _handle);
+// *********************************************************************************************************************
+// Pipeline
+// *********************************************************************************************************************
+
+Pipeline::Pipeline(vk::ArrayProxy<Shader *> shaders) {
+    // create the shader reflection
+    _reflection = reflectShaders(shaders, _name);
+
+    // create pipeline layout (TODO: use a crach to reuse layout)
+    _layout = std::make_shared<PipelineLayout>(_gi, _reflection);
 }
+
+Pipeline::~Pipeline() {
+    if (_layout) _gi.safeDestroy(_layout);
+    if (_handle) _gi.safeDestory(_handle);
+}
+
+ComputePipeline::ComputePipeline(const ConstructParameters & params): Pipeline({&params.cs}), _gi(params.cs.gi()) {
+    vk::ComputePipelineCreateInfo ci;
+    ci.setStage({{}, vk::ShaderStageFlagBits::eCompute, params.cs.handle(), params.cs.entry().c_str()});
+    ci.setLayout(_layout->handle());
+    _handle = _gi.device.createComputePipeline(nullptr, ci, _gi.allocator).value;
+}
+
+void ComputePipeline::bind(vk::CommandBuffer cb, const PipelineArguments &) { cb.bindPipeline(vk::PipelineBindPoint::eCompute, _handle); }
 
 void ComputePipeline::dispatch(vk::CommandBuffer cb, const DispatchParameters & dp) {
     cb.bindPipeline(vk::PipelineBindPoint::eCompute, _handle);

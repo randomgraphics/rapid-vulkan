@@ -4,10 +4,10 @@
     #define RAPID_VULKAN_NAMESPACE rapid_vulkan
 #endif
 
-/// Define this macro to false, if you want to use your own Vulkan loader. By default, rapid-vulkan uses Volk.h that
+/// Define this macro to 0/false, if you want to use your own Vulkan loader. By default, rapid-vulkan uses Volk.h that
 /// comes with Vulkan SDK
 #ifndef RAPID_VULKAN_INCLUDE_VOLK
-    #define RAPID_VULKAN_INCLUDE_VOLK true
+    #define RAPID_VULKAN_INCLUDE_VOLK 1
 #endif
 
 #ifndef RAPID_VULKAN_ASSERT
@@ -18,8 +18,12 @@
     #define RAPID_VULKAN_LOG_ERROR(...) fprintf(stderr, __VA_ARGS__)
 #endif
 
+#ifndef RAPID_VULKAN_THROW
+    #define RAPID_VULKAN_THROW(...) throw std::runtime_error(__VA_ARGS__)
+#endif
+
 #if RAPID_VULKAN_INCLUDE_VOLK
-#include <Volk/volk.h>
+    #include <Volk/volk.h>
 #endif
 
 #include <vulkan/vulkan.hpp>
@@ -141,7 +145,7 @@ public:
         }
 
         ConstructParameters & setSpirv(size_t countInUInt32, const uint32_t * data) {
-            spirv = vk::ArrayProxy((uint32_t) countInUInt32, data);
+            spirv = vk::ArrayProxy<uint32_t>((uint32_t) countInUInt32, data);
             return *this;
         }
     };
@@ -156,10 +160,13 @@ public:
 
     const std::string & entry() const { return _entry; }
 
+    vk::ArrayProxy<uint32_t> spirv() const { return _spirv; }
+
 private:
-    GlobalInfo       _gi;
-    vk::ShaderModule _handle {};
-    std::string      _entry;
+    GlobalInfo            _gi;
+    vk::ShaderModule      _handle {};
+    std::string           _entry;
+    std::vector<uint32_t> _spirv;
 };
 
 class Swapchain {
@@ -259,6 +266,22 @@ struct PipelineReflection {
     VertexLayout     vertex;
 };
 
+class PipelineLayout {
+public:
+    PipelineLayout(const GlobalInfo & gi, const PipelineReflection &);
+
+    ~PipelineLayout();
+
+    vk::ArrayProxy<vk::DescriptorSetLayout> descriptorSetLayouts() const { return _sets; }
+
+    vk::PipelineLayout handle() const { return _handle; }
+
+private:
+    GlobalInfo                           _gi;
+    std::vector<vk::DescriptorSetLayout> _sets;
+    vk::PipelineLayout                   _handle;
+};
+
 class PipelineArguments {
 public:
     struct ConstructParameters {
@@ -279,12 +302,21 @@ private:
 
 class Pipeline {
 public:
-    virtual auto reflect() const -> PipelineReflection                   = 0;
+    ~Pipeline();
+
+    auto reflect() const -> const PipelineReflection & { return _reflection; }
+
     virtual auto createArguments() -> std::unique_ptr<PipelineArguments> = 0;
-    virtual void bind(vk::CommandBuffer, const PipelineArguments &)      = 0;
+
+    virtual void bind(vk::CommandBuffer, const PipelineArguments &) = 0;
 
 protected:
-    vk::Pipeline _handle {};
+    PipelineReflection              _reflection;
+    std::shared_ptr<PipelineLayout> _layout;
+    vk::Pipeline                    _handle {};
+
+protected:
+    Pipeline::Pipeline(vk::ArrayProxy<Shader *> shaders);
 };
 
 class GraphicsPipeline : public Pipeline {
@@ -299,8 +331,6 @@ public:
     };
 
     GraphicsPipeline(const ConstructParameters &);
-
-    auto reflect() const -> PipelineReflection override;
 
     auto createArguments() -> std::unique_ptr<PipelineArguments> override;
 
@@ -327,8 +357,6 @@ public:
 
     ComputePipeline(const ConstructParameters &);
 
-    auto reflect() const -> PipelineReflection override;
-
     auto createArguments() -> std::unique_ptr<PipelineArguments> override;
 
     void bind(vk::CommandBuffer, const PipelineArguments &) override;
@@ -336,7 +364,7 @@ public:
     void dispatch(vk::CommandBuffer, const DispatchParameters &);
 
 private:
-    GlobalInfo   _gi;
+    GlobalInfo _gi;
 };
 
 class RenderPass {
