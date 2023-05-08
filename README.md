@@ -1,19 +1,24 @@
 # rapid-vulkan
-A lightweight wrappers and utilities for rapid creation of Vulkan app.
+rapid-vulkan is a lightweight wrappers and utilities for rapid creation of Vulkan app.
 
-To integrate this library with your project, simply copy everything in [src](src) folder to your project. Then there are 2 possible ways to build it:
+The library only depends on Vulkan SDK and one 3rd-party library: **spirv-reflect**, which is already included in the [this](src/3rd-party/spriv-reflect/) folder.
 
-- Add [rapid-vulkan.cpp](src/rapid-vulkan.cpp) into your build system, or directly include it in one of your source files, like:
+It is currently developed and tested on Windows platform. Linux support is on its way.
 
-    ```c
-    #include <rapid-vulkan.cpp>.
-    ```
+# Integration
+The library is aiming for easy integration with any Vulkan project. Simply copy everything in [src](src) folder to your project. Then you are pretty much done.
 
-Then you can use all rapid-vulkan functionalies via [rapid-vulkan.h](src/rapid-vulkan.h). Or,
+You can add [rapid-vulkan.cpp](src/rapid-vulkan.cpp) into your build system, or directly include it in one of your source files:
 
-- Alternatively, you can also include rapid-vulkan.h with RAPID_VULKAN_IMPLEMENTATION macro defined before the header file:
+```c
+#include <rapid-vulkan.cpp>.
+```
 
-    ```c
-    #define RAPID_VULKAN_IMPLEMENTATION
-    #include <rapid-vulkan.h>
-    ```
+Then you can use all rapid-vulkan functionalies via [rapid-vulkan.h](src/rapid-vulkan.h).
+
+Alternatively, you can also include [rapid-vulkan.h](src/rapid-vulkan.h) with **RAPID_VULKAN_IMPLEMENTATION** macro defined before the header file:
+
+```c
+#define RAPID_VULKAN_IMPLEMENTATION
+#include <rapid-vulkan.h>
+```
