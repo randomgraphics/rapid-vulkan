@@ -1,20 +1,20 @@
-#include "../inc/rapid-vulkan.h"
-#include "3rd-party/spriv-reflect/spirv_reflect.c"
-#if RAPID_VULKAN_INCLUDE_VOLK
-    #include <Volk/volk.c>
+#ifndef RAPID_VULKAN_IMPLEMENTATION
+    #include "rapid-vulkan.h"
 #endif
+#include "3rd-party/spriv-reflect/spirv_reflect.c"
 #include <sstream>
 #include <stdexcept>
 #include <iomanip>
 #include <mutex>
 #include <unordered_set>
 #include <list>
-#include <map>
+#include <set>
 
 #define RVI_THROW(...)                                             \
     do {                                                           \
         std::stringstream ss;                                      \
         ss << __FILE__ << "(" << __LINE__ << "): " << __VA_ARGS__; \
+        RAPID_VULKAN_LOG_ERROR("", ss.str().data());               \
         RAPID_VULKAN_THROW(ss.str());                              \
     } while (false)
 
@@ -22,8 +22,6 @@
     do {                                             \
         if (!(condition)) { RVI_THROW(#condition); } \
     } while (false)
-
-static bool emptyString(const char * p) { return !p || !p[0]; }
 
 namespace RAPID_VULKAN_NAMESPACE {
 
@@ -33,7 +31,7 @@ namespace RAPID_VULKAN_NAMESPACE {
 
 Shader Shader::EMPTY({});
 
-Shader::Shader(const ConstructParameters & params): _gi(params.gi) {
+Shader::Shader(const ConstructParameters & params): Root(params), _gi(params.gi) {
     if (params.spirv.empty()) return; // Constructing an empty shader module. Not an error.
     _handle = _gi.device.createShaderModule({{}, params.spirv.size() * sizeof(uint32_t), params.spirv.data()}, _gi.allocator);
     _entry  = params.entry;
@@ -56,7 +54,7 @@ public:
 
     std::list<CommandBufferImpl *>::iterator pending;
 
-    CommandBufferImpl(const GlobalInfo & gi, uint32_t family, const char * name_, vk::CommandBufferLevel level): _gi(gi) {
+    CommandBufferImpl(const GlobalInfo & gi, uint32_t family, const std::string & name_, vk::CommandBufferLevel level): CommandBuffer({name_}), _gi(gi) {
         _pool = _gi.device.createCommandPool(vk::CommandPoolCreateInfo().setQueueFamilyIndex(family), _gi.allocator);
 
         vk::CommandBufferAllocateInfo info;
@@ -65,22 +63,18 @@ public:
         info.commandBufferCount = 1;
         _handle                 = _gi.device.allocateCommandBuffers(info)[0];
         _level                  = level;
-        _name                   = emptyString(name_) ? "<no-name>" : name_;
-        setVkObjectName(_gi.device, _handle, _name);
+        setVkObjectName(_gi.device, _handle, name());
         _handle.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
     }
 
     virtual ~CommandBufferImpl() {
-        if (_handle) {
-            _gi.device.freeCommandBuffers(_pool, _handle);
-            _handle.reset();
-        }
+        _gi.safeDestroy(_handle, _pool);
+        _gi.safeDestroy(_fence);
+        _gi.safeDestroy(_semaphore);
         _gi.safeDestroy(_pool);
     }
 
     const GlobalInfo & gi() const { return _gi; }
-
-    const std::string & name() const { return _name; }
 
     State state() const { return _state; }
 
@@ -91,7 +85,7 @@ public:
             handle().end();
             _state = ENDED;
         } else if (_state != ENDED) {
-            RAPID_VULKAN_LOG_ERROR("[ERROR] Command buffer %s is not in RECORDING or ENDED state!", _name.c_str());
+            RAPID_VULKAN_LOG_ERROR("[ERROR] Command buffer %s is not in RECORDING or ENDED state!", name().c_str());
             return false;
         }
 
@@ -99,8 +93,8 @@ public:
         RAPID_VULKAN_ASSERT(!_fence && !_semaphore);
         auto fence     = _gi.device.createFenceUnique({});
         auto semaphore = _gi.device.createSemaphoreUnique({});
-        setVkObjectName(_gi.device, fence.get(), _name);
-        setVkObjectName(_gi.device, semaphore.get(), _name);
+        setVkObjectName(_gi.device, fence.get(), name());
+        setVkObjectName(_gi.device, semaphore.get(), name());
 
         // submit the command buffer
         vk::SubmitInfo si;
@@ -122,7 +116,10 @@ public:
         if (EXECUTING == _state) {
             RAPID_VULKAN_ASSERT(_fence);
             auto result = _gi.device.waitForFences({_fence}, true, UINT64_MAX);
-            _state      = FINISHED;
+            if (result != vk::Result::eSuccess) {
+                RAPID_VULKAN_LOG_ERROR("[ERROR] Command buffer %s failed to wait for fence!", name().c_str());
+            }
+            _state = FINISHED;
         }
     }
 
@@ -134,7 +131,6 @@ public:
 
 private:
     const GlobalInfo & _gi;
-    std::string        _name;
     vk::CommandPool    _pool; // one pool for each command buffer for simplicity for now.
     State              _state     = RECORDING;
     vk::Fence          _fence     = nullptr;
@@ -215,8 +211,8 @@ private:
             // _finished.push_back(std::move(*iter));
 
             // Remove from all list. Destroy the command buffer.
-            _all.erase(_all.find(p));
-            delete p;
+            _all.erase(_all.find(*iter));
+            delete *iter;
         }
         // Then remove them from the pending list.
         _pendings.erase(_pendings.begin(), end);
@@ -231,8 +227,8 @@ private:
     }
 };
 
-CommandQueue::CommandQueue(const ConstructParameters & params): _cp(params) {
-    _handle = params.gi.device.getQueue(params.family, params.index);
+CommandQueue::CommandQueue(const ConstructParameters & params): Root(params), _gi(params.gi), _family(params.family), _index(params.index) {
+    _handle = _gi.device.getQueue(_family, _index);
     _impl   = new Impl(*this);
 }
 CommandQueue::~CommandQueue() { delete _impl; }
@@ -327,7 +323,7 @@ static void convertVertexInputs(PipelineReflection & refl, vk::ArrayProxy<SpvRef
     }
 }
 
-static PipelineReflection reflectShaders(vk::ArrayProxy<Shader *> shaders, const std::string & pipelineName) {
+static PipelineReflection reflectShaders(const std::string & pipelineName, vk::ArrayProxy<const Shader *> shaders) {
     RAPID_VULKAN_ASSERT(!shaders.empty());
 
     // The first uint32_t is set index. The 2nd one is shader variable name.
@@ -341,7 +337,9 @@ static PipelineReflection reflectShaders(vk::ArrayProxy<Shader *> shaders, const
 
     for (const auto & shader : shaders) {
         // Generate reflection data for a shader
-        auto                   spirv = shader->spirv();
+        auto spirv = shader->spirv();
+        if (spirv.empty()) continue;
+
         SpvReflectShaderModule module;
         SpvReflectResult       result = spvReflectCreateShaderModule(spirv.size() * sizeof(uint32_t), spirv.data(), &module);
         RVI_VERIFY(result == SPV_REFLECT_RESULT_SUCCESS);
@@ -396,62 +394,88 @@ static PipelineReflection reflectShaders(vk::ArrayProxy<Shader *> shaders, const
 // PipelineLayout
 // *********************************************************************************************************************
 
-PipelineLayout::PipelineLayout(const GlobalInfo & gi, const PipelineReflection & refl): _gi(gi) {
+PipelineLayout::PipelineLayout(const GlobalInfo & gi, const PipelineReflection & refl): Root({refl.name}), _gi(gi) {
     // create descriptor set layouts
     _sets.resize(refl.descriptors.size());
     for (size_t i = 0; i < _sets.size(); ++i) {
-        std::vector<VkDescriptorSetLayoutBinding> bindings;
-        std::set<uint32_t>                        occupied; // binding slot that is already occupied.
-        bindings.reserve(refl.size());
-        for (const auto & d : refl) {
-            // we have to check for redundant binding, since it is legit to delcare mutiple varialbes in GLSL on same binding number.
+        std::vector<vk::DescriptorSetLayoutBinding> bindings;
+        std::set<uint32_t>                          occupied; // binding slot that is already occupied.
+        bindings.reserve(refl.descriptors[i].size());
+        for (const auto & d : refl.descriptors[i]) {
+            // we have to check for redundant binding, since it is legit to delcare mutiple variables in GLSL on same binding number.
             if (occupied.find(d.second.binding) != occupied.end()) continue;
             occupied.insert(d.second.binding);
             bindings.push_back(d.second);
         }
-        auto ci = vk::DescriptorSetLayoutCreateInfo() ci.bindingCount = (uint32_t) bindings.size();
-        ci.pBindings                                                  = bindings.data();
-        _sets[i]                                                      = gi.device.createDescriptorSetLayout(ci, gi.allocator);
+        auto ci         = vk::DescriptorSetLayoutCreateInfo();
+        ci.bindingCount = (uint32_t) bindings.size();
+        ci.pBindings    = bindings.data();
+        _sets[i]        = gi.device.createDescriptorSetLayout(ci, gi.allocator);
     }
 
     // create push constant array
-    std::vector<VkPushConstantRange> pc;
+    std::vector<vk::PushConstantRange> pc;
     pc.reserve(refl.constants.size());
     for (const auto & kv : refl.constants) pc.push_back(kv.second);
 
     // create pipeline layout
     auto ci                   = vk::PipelineLayoutCreateInfo();
-    ci.setLayoutCount         = (uint32_t) setLayouts.size();
-    ci.pSetLayouts            = setLayouts.data();
+    ci.setLayoutCount         = (uint32_t) _sets.size();
+    ci.pSetLayouts            = _sets.data();
     ci.pushConstantRangeCount = (uint32_t) pc.size();
     ci.pPushConstantRanges    = pc.data();
     _handle                   = gi.device.createPipelineLayout(ci, gi.allocator);
-    setVkObjectName(gi.device, _handle.get(), refl.name.c_str());
+    setVkObjectName(gi.device, _handle, refl.name);
 }
+
+PipelineLayout::~PipelineLayout() {
+    for (auto & s : _sets) _gi.safeDestroy(s);
+    _sets.clear();
+    _gi.safeDestroy(_handle);
+}
+
+// *********************************************************************************************************************
+// PipelineArguments
+// *********************************************************************************************************************
+
+PipelineArguments::PipelineArguments(const ConstructParameters & params): Root(params) {}
+
+PipelineArguments::~PipelineArguments() {}
 
 // *********************************************************************************************************************
 // Pipeline
 // *********************************************************************************************************************
 
-Pipeline::Pipeline(vk::ArrayProxy<Shader *> shaders) {
-    // create the shader reflection
-    _reflection = reflectShaders(shaders, _name);
+Pipeline::Pipeline(const std::string & name, vk::ArrayProxy<const Shader *> shaders): Root({name}) {
+    if (shaders.empty()) return; // empty pipeline is not an error.
 
-    // create pipeline layout (TODO: use a crach to reuse layout)
-    _layout = std::make_shared<PipelineLayout>(_gi, _reflection);
+    // create the shader reflection
+    _reflection = reflectShaders(name, shaders);
+
+    // create pipeline layout (TODO: use a cache to reuse layout)
+    auto & gi = shaders.front()->gi();
+    _layout   = std::make_shared<PipelineLayout>(gi, _reflection);
 }
 
 Pipeline::~Pipeline() {
-    if (_layout) _gi.safeDestroy(_layout);
-    if (_handle) _gi.safeDestory(_handle);
+    if (_handle) {
+        RAPID_VULKAN_ASSERT(_layout);
+        _layout->gi().safeDestroy(_handle);
+    }
 }
 
-ComputePipeline::ComputePipeline(const ConstructParameters & params): Pipeline({&params.cs}), _gi(params.cs.gi()) {
+// *********************************************************************************************************************
+// Compute Pipeline
+// *********************************************************************************************************************
+
+ComputePipeline::ComputePipeline(const ConstructParameters & params): Pipeline(params.name, {&params.cs}), _gi(params.cs.gi()) {
     vk::ComputePipelineCreateInfo ci;
     ci.setStage({{}, vk::ShaderStageFlagBits::eCompute, params.cs.handle(), params.cs.entry().c_str()});
     ci.setLayout(_layout->handle());
     _handle = _gi.device.createComputePipeline(nullptr, ci, _gi.allocator).value;
 }
+
+auto ComputePipeline::createArguments() -> std::unique_ptr<PipelineArguments> { return {}; }
 
 void ComputePipeline::bind(vk::CommandBuffer cb, const PipelineArguments &) { cb.bindPipeline(vk::PipelineBindPoint::eCompute, _handle); }
 
