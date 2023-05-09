@@ -49,6 +49,38 @@ SOFTWARE.
 
 namespace RAPID_VULKAN_NAMESPACE {
 
+// ---------------------------------------------------------------------------------------------------------------------
+//
+std::vector<vk::PhysicalDevice> enumeratePhysicalDevices(vk::Instance instance) {
+    return completeEnumerate<vk::PhysicalDevice>([&](uint32_t * count, vk::PhysicalDevice * data) { return instance.enumeratePhysicalDevices(count, data); });
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// This function currently selects the device with the longest extension list.
+vk::PhysicalDevice selectTheMostPowerfulPhysicalDevice(vk::ArrayProxy<const vk::PhysicalDevice> phydevs) {
+    size_t result = 0;
+    size_t maxext = 0;
+    for (size_t i = 0; i < phydevs.size(); ++i) {
+        auto dev        = phydevs.data()[i];
+        auto extensions = completeEnumerate<vk::ExtensionProperties>(
+            [&](uint32_t * count, vk::ExtensionProperties * data) -> vk::Result { return dev.enumerateDeviceExtensionProperties(nullptr, count, data); });
+        if (extensions.size() > maxext) {
+            maxext = extensions.size();
+            result = i;
+        }
+    }
+    return phydevs.data()[result];
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+//
+std::vector<vk::ExtensionProperties> enumerateDeviceExtensions(vk::PhysicalDevice dev) {
+    auto extensions = completeEnumerate<vk::ExtensionProperties>(
+        [&](uint32_t * count, vk::ExtensionProperties * data) { return dev.enumerateDeviceExtensionProperties(nullptr, count, data); });
+    std::sort(extensions.begin(), extensions.end(), [](const auto & a, const auto & b) -> bool { return strcmp(a.extensionName, b.extensionName) < 0; });
+    return extensions;
+}
+
 // *********************************************************************************************************************
 // Shader
 // *********************************************************************************************************************
@@ -140,9 +172,7 @@ public:
         if (EXECUTING == _state) {
             RAPID_VULKAN_ASSERT(_fence);
             auto result = _gi.device.waitForFences({_fence}, true, UINT64_MAX);
-            if (result != vk::Result::eSuccess) {
-                RAPID_VULKAN_LOG_ERROR("[ERROR] Command buffer %s failed to wait for fence!", name().c_str());
-            }
+            if (result != vk::Result::eSuccess) { RAPID_VULKAN_LOG_ERROR("[ERROR] Command buffer %s failed to wait for fence!", name().c_str()); }
             _state = FINISHED;
         }
     }
@@ -508,5 +538,892 @@ void ComputePipeline::dispatch(vk::CommandBuffer cb, const DispatchParameters & 
     cb.bindPipeline(vk::PipelineBindPoint::eCompute, _handle);
     cb.dispatch(dp.width, dp.height, dp.depth);
 }
+
+// *********************************************************************************************************************
+// Device
+// *********************************************************************************************************************
+
+class Device::Details {
+public:
+    Details(Device * owner): _owner(owner) { add(owner); }
+
+    ~Details() { del(_owner); }
+
+    static Device * find(vk::Device handle) {
+        auto lock = std::lock_guard<std::mutex>(_mutex);
+        auto iter = std::find_if(_table.begin(), _table.end(), [&](auto p) { return p->gi().device == handle; });
+        return iter != _table.end() ? *iter : nullptr;
+    }
+
+    bool lost() const { return _lost; }
+
+    void setLost(const char *) {
+        _lost = true;
+        // auto bt = backtrace();
+        // if (!bt.empty()) {
+        //     RAPID_VULKAN_LOG_ERROR("Device 0x%" PRIx64 ": %s failed due to VK_ERROR_DEVICE_LOST:\n%s", (uint64_t) _owner->vgi().device, action, bt.c_str());
+        // }
+    }
+
+private:
+    inline static std::list<Device *> _table;
+    inline static std::mutex          _mutex;
+    Device *                          _owner;
+    bool                              _lost = false;
+
+    static void add(Device * p) {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _table.push_back(p);
+    }
+
+    static void del(Device * p) {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _table.remove(p);
+    }
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
+//
+template<typename StructureChainIterator>
+static inline void * buildStructureChain(StructureChainIterator begin, StructureChainIterator end, void * extra = nullptr) {
+    struct Segment {
+        uint32_t type;
+        void *   next = nullptr;
+    };
+
+    void * next = extra ? extra : nullptr;
+
+    for (auto iter = begin; iter != end; ++iter) {
+        auto & c = *iter;
+        auto   s = (Segment *) c.buffer.data();
+        s->next  = next;
+        next     = s;
+    }
+    return next;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// An helper structure to for easier use of vk::PhysicalDeviceFeatures2 structure
+struct PhysicalDeviceFeatureList {
+    /// constructor
+    PhysicalDeviceFeatureList(const vk::PhysicalDeviceFeatures & features1, const std::vector<StructureChain> & features2, void * features3 = nullptr) {
+        // store basic feature list
+        _deviceFeatures.features = features1;
+
+        // build extensible feature chain.
+        _list.assign(features2.begin(), features2.end());
+        _deviceFeatures.pNext = buildStructureChain(_list.begin(), _list.end(), features3);
+    }
+
+    // Returns the first (root) level struct in the feature list chain.
+    const vk::PhysicalDeviceFeatures2 & root() const { return _deviceFeatures; }
+
+    // Returns the first (root) level struct in the feature list chain.
+    vk::PhysicalDeviceFeatures2 & root() { return _deviceFeatures; }
+
+    /// Add new feature to the feature2 list.
+    template<typename T>
+    T & addFeature(const T & feature) {
+        StructureChain sc(feature);
+        _list.emplace_back(sc);
+        auto t                = (T *) _list.back().buffer.data();
+        t->pNext              = _deviceFeatures.pNext;
+        _deviceFeatures.pNext = t;
+        return *t;
+    }
+
+private:
+    vk::PhysicalDeviceFeatures2 _deviceFeatures {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2_KHR};
+    std::list<StructureChain>   _list;
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
+//
+static std::string printVulkanVersion(uint32_t v) {
+    std::stringstream ss;
+    ss << "v" << VK_VERSION_MAJOR(v) << "." << VK_VERSION_MINOR(v) << "." << VK_VERSION_PATCH(v);
+    return ss.str();
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
+//
+static void printPhysicalDeviceInfo(const std::vector<vk::PhysicalDevice> & available, vk::PhysicalDevice selected, bool) {
+#define PRINT_LIMIT(name) "        " #name " = " << p.limits.name << std::endl
+    std::stringstream ss;
+    ss << "===================================" << std::endl << "Available Vulkan physical devices :" << std::endl;
+    for (const auto & d : available) {
+        VkPhysicalDeviceDescriptorIndexingProperties dip = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES};
+        VkPhysicalDeviceProperties2                  p2  = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2_KHR, &dip};
+        vkGetPhysicalDeviceProperties2(d, &p2);
+        const auto & p = p2.properties;
+        ss << ((d == selected) ? "  * " : "    ") << p.deviceName << std::endl
+           << "        API version = " << printVulkanVersion(p.apiVersion) << std::endl
+           << "        Driver version = " << printVulkanVersion(p.driverVersion)
+           << std::endl
+           // clang-format off
+           << PRINT_LIMIT(maxBoundDescriptorSets)
+           << PRINT_LIMIT(maxPerStageDescriptorSamplers)
+           << PRINT_LIMIT(maxPerStageDescriptorUniformBuffers)
+           << PRINT_LIMIT(maxPerStageDescriptorStorageBuffers)
+           << PRINT_LIMIT(maxPerStageDescriptorSampledImages)
+           << PRINT_LIMIT(maxPerStageDescriptorStorageImages)
+           << PRINT_LIMIT(maxPerStageDescriptorInputAttachments)
+           << PRINT_LIMIT(maxPerStageResources)
+           << PRINT_LIMIT(maxDescriptorSetSamplers)
+           << PRINT_LIMIT(maxDescriptorSetUniformBuffers)
+           << PRINT_LIMIT(maxDescriptorSetUniformBuffersDynamic)
+           << PRINT_LIMIT(maxDescriptorSetStorageBuffers)
+           << PRINT_LIMIT(maxDescriptorSetStorageBuffersDynamic)
+           << PRINT_LIMIT(maxDescriptorSetSampledImages)
+           << PRINT_LIMIT(maxDescriptorSetStorageImages)
+           << PRINT_LIMIT(maxDescriptorSetInputAttachments);
+        // clang-format on
+    }
+    ss << std::endl;
+    RAPID_VULKAN_LOG_INFO("%s", ss.str().c_str());
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+//
+static void printDeviceFeatures(vk::PhysicalDevice phydev, const PhysicalDeviceFeatureList & enabled, bool verbose) {
+    // retrieve physical device properties
+    vk::PhysicalDeviceProperties properties = phydev.getProperties();
+
+    // retrieve supported feature list
+    vk::PhysicalDeviceFeatures supported = phydev.getFeatures();
+
+    // print enabled feature list
+    bool              none = true;
+    std::stringstream ss;
+    ss << "=====================================================================" << std::endl;
+    ss << (verbose ? "Available" : "Enabled") << " features of the selected device : " << properties.deviceName << std::endl;
+#define PRINT_FEATURE(x)                                          \
+    if (supported.x) {                                            \
+        if (enabled.root().features.x) {                          \
+            ss << (verbose ? "  * " : "    ") << #x << std::endl; \
+            none = false;                                         \
+        } else if (verbose) {                                     \
+            ss << "    " << #x << std::endl;                      \
+            none = false;                                         \
+        }                                                         \
+    }
+    PRINT_FEATURE(robustBufferAccess);
+    PRINT_FEATURE(fullDrawIndexUint32);
+    PRINT_FEATURE(imageCubeArray);
+    PRINT_FEATURE(independentBlend);
+    PRINT_FEATURE(geometryShader);
+    PRINT_FEATURE(tessellationShader);
+    PRINT_FEATURE(sampleRateShading);
+    PRINT_FEATURE(dualSrcBlend);
+    PRINT_FEATURE(logicOp);
+    PRINT_FEATURE(multiDrawIndirect);
+    PRINT_FEATURE(drawIndirectFirstInstance);
+    PRINT_FEATURE(depthClamp);
+    PRINT_FEATURE(depthBiasClamp);
+    PRINT_FEATURE(fillModeNonSolid);
+    PRINT_FEATURE(depthBounds);
+    PRINT_FEATURE(wideLines);
+    PRINT_FEATURE(largePoints);
+    PRINT_FEATURE(alphaToOne);
+    PRINT_FEATURE(multiViewport);
+    PRINT_FEATURE(samplerAnisotropy);
+    PRINT_FEATURE(textureCompressionETC2);
+    PRINT_FEATURE(textureCompressionASTC_LDR);
+    PRINT_FEATURE(textureCompressionBC);
+    PRINT_FEATURE(occlusionQueryPrecise);
+    PRINT_FEATURE(pipelineStatisticsQuery);
+    PRINT_FEATURE(vertexPipelineStoresAndAtomics);
+    PRINT_FEATURE(fragmentStoresAndAtomics);
+    PRINT_FEATURE(shaderTessellationAndGeometryPointSize);
+    PRINT_FEATURE(shaderImageGatherExtended);
+    PRINT_FEATURE(shaderStorageImageExtendedFormats);
+    PRINT_FEATURE(shaderStorageImageMultisample);
+    PRINT_FEATURE(shaderStorageImageReadWithoutFormat);
+    PRINT_FEATURE(shaderStorageImageWriteWithoutFormat);
+    PRINT_FEATURE(shaderUniformBufferArrayDynamicIndexing);
+    PRINT_FEATURE(shaderSampledImageArrayDynamicIndexing);
+    PRINT_FEATURE(shaderStorageBufferArrayDynamicIndexing);
+    PRINT_FEATURE(shaderStorageImageArrayDynamicIndexing);
+    PRINT_FEATURE(shaderClipDistance);
+    PRINT_FEATURE(shaderCullDistance);
+    PRINT_FEATURE(shaderFloat64);
+    PRINT_FEATURE(shaderInt64);
+    PRINT_FEATURE(shaderInt16);
+    PRINT_FEATURE(shaderResourceResidency);
+    PRINT_FEATURE(shaderResourceMinLod);
+    PRINT_FEATURE(sparseBinding);
+    PRINT_FEATURE(sparseResidencyBuffer);
+    PRINT_FEATURE(sparseResidencyImage2D);
+    PRINT_FEATURE(sparseResidencyImage3D);
+    PRINT_FEATURE(sparseResidency2Samples);
+    PRINT_FEATURE(sparseResidency4Samples);
+    PRINT_FEATURE(sparseResidency8Samples);
+    PRINT_FEATURE(sparseResidency16Samples);
+    PRINT_FEATURE(sparseResidencyAliased);
+    PRINT_FEATURE(variableMultisampleRate);
+    PRINT_FEATURE(inheritedQueries);
+#undef PRINT_FEATURE
+    if (none) ss << std::endl << "  [None]" << std::endl;
+    ss << std::endl;
+    RAPID_VULKAN_LOG_INFO("%s", ss.str().c_str());
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+//
+static void printDeviceExtensions(vk::PhysicalDevice phydev, const std::vector<vk::ExtensionProperties> & available, const std::vector<const char *> & enabled,
+                                  bool verbose) {
+    // retrieve physical device properties
+    auto properties = phydev.getProperties();
+
+    std::stringstream ss;
+    ss << "=====================================================================" << std::endl;
+    ss << (verbose ? "Available" : "Enabled") << " extensions of the selected device: " << properties.deviceName << std::endl;
+    bool none = true;
+    for (size_t i = 0; i < available.size(); ++i) {
+        const auto & e         = available[i];
+        bool         supported = false;
+        for (size_t j = 0; j < enabled.size(); ++j) {
+            if (0 == strcmp(e.extensionName, enabled[j])) {
+                supported = true;
+                break;
+            }
+        }
+        if (!supported && !verbose) continue;
+        ss << ((supported && verbose) ? "*" : " ") << std::setw(3) << i << " : " << e.extensionName << " ( ver. " << e.specVersion << " )" << std::endl;
+        none = false;
+    }
+    if (none) ss << std::endl << "  [None]" << std::endl;
+    ss << std::endl;
+    RAPID_VULKAN_LOG_INFO("%s", ss.str().c_str());
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+//
+static void printAvailableQueues(vk::PhysicalDevice phydev, const std::vector<vk::QueueFamilyProperties> & queues, bool) {
+    auto properties = phydev.getProperties();
+
+    auto flags2str = [](vk::QueueFlags flags) -> std::string {
+        std::stringstream ss;
+        bool              empty = true;
+        ss << (uint32_t) flags << " (";
+        if (flags & vk::QueueFlagBits::eCompute) {
+            if (empty) {
+                empty = false;
+            } else {
+                ss << "|";
+            }
+            ss << "Graphics";
+        }
+        if (flags & vk::QueueFlagBits::eGraphics) {
+            if (empty) {
+                empty = false;
+            } else {
+                ss << "|";
+            }
+            ss << "Compute";
+        }
+        if (flags & vk::QueueFlagBits::eTransfer) {
+            if (empty) {
+                empty = false;
+            } else {
+                ss << "|";
+            }
+            ss << "Transfer";
+        }
+        if (flags & vk::QueueFlagBits::eSparseBinding) {
+            if (empty) {
+                empty = false;
+            } else {
+                ss << "|";
+            }
+            ss << "SparseBinding";
+        }
+        ss << ")";
+        return ss.str();
+    };
+
+    std::stringstream ss;
+    ss << "=====================================================================" << std::endl;
+    ss << "Available queues on selected device : " << properties.deviceName << std::endl;
+    for (size_t i = 0; i < queues.size(); ++i) {
+        const auto & q = queues[i];
+        auto         w = q.minImageTransferGranularity.width;
+        auto         h = q.minImageTransferGranularity.height;
+        auto         d = q.minImageTransferGranularity.depth;
+        ss << " " << i << " : queueCount = " << q.queueCount << std::endl
+           << "     minImageTransferGranularity = (" << w << "x" << h << "x" << d << ")" << std::endl
+           << "     timestampValidBits = " << q.timestampValidBits << std::endl
+           << "     queueFlags = " << flags2str(q.queueFlags) << std::endl;
+    }
+    ss << std::endl;
+
+    RAPID_VULKAN_LOG_INFO("%s", ss.str().c_str());
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+//
+static std::vector<const char *> validateExtensions(const std::vector<vk::ExtensionProperties> & available, const std::map<std::string, bool> & asked) {
+    std::vector<const char *> supported;
+    for (const auto & a : asked) {
+        bool found = false;
+        for (const auto & b : available) {
+            if (a.first == b.extensionName) {
+                supported.push_back(b.extensionName);
+                found = true;
+                break;
+            }
+        }
+        if (found) continue;
+        if (a.second) {
+            RVI_THROW("Extension %s is not supported by current device.", a.first.c_str());
+        } else {
+            RAPID_VULKAN_LOG_WARN("Optional feature %s is not supported by the current device.", a.first.c_str());
+        }
+    }
+    return supported;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+//
+Device::Device(ConstructParameters cp): _cp(cp) {
+    _details = new Details(this);
+
+    // check instance pointer
+    RVI_VERIFY(cp.instance);
+    _gi.instance = cp.instance;
+
+    // enumerate physical devices
+    auto phydevs = enumeratePhysicalDevices(_gi.instance);
+
+    // TODO: pick the one specified by user.
+    _gi.physical = selectTheMostPowerfulPhysicalDevice(phydevs);
+    bool verbose = cp.printVkInfo == VERBOSE;
+    if (cp.printVkInfo) printPhysicalDeviceInfo(phydevs, _gi.physical, verbose);
+
+    // query queues
+    uint32_t count;
+    vkGetPhysicalDeviceQueueFamilyProperties(_gi.physical, &count, nullptr);
+    auto families = _gi.physical.getQueueFamilyProperties();
+    if (cp.printVkInfo) printAvailableQueues(_gi.physical, families, verbose);
+
+    // setup device feature and extension
+    PhysicalDeviceFeatureList   deviceFeatures(cp.features1, cp.features2, cp.features3);
+    std::map<std::string, bool> askedDeviceExtensions = cp.deviceExtensions;
+
+    // more extension
+    askedDeviceExtensions[VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME] = true;
+
+    // #if PH_ANDROID == 0
+    //     if (isRenderDocPresent()) {                                                       // only add this when renderdoc is available
+    //         askedDeviceExtensions[VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME] = true; // add this to allow debugging on compute shaders
+    //     }
+    // #endif
+
+    // Add swapchain extension when there is a surface.
+    bool presenting = false;
+    if (_cp.surface) {
+        askedDeviceExtensions[VK_KHR_SWAPCHAIN_EXTENSION_NAME] = true;
+        presenting                                             = true;
+    }
+
+    // make sure all extensions are actually supported by the hardware.
+    auto availableDeviceExtensions = enumerateDeviceExtensions(_gi.physical);
+    auto enabledDeviceExtensions   = validateExtensions(availableDeviceExtensions, askedDeviceExtensions);
+
+    // create device, one queue for each family
+    float                                  queuePriority = 1.0f;
+    std::vector<vk::DeviceQueueCreateInfo> queueCreateInfo;
+    for (uint32_t i = 0; i < families.size(); ++i) {
+        queueCreateInfo.emplace_back(vk::DeviceQueueCreateInfo({}, i, 1, &queuePriority));
+    }
+
+    // create device
+    vk::DeviceCreateInfo deviceCreateInfo;
+    deviceCreateInfo.setPNext(&deviceFeatures);
+    deviceCreateInfo.setQueueCreateInfos(queueCreateInfo);
+    deviceCreateInfo.setPEnabledExtensionNames(enabledDeviceExtensions);
+    _gi.device = _gi.physical.createDevice(deviceCreateInfo, _gi.allocator);
+
+    // TODO: initialize device specific dispatcher.`
+
+    //     // initialize a memory allocator for Vulkan images
+    //     if (_cp.useVmaAllocator) {
+    //         VmaVulkanFunctions vf {};
+    //         vf.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
+    //         vf.vkGetDeviceProcAddr   = vkGetDeviceProcAddr;
+    //         VmaAllocatorCreateInfo ai {};
+    //         ai.vulkanApiVersion = _cp.instance->cp().apiVersion;
+    //         ai.physicalDevice   = _gi.physical;
+    //         ai.device           = _gi.device;
+    //         ai.instance         = _gi.instance;
+    //         ai.pVulkanFunctions = &vf;
+
+    // #if 0 // uncomment this section to enable vma allocation recording
+    //         VmaRecordSettings vmaRecordSettings;
+    //         vmaRecordSettings.pFilePath = "vmaReplay.csv";
+    //         vmaRecordSettings.flags = VMA_RECORD_FLUSH_AFTER_CALL_BIT;
+    //         ai.pRecordSettings = &vmaRecordSettings;
+    // #endif
+
+    //         if (askedDeviceExtensions.find(VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME) != askedDeviceExtensions.end()) {
+    //             RAPID_VULKAN_LOG_INFO("Enable VMA allocator with buffer device address.");
+    //             ai.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+    //         }
+    //         GN_VK_REQUIRE(vmaCreateAllocator(&ai, &_gi.vmaAllocator));
+    //     }
+
+    // print device information
+    if (cp.printVkInfo) {
+        printDeviceFeatures(_gi.physical, deviceFeatures, verbose);
+        printDeviceExtensions(_gi.physical, availableDeviceExtensions, enabledDeviceExtensions, verbose);
+    }
+
+    // classify queue families. create command pool for each of them.
+    _queues.resize(families.size());
+    for (uint32_t i = 0; i < families.size(); ++i) {
+        const auto & f = families[i];
+
+        // create an submission proxy for each queue.
+        auto name  = std::string("Default device queue #") + std::to_string(i);
+        auto q     = new CommandQueue({name, _gi, i, 0});
+        _queues[i] = q;
+
+        // classify all queues
+        if (!_graphics && f.queueFlags & vk::QueueFlagBits::eGraphics) _graphics = q;
+
+        if (!_compute && !(f.queueFlags & vk::QueueFlagBits::eGraphics) && (f.queueFlags & vk::QueueFlagBits::eCompute)) _compute = q;
+
+        if (!_transfer && !(f.queueFlags & vk::QueueFlagBits::eGraphics) && !(f.queueFlags & vk::QueueFlagBits::eCompute) &&
+            (f.queueFlags & vk::QueueFlagBits::eTransfer))
+            _transfer = q;
+
+        if (!_present && presenting) {
+            VkBool32 supportPresenting = false;
+            vkGetPhysicalDeviceSurfaceSupportKHR(_gi.physical, i, _cp.surface, &supportPresenting);
+            if (supportPresenting) _present = q;
+        }
+    }
+
+    RAPID_VULKAN_LOG_INFO("Vulkan device initialized.");
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+//
+Device::~Device() {
+    delete _details;
+    for (auto q : _queues) delete q;
+    _queues.clear();
+    // if (_gi.vmaAllocator) vmaDestroyAllocator(_gi.vmaAllocator), _gi.vmaAllocator = nullptr;
+    if (_gi.device) {
+        RAPID_VULKAN_LOG_INFO("[Device] destroying device...");
+        _gi.device.destroy(_gi.allocator);
+        _gi.device = nullptr;
+        RAPID_VULKAN_LOG_INFO("[Device] device destroyed");
+    }
+}
+
+#if RAPID_VULKAN_ENABLE_INSTANCE
+
+// *********************************************************************************************************************
+// InstanceInfo
+// *********************************************************************************************************************
+
+// ---------------------------------------------------------------------------------------------------------------------
+//
+struct InstanceInfo {
+    struct LayerInfo {
+        vk::LayerProperties                  properties;
+        std::vector<vk::ExtensionProperties> extensions;
+    };
+
+    uint32_t                             version;
+    std::vector<LayerInfo>               layers;
+    std::vector<vk::ExtensionProperties> extensions;
+
+    /// initialize the structure. Populate all data members.
+    void init();
+
+    /// Check to see if certain instance layer is supported.
+    bool checkLayer(const char * layer) const {
+        if (!layer || !*layer) return true; // empty layer is always supported.
+        auto iter = std::find_if(layers.begin(), layers.end(), [&](const LayerInfo & a) { return 0 == strcmp(a.properties.layerName, layer); });
+        return iter != layers.end();
+    }
+
+    /// Check to see if certain instance extension is supported.
+    bool checkExtension(const char * extension) const {
+        if (!extension || !*extension) return true; // return true for empty extension.
+        auto iter =
+            std::find_if(extensions.begin(), extensions.end(), [&](const vk::ExtensionProperties & e) { return 0 == strcmp(e.extensionName, extension); });
+        return iter != extensions.end();
+    }
+
+    /// result structure of check() method
+    struct ValidatedExtensions {
+        std::vector<const char *> layers;             ///< list of layers to initialize VK instance.
+        std::vector<const char *> instanceExtensions; ///< list of extensions to initialize VK instance.
+    };
+
+    /// Check to ensure all requested layers and extensions are supported. Throw exception, if any of required
+    /// layers/extensions are not supported.
+    ValidatedExtensions validate(const std::vector<std::pair<const char *, bool>> & layers_, std::map<const char *, bool> extensions_) const {
+        ValidatedExtensions v;
+
+        // hold list of supported extensions in a set to avoid duplicated extension names.
+        std::set<const char *> available;
+
+        auto processSupportedExtension = [&](const vk::ExtensionProperties & available) {
+            // Add supported ones to v.instanceExtensions list. Then remove it from extensions_ list. So we won't check
+            // the same extension twice.
+            for (auto asked = extensions_.begin(); asked != extensions_.end();) {
+                if (0 == strcmp(asked->first, available.extensionName)) {
+                    v.instanceExtensions.push_back(asked->first);
+                    // Remove "found" extensions from the list. So it won't be checked again.
+                    asked = extensions_.erase(asked);
+                } else {
+                    ++asked;
+                }
+            }
+        };
+
+        // check against each layers
+        for (auto l : layers_) {
+            auto iter = std::find_if(layers.begin(), layers.end(), [&](const LayerInfo & a) { return 0 == strcmp(a.properties.layerName, l.first); });
+            if (iter == layers.end()) {
+                if (l.second) {
+                    RVI_THROW("Required VK layer %s is not supported.", l.first);
+                } else {
+                    RAPID_VULKAN_LOG_WARN("Optional VK layer %s is not supported.", l.first);
+                }
+                continue;
+            }
+            v.layers.push_back(l.first);
+
+            // Check against extension list of the layer.
+            for (const auto & e : iter->extensions) { processSupportedExtension(e); }
+        }
+
+        // Check against each extensions
+        for (const auto & e : extensions) { processSupportedExtension(e); }
+
+        // We have gone through all available layers and extensions. All supported extensions should have been removed
+        // from extensions_list. Now it is time to see if there's any unsupported but required extensions.
+        for (const auto & asked : extensions_) {
+            if (asked.second) {
+                RVI_THROW("Required VK extension %s is not supported.", asked.first);
+            } else {
+                RAPID_VULKAN_LOG_WARN(sLogger)("Optional VK extension %s is not supported.", asked.first);
+            }
+        }
+
+        // done
+        return v;
+    }
+
+    std::string print(const vk::InstanceCreateInfo & ici, bool verbose = false) const {
+        std::stringstream ss;
+
+        auto isLayerEnabled = [&](const std::string & layer) -> bool {
+            for (size_t i = 0; i < ici.enabledLayerCount; ++i) {
+                const char * e = ici.ppEnabledLayerNames[i];
+                if (layer == e) return true;
+            }
+            return false;
+        };
+
+        auto isExtensionEnabled = [&](const std::string & name) -> bool {
+            for (size_t i = 0; i < ici.enabledExtensionCount; ++i) {
+                const char * e = ici.ppEnabledExtensionNames[i];
+                if (name == e) return true;
+            }
+            return false;
+        };
+
+        // retrieve supported API version.
+        ss << "========================================" << std::endl
+           << "Vulkan API version :" << std::endl
+           << "  supported: " << printVulkanVersion(version) << std::endl
+           << "    enabled: " << printVulkanVersion(ici.pApplicationInfo->apiVersion) << std::endl
+           << "========================================" << std::endl
+           << (verbose ? "Available" : "Enabled") << " Vulkan layers :" << std::endl;
+        if (layers.empty()) {
+            ss << "  <empty>" << std::endl;
+        } else {
+            for (const auto & l : layers) {
+                bool enabled = isLayerEnabled(l.properties.layerName);
+                if (!verbose && !enabled) continue;
+                ss << ((enabled && verbose) ? "  * " : "    ") << l.properties.layerName << " ( "
+                   << "v" << VK_VERSION_MAJOR(l.properties.specVersion) << "." << VK_VERSION_MINOR(l.properties.specVersion) << "."
+                   << VK_VERSION_PATCH(l.properties.specVersion) << " ) : " << l.properties.description << std::endl;
+                for (const auto & e : l.extensions) { ss << "                " << e.extensionName << " ( ver." << e.specVersion << " )" << std::endl; }
+            }
+        }
+        ss << "========================================" << std::endl << (verbose ? "Available" : "Enabled") << " Instance extensions :" << std::endl;
+        if (extensions.empty()) {
+            ss << "  <empty>" << std::endl;
+        } else {
+            for (const auto & e : extensions) {
+                bool enabled = isExtensionEnabled(e.extensionName);
+                if (!verbose && !enabled) continue;
+                ss << ((enabled && verbose) ? "  * " : "    ") << e.extensionName << " ( ver." << e.specVersion << " )" << std::endl;
+            }
+        }
+        ss << std::endl;
+
+        // done
+        return ss.str();
+    }
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
+//
+struct PhysicalDeviceInfo {
+    vk::PhysicalDeviceProperties         properties;
+    std::vector<vk::ExtensionProperties> extensions;
+
+    void query(vk::PhysicalDevice dev) {
+        vkGetPhysicalDeviceProperties(dev, &properties);
+        extensions = completeEnumerate<vk::ExtensionProperties>(
+            [&](uint32_t * count, vk::ExtensionProperties * data) -> vk::Result { return dev.enumerateDeviceExtensionProperties(nullptr, count, data); });
+    }
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
+//
+void InstanceInfo::init() {
+    vkEnumerateInstanceVersion(&version);
+
+    auto properties =
+        completeEnumerate<vk::LayerProperties>([&](uint32_t * count, vk::LayerProperties * data) { return vk::enumerateInstanceLayerProperties(count, data); });
+
+    layers.resize(properties.size());
+
+    for (size_t i = 0; i < layers.size(); ++i) {
+        layers[i].properties = properties[i];
+        layers[i].extensions = completeEnumerate<vk::ExtensionProperties>(
+            [&](uint32_t * count, vk::ExtensionProperties * data) { return vkEnumerateInstanceExtensionProperties(properties[i].layerName, count, data); });
+    }
+
+    std::sort(layers.begin(), layers.end(), [](const auto & a, const auto & b) { return strcmp(a.properties.layerName, b.properties.layerName) < 0; });
+
+    extensions = completeEnumerate<vk::ExtensionProperties>(
+        [&](uint32_t * count, vk::ExtensionProperties * data) { return vkEnumerateInstanceExtensionProperties(nullptr, count, data); });
+
+    std::sort(extensions.begin(), extensions.end(), [](const auto & a, const auto & b) { return strcmp(a.extensionName, b.extensionName) < 0; });
+}
+
+// *********************************************************************************************************************
+// Instance
+// *********************************************************************************************************************
+
+// implement the default dynamic dispatcher.
+VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE;
+
+// ---------------------------------------------------------------------------------------------------------------------
+//
+static VkBool32 VKAPI_PTR debugCallback(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT objectType, uint64_t object,
+                                        size_t,  // location,
+                                        int32_t, // messageCode,
+                                        const char * prefix, const char * message, void * userData) {
+    auto inst = (Instance *) userData;
+
+    auto reportVkError = [=]() {
+        if (objectType == VK_DEBUG_REPORT_OBJECT_TYPE_DEVICE_EXT) {
+            auto dev = Device::Details::find((vk::Device)object);
+            if (dev && dev->details().lost()) {
+                // Ignore validation errors on lost device, to avoid spamming log with useless messages.
+                return;
+            }
+        }
+
+        auto              v = inst->cp().validation;
+        std::stringstream ss;
+        ss << str::format("[Vulkan] %s : %s", prefix, message);
+        // if (v >= Instance::LOG_ON_VK_ERROR_WITH_CALL_STACK) { ss << std::endl << backtrace(false); }
+        auto str = ss.str();
+        GN_ERROR(sLogger)("%s", str.c_str());
+        if (v == Instance::THROW_ON_VK_ERROR) {
+            RVI_THROW("%s", str.data());
+        } else if (v == Instance::BREAK_ON_VK_ERROR) {
+            breakIntoDebugger();
+        }
+    };
+
+    if (flags & VK_DEBUG_REPORT_ERROR_BIT_EXT) reportVkError();
+
+    // treat warning as error.
+    if (flags & VK_DEBUG_REPORT_WARNING_BIT_EXT) reportVkError();
+
+    // if (flags & VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT) {
+    //     RAPID_VULKAN_LOG_WARN(sLogger)("[Vulkan] %s : %s", prefix, message);
+    // }
+
+    // if (flags & VK_DEBUG_REPORT_INFORMATION_BIT_EXT) {
+    //     RAPID_VULKAN_LOG_INFO("[Vulkan] %s : %s", prefix, message);
+    // }
+
+    // if (flags & VK_DEBUG_REPORT_DEBUG_BIT_EXT) {
+    //     PH_LOGV("[Vulkan] %s : %s", prefix, message);
+    // }
+
+    return VK_FALSE;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+//
+Instance::Instance(ConstructParameters cp): _cp(cp) {
+    InstanceInfo instanceInfo;
+    instanceInfo.init();
+
+    std::vector<std::pair<const char *, bool>> layers;
+    for (const auto & l : cp.layers) { layers.push_back({l.first.c_str(), l.second}); }
+    if (cp.validation) {
+        // add validation layer as an "optional" layer
+        layers.push_back({"VK_LAYER_KHRONOS_validation", false});
+    }
+
+    // setup extension list
+    std::map<const char *, bool> instanceExtensions {
+    #if PH_ANDROID
+        // somehow w/o this extension, the rt core crashes on android.
+        { VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME, true }
+    #endif
+    };
+    if (cp.validation) {
+        // Enable in-shader debug printf, if supported.
+        instanceExtensions[VK_EXT_DEBUG_REPORT_EXTENSION_NAME] = false;
+        instanceExtensions[VK_EXT_DEBUG_UTILS_EXTENSION_NAME]  = false;
+    }
+    for (const auto & e : cp.instanceExtensions) { instanceExtensions[e.first.c_str()] = e.second; }
+
+    // make sure all required layers and extensions are actually supported
+    auto supported = instanceInfo.validate(layers, instanceExtensions);
+
+    std::stringstream instanceCreationPrompt;
+    instanceCreationPrompt << "Try creating Vulkan instance with the following layers:";
+    if (supported.layers.empty()) {
+        instanceCreationPrompt << " <none>";
+    } else {
+        for (auto & l : supported.layers) { instanceCreationPrompt << " " << l; }
+    }
+    instanceCreationPrompt << std::endl << "Try creating Vulkan instance with the following extensions:";
+    if (supported.instanceExtensions.empty()) {
+        instanceCreationPrompt << " <none>";
+    } else {
+        for (auto & l : supported.instanceExtensions) { instanceCreationPrompt << " " << l; }
+    }
+    instanceCreationPrompt << std::endl;
+    RAPID_VULKAN_LOG_INFO(instanceCreationPrompt.str().c_str());
+
+    // create VK 1.1 instance
+    // TODO: check against available version.
+    auto appInfo       = VkApplicationInfo {VK_STRUCTURE_TYPE_APPLICATION_INFO};
+    appInfo.apiVersion = _cp.apiVersion;
+    auto ici           = vk::InstanceCreateInfo {
+        VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+        buildStructureChain(_cp.instanceCreateInfo.begin(), _cp.instanceCreateInfo.end()),
+                  {}, // flags
+        &appInfo,
+        (uint32_t) supported.layers.size(),
+        supported.layers.data(),
+        (uint32_t) supported.instanceExtensions.size(),
+        supported.instanceExtensions.data(),
+    };
+    GN_VK_REQUIRE(vk::createInstance(&ici, nullptr, &_instance));
+
+    // Print instance information
+    if (cp.printVkInfo) {
+        auto message = instanceInfo.print(ici, VERBOSE == cp.printVkInfo);
+        RAPID_VULKAN_LOG_INFO(message.data());
+    }
+
+    // TODO: load all function pointers.
+    volkLoadInstance(_instance);
+
+    // setup debug callback
+    if (cp.validation) {
+        auto debugci = VkDebugReportCallbackCreateInfoEXT {
+            VK_STRUCTURE_TYPE_DEBUG_REPORT_CALLBACK_CREATE_INFO_EXT,
+            nullptr,
+            VK_DEBUG_REPORT_ERROR_BIT_EXT | VK_DEBUG_REPORT_WARNING_BIT_EXT,
+            debugCallback,
+            this,
+        };
+        GN_VK_REQUIRE(vkCreateDebugReportCallbackEXT(_instance, &debugci, nullptr, &_debugReport));
+    }
+
+    RAPID_VULKAN_LOG_INFO("Vulkan instance initialized.");
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+//
+Instance::~Instance() {
+    if (_debugReport) vkDestroyDebugReportCallbackEXT(_instance, _debugReport, nullptr), _debugReport = 0;
+    if (_instance) vkDestroyInstance(_instance, nullptr), _instance = 0;
+    RAPID_VULKAN_LOG_INFO("Vulkan instance destroyed.");
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+//
+bool Device::ConstructParameters::setupForRayQuery(bool hw) {
+    // setup some common extension and feature that are needed regardless if we are in HW or SW mode.
+
+    // Required to reference resource descriptor by index in shader.
+    auto & dynamicIndexing                                      = addFeature(VkPhysicalDeviceDescriptorIndexingFeatures {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES,
+    });
+    dynamicIndexing.shaderSampledImageArrayNonUniformIndexing   = true;
+    dynamicIndexing.shaderStorageBufferArrayNonUniformIndexing  = true;
+    dynamicIndexing.descriptorBindingUpdateUnusedWhilePending   = true; // updating descriptors while the set is in use
+    dynamicIndexing.descriptorBindingPartiallyBound             = true;
+    dynamicIndexing.descriptorBindingVariableDescriptorCount    = true; // Descriptor sets with a variable-sized last binding
+    dynamicIndexing.runtimeDescriptorArray                      = true; // Arrays of resources which are sized at run-time.
+    deviceExtensions[VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME] = true;
+
+    // Enable 16-bit support in shader
+    auto & f16Feature                   = addFeature(VkPhysicalDevice16BitStorageFeatures {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES,
+    });
+    f16Feature.storageBuffer16BitAccess = true;
+    #if !PH_ANDROID
+    f16Feature.uniformAndStorageBuffer16BitAccess = true; // needed for index-16-to-32.comp. note this feature is not required and not available on Android.
+    #endif
+    features1.shaderInt16              = true;
+    features1.fragmentStoresAndAtomics = true; // needed for writing restir buffers from the graphics pipeline
+
+    // enable buffer device address extension
+    addFeature(VkPhysicalDeviceBufferDeviceAddressFeatures {
+                   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES,
+               })
+        .bufferDeviceAddress                                      = true;
+    deviceExtensions[VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME] = true;
+
+    // // Detect renderdoc
+    // if (hw && va::isRenderDocPresent()) {
+    //     RAPID_VULKAN_LOG_INFO("RenderDoc is detected. Turn off HW ray query.");
+    //     hw = false;
+    // };
+
+    // That's all we need for SW ray tracing. The following features and extensions are only needed
+    // when we are using VK_KHR_ray_query extension.
+    if (!hw) return false;
+
+    addFeature(VkPhysicalDeviceAccelerationStructureFeaturesKHR {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR}).accelerationStructure =
+        true;
+    addFeature(VkPhysicalDeviceRayQueryFeaturesKHR {
+                   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR,
+               })
+        .rayQuery                                                    = true;
+    deviceExtensions[VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME]   = true;
+    deviceExtensions[VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME] = true;
+    deviceExtensions[VK_KHR_RAY_QUERY_EXTENSION_NAME]                = true;
+    deviceExtensions[VK_KHR_SPIRV_1_4_EXTENSION_NAME]                = true;
+    deviceExtensions[VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME]    = true;
+
+    // done
+    return true;
+}
+
+#endif // RAPID_VULKAN_ENABLE_INSTANCE
 
 } // namespace RAPID_VULKAN_NAMESPACE
