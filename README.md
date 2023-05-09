@@ -15,6 +15,6 @@ Here are the step by step instructions to integrate it with your project:
 3. In **one and only one** of your source files, include [rapid-vulkan.h](src/rapid-vulkan.h) with RAPID_VULKAN_IMPLEMENTATION macro defined in front of it. Then you are good to go:
 
 ```c
-RAPID_VULKAN_IMPLEMENTATION
+#define RAPID_VULKAN_IMPLEMENTATION
 #include "rapid-vulkan.h"
 ```
