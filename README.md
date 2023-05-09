@@ -6,19 +6,15 @@ The library only depends on Vulkan SDK and one 3rd-party library: **spirv-reflec
 It is currently developed and tested on Windows platform. Linux support is on its way.
 
 # Integration
-The library is aiming for easy integration with any Vulkan project. Simply copy everything in [src](src) folder to your project. Then you are pretty much done.
+The library is aiming for easy integration with any Vulkan project. Everything you need is included in [rapid-vulkan.h](src/rapid-vulkan.h).
 
-You can add [rapid-vulkan.cpp](src/rapid-vulkan.cpp) into your build system, or directly include it in one of your source files:
+Here are the step by step instructions to integrate it with your project:
 
-```c
-#include <rapid-vulkan.cpp>.
-```
-
-Then you can use all rapid-vulkan functionalies via [rapid-vulkan.h](src/rapid-vulkan.h).
-
-Alternatively, you can also include [rapid-vulkan.h](src/rapid-vulkan.h) with **RAPID_VULKAN_IMPLEMENTATION** macro defined before the header file:
+1. Copy everything in [src](src) folder into your project's source folder.
+2. Include [rapid-vulkan.h](src/rapid-vulkan.h) anywhere you need rapid-vulkan functionality.
+3. In **one and only one** of your source files, include [rapid-vulkan.h](src/rapid-vulkan.h) with RAPID_VULKAN_IMPLEMENTATION macro defined in front of it. Then you are good to go:
 
 ```c
-#define RAPID_VULKAN_IMPLEMENTATION
-#include <rapid-vulkan.h>
+RAPID_VULKAN_IMPLEMENTATION
+#include "rapid-vulkan.h"
 ```
