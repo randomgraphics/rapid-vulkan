@@ -33,6 +33,13 @@ SOFTWARE.
 #include <unordered_set>
 #include <list>
 #include <set>
+#include <signal.h>
+
+#if RAPID_VULKAN_ENABLE_INSTANCE
+
+// implement the default dynamic dispatcher storage. Has to use this macro outside of any namespace.
+VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE;
+#endif
 
 #define RVI_THROW(...)                                             \
     do {                                                           \
@@ -933,9 +940,7 @@ Device::Device(ConstructParameters cp): _cp(cp) {
     // create device, one queue for each family
     float                                  queuePriority = 1.0f;
     std::vector<vk::DeviceQueueCreateInfo> queueCreateInfo;
-    for (uint32_t i = 0; i < families.size(); ++i) {
-        queueCreateInfo.emplace_back(vk::DeviceQueueCreateInfo({}, i, 1, &queuePriority));
-    }
+    for (uint32_t i = 0; i < families.size(); ++i) { queueCreateInfo.emplace_back(vk::DeviceQueueCreateInfo({}, i, 1, &queuePriority)); }
 
     // create device
     vk::DeviceCreateInfo deviceCreateInfo;
@@ -1041,7 +1046,28 @@ struct InstanceInfo {
     std::vector<vk::ExtensionProperties> extensions;
 
     /// initialize the structure. Populate all data members.
-    void init();
+    void init() {
+        vk::enumerateInstanceVersion(&version);
+
+        auto properties = completeEnumerate<vk::LayerProperties>(
+            [&](uint32_t * count, vk::LayerProperties * data) { return vk::enumerateInstanceLayerProperties(count, data); });
+
+        layers.resize(properties.size());
+
+        for (size_t i = 0; i < layers.size(); ++i) {
+            layers[i].properties = properties[i];
+            layers[i].extensions = completeEnumerate<vk::ExtensionProperties>([&](uint32_t * count, vk::ExtensionProperties * data) {
+                return vk::enumerateInstanceExtensionProperties(properties[i].layerName, count, data);
+            });
+        }
+
+        std::sort(layers.begin(), layers.end(), [](const auto & a, const auto & b) { return strcmp(a.properties.layerName, b.properties.layerName) < 0; });
+
+        extensions = completeEnumerate<vk::ExtensionProperties>(
+            [&](uint32_t * count, vk::ExtensionProperties * data) { return vk::enumerateInstanceExtensionProperties(nullptr, count, data); });
+
+        std::sort(extensions.begin(), extensions.end(), [](const auto & a, const auto & b) { return strcmp(a.extensionName, b.extensionName) < 0; });
+    }
 
     /// Check to see if certain instance layer is supported.
     bool checkLayer(const char * layer) const {
@@ -1066,7 +1092,7 @@ struct InstanceInfo {
 
     /// Check to ensure all requested layers and extensions are supported. Throw exception, if any of required
     /// layers/extensions are not supported.
-    ValidatedExtensions validate(const std::vector<std::pair<const char *, bool>> & layers_, std::map<const char *, bool> extensions_) const {
+    ValidatedExtensions validate(const std::map<const char *, bool> & layers_, std::map<const char *, bool> extensions_) const {
         ValidatedExtensions v;
 
         // hold list of supported extensions in a set to avoid duplicated extension names.
@@ -1112,7 +1138,7 @@ struct InstanceInfo {
             if (asked.second) {
                 RVI_THROW("Required VK extension %s is not supported.", asked.first);
             } else {
-                RAPID_VULKAN_LOG_WARN(sLogger)("Optional VK extension %s is not supported.", asked.first);
+                RAPID_VULKAN_LOG_WARN("Optional VK extension %s is not supported.", asked.first);
             }
         }
 
@@ -1182,42 +1208,15 @@ struct PhysicalDeviceInfo {
     std::vector<vk::ExtensionProperties> extensions;
 
     void query(vk::PhysicalDevice dev) {
-        vkGetPhysicalDeviceProperties(dev, &properties);
+        properties = dev.getProperties();
         extensions = completeEnumerate<vk::ExtensionProperties>(
             [&](uint32_t * count, vk::ExtensionProperties * data) -> vk::Result { return dev.enumerateDeviceExtensionProperties(nullptr, count, data); });
     }
 };
 
-// ---------------------------------------------------------------------------------------------------------------------
-//
-void InstanceInfo::init() {
-    vkEnumerateInstanceVersion(&version);
-
-    auto properties =
-        completeEnumerate<vk::LayerProperties>([&](uint32_t * count, vk::LayerProperties * data) { return vk::enumerateInstanceLayerProperties(count, data); });
-
-    layers.resize(properties.size());
-
-    for (size_t i = 0; i < layers.size(); ++i) {
-        layers[i].properties = properties[i];
-        layers[i].extensions = completeEnumerate<vk::ExtensionProperties>(
-            [&](uint32_t * count, vk::ExtensionProperties * data) { return vkEnumerateInstanceExtensionProperties(properties[i].layerName, count, data); });
-    }
-
-    std::sort(layers.begin(), layers.end(), [](const auto & a, const auto & b) { return strcmp(a.properties.layerName, b.properties.layerName) < 0; });
-
-    extensions = completeEnumerate<vk::ExtensionProperties>(
-        [&](uint32_t * count, vk::ExtensionProperties * data) { return vkEnumerateInstanceExtensionProperties(nullptr, count, data); });
-
-    std::sort(extensions.begin(), extensions.end(), [](const auto & a, const auto & b) { return strcmp(a.extensionName, b.extensionName) < 0; });
-}
-
 // *********************************************************************************************************************
 // Instance
 // *********************************************************************************************************************
-
-// implement the default dynamic dispatcher.
-VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE;
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
@@ -1229,23 +1228,23 @@ static VkBool32 VKAPI_PTR debugCallback(VkDebugReportFlagsEXT flags, VkDebugRepo
 
     auto reportVkError = [=]() {
         if (objectType == VK_DEBUG_REPORT_OBJECT_TYPE_DEVICE_EXT) {
-            auto dev = Device::Details::find((vk::Device)object);
+            auto dev = Device::Details::find(vk::Device((VkDevice) object));
             if (dev && dev->details().lost()) {
                 // Ignore validation errors on lost device, to avoid spamming log with useless messages.
                 return;
             }
         }
 
-        auto              v = inst->cp().validation;
-        std::stringstream ss;
-        ss << str::format("[Vulkan] %s : %s", prefix, message);
+        auto v  = inst->cp().validation;
+        auto ss = std::stringstream();
+        ss << "[Vulkan] " << prefix << " : " << message;
         // if (v >= Instance::LOG_ON_VK_ERROR_WITH_CALL_STACK) { ss << std::endl << backtrace(false); }
         auto str = ss.str();
-        GN_ERROR(sLogger)("%s", str.c_str());
+        RAPID_VULKAN_LOG_ERROR("%s", str.data());
         if (v == Instance::THROW_ON_VK_ERROR) {
             RVI_THROW("%s", str.data());
         } else if (v == Instance::BREAK_ON_VK_ERROR) {
-            breakIntoDebugger();
+            raise(5); // 5 is SIGTRAP
         }
     };
 
@@ -1255,7 +1254,7 @@ static VkBool32 VKAPI_PTR debugCallback(VkDebugReportFlagsEXT flags, VkDebugRepo
     if (flags & VK_DEBUG_REPORT_WARNING_BIT_EXT) reportVkError();
 
     // if (flags & VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT) {
-    //     RAPID_VULKAN_LOG_WARN(sLogger)("[Vulkan] %s : %s", prefix, message);
+    //     RAPID_VULKAN_LOG_WARN("[Vulkan] %s : %s", prefix, message);
     // }
 
     // if (flags & VK_DEBUG_REPORT_INFORMATION_BIT_EXT) {
@@ -1263,7 +1262,7 @@ static VkBool32 VKAPI_PTR debugCallback(VkDebugReportFlagsEXT flags, VkDebugRepo
     // }
 
     // if (flags & VK_DEBUG_REPORT_DEBUG_BIT_EXT) {
-    //     PH_LOGV("[Vulkan] %s : %s", prefix, message);
+    //     RAPID_VULKAN_LOG_INFO("[Vulkan] %s : %s", prefix, message);
     // }
 
     return VK_FALSE;
@@ -1272,21 +1271,29 @@ static VkBool32 VKAPI_PTR debugCallback(VkDebugReportFlagsEXT flags, VkDebugRepo
 // ---------------------------------------------------------------------------------------------------------------------
 //
 Instance::Instance(ConstructParameters cp): _cp(cp) {
+    vk::DynamicLoader dl;
+    auto              getProcAddress = _cp.getInstanceProcAddr;
+    if (!getProcAddress) getProcAddress = dl.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
+    VULKAN_HPP_DEFAULT_DISPATCHER.init(getProcAddress);
+
     InstanceInfo instanceInfo;
     instanceInfo.init();
 
-    std::vector<std::pair<const char *, bool>> layers;
-    for (const auto & l : cp.layers) { layers.push_back({l.first.c_str(), l.second}); }
+    std::map<const char *, bool> layers;
+    for (const auto & l : cp.layers) layers[l.first.c_str()] = l.second;
     if (cp.validation) {
         // add validation layer as an "optional" layer
-        layers.push_back({"VK_LAYER_KHRONOS_validation", false});
+        layers.insert({"VK_LAYER_KHRONOS_validation", false});
     }
 
     // setup extension list
     std::map<const char *, bool> instanceExtensions {
+        // {VK_KHR_SURFACE_EXTENSION_NAME, true}, // always request this.
     #if PH_ANDROID
         // somehow w/o this extension, the rt core crashes on android.
-        { VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME, true }
+        {
+            VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME, true
+        }
     #endif
     };
     if (cp.validation) {
@@ -1317,39 +1324,30 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
 
     // create VK 1.1 instance
     // TODO: check against available version.
-    auto appInfo       = VkApplicationInfo {VK_STRUCTURE_TYPE_APPLICATION_INFO};
-    appInfo.apiVersion = _cp.apiVersion;
-    auto ici           = vk::InstanceCreateInfo {
-        VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
-        buildStructureChain(_cp.instanceCreateInfo.begin(), _cp.instanceCreateInfo.end()),
-                  {}, // flags
-        &appInfo,
-        (uint32_t) supported.layers.size(),
-        supported.layers.data(),
-        (uint32_t) supported.instanceExtensions.size(),
-        supported.instanceExtensions.data(),
-    };
-    GN_VK_REQUIRE(vk::createInstance(&ici, nullptr, &_instance));
+    auto appInfo = vk::ApplicationInfo().setApiVersion(_cp.apiVersion);
+    auto ici     = vk::InstanceCreateInfo()
+                   .setPNext(buildStructureChain(_cp.instanceCreateInfo.begin(), _cp.instanceCreateInfo.end()))
+                   .setPApplicationInfo(&appInfo)
+                   .setPEnabledLayerNames(supported.layers)
+                   .setPEnabledLayerNames(supported.instanceExtensions);
+    _instance = vk::createInstance(ici);
 
     // Print instance information
     if (cp.printVkInfo) {
-        auto message = instanceInfo.print(ici, VERBOSE == cp.printVkInfo);
+        auto message = instanceInfo.print(ici, Device::VERBOSE == cp.printVkInfo);
         RAPID_VULKAN_LOG_INFO(message.data());
     }
 
-    // TODO: load all function pointers.
-    volkLoadInstance(_instance);
+    // load all function pointers.
+    VULKAN_HPP_DEFAULT_DISPATCHER.init(_instance);
 
     // setup debug callback
     if (cp.validation) {
-        auto debugci = VkDebugReportCallbackCreateInfoEXT {
-            VK_STRUCTURE_TYPE_DEBUG_REPORT_CALLBACK_CREATE_INFO_EXT,
-            nullptr,
-            VK_DEBUG_REPORT_ERROR_BIT_EXT | VK_DEBUG_REPORT_WARNING_BIT_EXT,
-            debugCallback,
-            this,
-        };
-        GN_VK_REQUIRE(vkCreateDebugReportCallbackEXT(_instance, &debugci, nullptr, &_debugReport));
+        auto debugci = vk::DebugReportCallbackCreateInfoEXT()
+                           .setFlags(vk::DebugReportFlagBitsEXT::eError | vk::DebugReportFlagBitsEXT::eWarning)
+                           .setPfnCallback(debugCallback)
+                           .setPUserData(this);
+        _debugReport = _instance.createDebugReportCallbackEXT(debugci);
     }
 
     RAPID_VULKAN_LOG_INFO("Vulkan instance initialized.");
@@ -1358,70 +1356,9 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
 // ---------------------------------------------------------------------------------------------------------------------
 //
 Instance::~Instance() {
-    if (_debugReport) vkDestroyDebugReportCallbackEXT(_instance, _debugReport, nullptr), _debugReport = 0;
-    if (_instance) vkDestroyInstance(_instance, nullptr), _instance = 0;
+    if (_debugReport) _instance.destroyDebugReportCallbackEXT(_debugReport), _debugReport = VK_NULL_HANDLE;
+    if (_instance) _instance.destroy(), _instance = VK_NULL_HANDLE;
     RAPID_VULKAN_LOG_INFO("Vulkan instance destroyed.");
-}
-
-// ---------------------------------------------------------------------------------------------------------------------
-//
-bool Device::ConstructParameters::setupForRayQuery(bool hw) {
-    // setup some common extension and feature that are needed regardless if we are in HW or SW mode.
-
-    // Required to reference resource descriptor by index in shader.
-    auto & dynamicIndexing                                      = addFeature(VkPhysicalDeviceDescriptorIndexingFeatures {
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES,
-    });
-    dynamicIndexing.shaderSampledImageArrayNonUniformIndexing   = true;
-    dynamicIndexing.shaderStorageBufferArrayNonUniformIndexing  = true;
-    dynamicIndexing.descriptorBindingUpdateUnusedWhilePending   = true; // updating descriptors while the set is in use
-    dynamicIndexing.descriptorBindingPartiallyBound             = true;
-    dynamicIndexing.descriptorBindingVariableDescriptorCount    = true; // Descriptor sets with a variable-sized last binding
-    dynamicIndexing.runtimeDescriptorArray                      = true; // Arrays of resources which are sized at run-time.
-    deviceExtensions[VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME] = true;
-
-    // Enable 16-bit support in shader
-    auto & f16Feature                   = addFeature(VkPhysicalDevice16BitStorageFeatures {
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES,
-    });
-    f16Feature.storageBuffer16BitAccess = true;
-    #if !PH_ANDROID
-    f16Feature.uniformAndStorageBuffer16BitAccess = true; // needed for index-16-to-32.comp. note this feature is not required and not available on Android.
-    #endif
-    features1.shaderInt16              = true;
-    features1.fragmentStoresAndAtomics = true; // needed for writing restir buffers from the graphics pipeline
-
-    // enable buffer device address extension
-    addFeature(VkPhysicalDeviceBufferDeviceAddressFeatures {
-                   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES,
-               })
-        .bufferDeviceAddress                                      = true;
-    deviceExtensions[VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME] = true;
-
-    // // Detect renderdoc
-    // if (hw && va::isRenderDocPresent()) {
-    //     RAPID_VULKAN_LOG_INFO("RenderDoc is detected. Turn off HW ray query.");
-    //     hw = false;
-    // };
-
-    // That's all we need for SW ray tracing. The following features and extensions are only needed
-    // when we are using VK_KHR_ray_query extension.
-    if (!hw) return false;
-
-    addFeature(VkPhysicalDeviceAccelerationStructureFeaturesKHR {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR}).accelerationStructure =
-        true;
-    addFeature(VkPhysicalDeviceRayQueryFeaturesKHR {
-                   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR,
-               })
-        .rayQuery                                                    = true;
-    deviceExtensions[VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME]   = true;
-    deviceExtensions[VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME] = true;
-    deviceExtensions[VK_KHR_RAY_QUERY_EXTENSION_NAME]                = true;
-    deviceExtensions[VK_KHR_SPIRV_1_4_EXTENSION_NAME]                = true;
-    deviceExtensions[VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME]    = true;
-
-    // done
-    return true;
 }
 
 #endif // RAPID_VULKAN_ENABLE_INSTANCE

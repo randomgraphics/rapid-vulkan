@@ -37,9 +37,9 @@ SOFTWARE.
 #endif
 
 /// \def RAPID_VULKAN_ENABLE_INSTANCE
-/// \brief Set to non-zero value to wrapper of VkInstance and VkDevice. Enable
-/// these 2 classes will also enable rapid-vulkan's custom Vulkan loader, which
-/// could conflict with Vulkan loader in other projects. Disabled by default.
+/// \brief Set to non-zero value to enable wrapper of VkInstance. Note that 
+/// this will also enable rapid-vulkan's custom Vulkan loader, which could
+/// conflict with Vulkan loader in other projects. Disabled by default.
 #ifndef RAPID_VULKAN_ENABLE_INSTANCE
     #define RAPID_VULKAN_ENABLE_INSTANCE 0
 #endif
@@ -65,6 +65,7 @@ SOFTWARE.
 #endif
 
 #if RAPID_VULKAN_ENABLE_INSTANCE
+    // rapid-vulkan is using vulkan.hpp's dynamic loader.
     #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
 #endif
 
@@ -646,7 +647,7 @@ public:
     enum Validation {
         VALIDATION_DISABLED = 0,
         LOG_ON_VK_ERROR,
-        LOG_ON_VK_ERROR_WITH_CALL_STACK,
+        // LOG_ON_VK_ERROR_WITH_CALL_STACK,
         THROW_ON_VK_ERROR,
         BREAK_ON_VK_ERROR,
     };
@@ -663,13 +664,17 @@ public:
         std::map<std::string, bool> instanceExtensions;
 
         /// structure chain passed to VkInstanceCreateInfo::pNext
-        std::vector<SimpleStructureChain> instanceCreateInfo;
+        std::vector<StructureChain> instanceCreateInfo;
 
         /// Set to true to enable validation layer.
-        Validation validation = RAPID_VULKAN_ENABLE_DEBUG_BUILD ? LOG_ON_VK_ERROR_WITH_CALL_STACK : VALIDATION_DISABLED;
+        Validation validation = RAPID_VULKAN_ENABLE_DEBUG_BUILD ? LOG_ON_VK_ERROR : VALIDATION_DISABLED;
 
         /// Creation log output verbosity
         Device::Verbosity printVkInfo = Device::BRIEF;
+
+        /// Define custom function pointer to retrieve Vulkan function address. Set to null to use the built-in one
+        /// coming with rapid-vulkan library.
+        PFN_vkGetInstanceProcAddr getInstanceProcAddr = nullptr;
     };
 
     Instance(ConstructParameters);
