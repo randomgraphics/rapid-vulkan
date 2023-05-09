@@ -243,8 +243,9 @@ private:
     }
 
     void waitIdle() {
-        // TODO: handle device lost error.
-        _owner._handle.waitIdle();
+        try {
+            _owner._handle.waitIdle();
+        } catch (vk::SystemError & error) { RAPID_VULKAN_LOG_ERROR(error.what()); }
 
         // then mark all command buffers as finished.
         finish(nullptr);
