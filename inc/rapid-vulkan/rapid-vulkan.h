@@ -24,17 +24,36 @@ SOFTWARE.
 
 #pragma once
 
+/// \def RAPID_VULKAN_NAMESPACE
+/// \brief Define the namespace of rapid-vulkan library.
 #ifndef RAPID_VULKAN_NAMESPACE
     #define RAPID_VULKAN_NAMESPACE rapid_vulkan
 #endif
 
-// Define RAPID_VULKAN_DEBUG_BUILD to non-zero value to enable debug build.
-#ifndef RAPID_VULKAN_DEBUG_BUILD
-    #define RAPID_VULKAN_DEBUG_BUILD 0
+/// \def RAPID_VULKAN_ENABLE_DEBUG_BUILD
+/// Set to non-zero value to enable debug build. Disabled by default.
+#ifndef RAPID_VULKAN_ENABLE_DEBUG_BUILD
+    #define RAPID_VULKAN_ENABLE_DEBUG_BUILD 0
+#endif
+
+/// \def RAPID_VULKAN_ENABLE_INSTANCE
+/// \brief Set to non-zero value to wrapper of VkInstance and VkDevice. Enable
+/// these 2 classes will also enable rapid-vulkan's custom Vulkan loader, which
+/// could conflict with Vulkan loader in other projects. Disabled by default.
+#ifndef RAPID_VULKAN_ENABLE_INSTANCE
+    #define RAPID_VULKAN_ENABLE_INSTANCE 0
 #endif
 
 #ifndef RAPID_VULKAN_ASSERT
     #define RAPID_VULKAN_ASSERT assert
+#endif
+
+#ifndef RAPID_VULKAN_LOG_INFO
+    #define RAPID_VULKAN_LOG_INFO(...) fprintf(stdout, __VA_ARGS__)
+#endif
+
+#ifndef RAPID_VULKAN_LOG_WARN
+    #define RAPID_VULKAN_LOG_WARN(...) fprintf(stderr, __VA_ARGS__)
 #endif
 
 #ifndef RAPID_VULKAN_LOG_ERROR
@@ -43,6 +62,10 @@ SOFTWARE.
 
 #ifndef RAPID_VULKAN_THROW
     #define RAPID_VULKAN_THROW(...) throw std::runtime_error(__VA_ARGS__)
+#endif
+
+#if RAPID_VULKAN_ENABLE_INSTANCE
+    #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
 #endif
 
 #include <vulkan/vulkan.hpp>
@@ -69,7 +92,7 @@ SOFTWARE.
 #ifdef VOLK_HEADER_VERSION
     #if VOLK_HEADER_VERSION < VK_HEADER_VERSION
         #pragma message("[WARNING] VOLK_HEADER_VERSION(" RVI_STR(VOLK_HEADER_VERSION) ") is older VK_HEADER_VERSION(" RVI_STR( \
-                VK_HEADER_VERSION) ")! You might see link errors of missing Vulkan symbols. Consider downgrade your Vulkan SDK to match the version of volk.h.")
+            VK_HEADER_VERSION) ")! You might see link errors of missing Vulkan symbols. Consider downgrade your Vulkan SDK to match the version of volk.h.")
     #endif
 #endif
 
@@ -85,7 +108,7 @@ struct GlobalInfo {
     vk::PhysicalDevice              physical  = nullptr;
     vk::Device                      device    = nullptr;
 
-    template<typename T, typename...ARGS>
+    template<typename T, typename... ARGS>
     void safeDestroy(T & handle, ARGS... args) const {
         if (!handle) return;
         RAPID_VULKAN_ASSERT(device);
@@ -139,14 +162,15 @@ inline std::vector<T> completeEnumerate(Q query) {
     //     result.resize(count);
     //     query(&count, result.data());
     // } else {
-    VkResult res;
+    vk::Result res;
     do {
         uint32_t count;
-        GN_VK_CHK(query(&count, nullptr), return {});
+        res = query(&count, nullptr);
+        if (res != vk::Result::eSuccess) return result;
         if (0 == count) return {};
         result.resize(count);
         res = query(&count, result.data());
-    } while (res == VK_INCOMPLETE);
+    } while (res == vk::Result::eIncomplete);
     return result;
 }
 
@@ -155,12 +179,12 @@ inline std::vector<T> completeEnumerate(Q query) {
 std::vector<vk::PhysicalDevice> enumeratePhysicalDevices(vk::Instance instance);
 
 // ---------------------------------------------------------------------------------------------------------------------
-// This function currently selects the devie with the longest extension list.
+// This function currently selects the device with the longest extension list.
 vk::PhysicalDevice selectTheMostPowerfulPhysicalDevice(vk::ArrayProxy<const vk::PhysicalDevice> phydevs);
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
-std::vector<vk::ExtensionProperties> enumerateDeviceExtenstions(vk::PhysicalDevice dev);
+std::vector<vk::ExtensionProperties> enumerateDeviceExtensions(vk::PhysicalDevice dev);
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// The root class of most of the other public classes in this library.
@@ -427,7 +451,7 @@ protected:
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// A specialized version of pipline that is used for graphics rendering.
+/// A specialized version of pipeline that is used for graphics rendering.
 class GraphicsPipeline : public Pipeline {
 public:
     struct ConstructParameters : public Root::ConstructParameters {
@@ -453,7 +477,7 @@ private:
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// A specialized version of pipline that is used for compute.
+/// A specialized version of pipeline that is used for compute.
 class ComputePipeline : public Pipeline {
 public:
     struct ConstructParameters : public Root::ConstructParameters {
@@ -493,13 +517,13 @@ public:
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// Extensible structure chain used by Vulkan API.
-struct SimpleStructureChain {
+struct StructureChain {
     /// data buffer that stores the VK feature structure.
     std::vector<uint8_t> buffer;
 
     /// construct new feature
     template<typename T>
-    SimpleStructureChain(const T & feature) {
+    StructureChain(const T & feature) {
         buffer.resize(sizeof(feature));
         memcpy(buffer.data(), &feature, sizeof(feature));
     }
@@ -512,59 +536,19 @@ struct SimpleStructureChain {
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// A wrapper class for VkInstance
-class Instance {
+// Misc. classes for future use.
+
+class RenderPass {
+    //
+};
+
+class RenderLoop : public Root {
 public:
-    /// Define level of validation on Vulkan error.
-    enum Validation {
-        VALIDATION_DISABLED = 0,
-        LOG_ON_VK_ERROR,
-        LOG_ON_VK_ERROR_WITH_CALL_STACK,
-        THROW_ON_VK_ERROR,
-        BREAK_ON_VK_ERROR,
+    struct ConstructParameters : public Root::ConstructParameters {
+        uint32_t maxPendingGPUFrames = 1;
     };
 
-    enum Verbosity {
-        SILENCE = 0,
-        BRIEF,
-        VERBOSE,
-    };
-
-    struct ConstructParameters {
-        /// The Vulkan API version. Default is 1.2.0
-        uint32_t apiVersion = VK_MAKE_VERSION(1, 2, 0);
-
-        /// Specify extra layers to initialize VK instance. The 2nd value indicates if the layer is required or not.
-        /// We have to use vector instead of map here, because layer loading order matters.
-        std::vector<std::pair<std::string, bool>> layers;
-
-        /// Specify extra extension to initialize VK instance. Value indicate if the extension is required or not.
-        std::map<std::string, bool> instanceExtensions;
-
-        /// structure chain passed to VkInstanceCreateInfo::pNext
-        std::vector<SimpleStructureChain> instanceCreateInfo;
-
-        /// Set to true to enable validation layer.
-        Validation validation = RAPID_VULKAN_DEBUG_BUILD ? LOG_ON_VK_ERROR_WITH_CALL_STACK : VALIDATION_DISABLED;
-
-        /// Creation log output verbosity
-        Verbosity printVkInfo = BRIEF;
-    };
-
-    Instance(ConstructParameters);
-
-    ~Instance();
-
-    const ConstructParameters & cp() const { return _cp; }
-
-    vk::Instance handle() const { return _instance; }
-
-    operator vk::Instance() const { return _instance; }
-
-private:
-    ConstructParameters        _cp;
-    vk::Instance               _instance {};
-    vk::DebugReportCallbackEXT _debugReport {};
+    RenderLoop(const ConstructParameters &);
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -573,6 +557,12 @@ class Device {
 public:
     RVI_NO_COPY(Device);
     RVI_NO_MOVE(Device);
+
+    enum Verbosity {
+        SILENCE = 0,
+        BRIEF,
+        VERBOSE,
+    };
 
     struct ConstructParameters {
         /// pointer to Vulkan instance.
@@ -588,13 +578,16 @@ public:
         bool useVmaAllocator = false;
 
         /// set to false to make the creation log less verbose.
-        Instance::Verbosity printVkInfo = Instance::BRIEF;
+        Verbosity printVkInfo = BRIEF;
 
-        /// Basic VK device feature list defined by Vulkan 1.0
+        /// Basic device feature list defined by Vulkan 1.0
         vk::PhysicalDeviceFeatures features1;
 
-        /// Extensible VK device feature list defined Vulkan 1.1
-        std::vector<SimpleStructureChain> features2;
+        /// Extensible device feature list defined Vulkan 1.1
+        std::vector<StructureChain> features2;
+
+        /// Pointer of an already-built feature chain. If not empty, this will be attached after feature1 and feature2.
+        void * features3 = nullptr;
 
         /// Add new feature to the feature2 list.
         template<typename T>
@@ -643,21 +636,59 @@ private:
     CommandQueue *              _present  = nullptr;
 };
 
+#if RAPID_VULKAN_ENABLE_INSTANCE
+
 // ---------------------------------------------------------------------------------------------------------------------
-// Misc. classes for future use.
-
-class RenderPass {
-    //
-};
-
-class RenderLoop : public Root {
+/// A wrapper class for VkInstance
+class Instance {
 public:
-    struct ConstructParameters : public Root::ConstructParameters {
-        uint32_t maxPendingGPUFrames = 1;
+    /// Define level of validation on Vulkan error.
+    enum Validation {
+        VALIDATION_DISABLED = 0,
+        LOG_ON_VK_ERROR,
+        LOG_ON_VK_ERROR_WITH_CALL_STACK,
+        THROW_ON_VK_ERROR,
+        BREAK_ON_VK_ERROR,
     };
 
-    RenderLoop(const ConstructParameters &);
+    struct ConstructParameters {
+        /// The Vulkan API version. Default is 1.2.0
+        uint32_t apiVersion = VK_MAKE_VERSION(1, 2, 0);
+
+        /// Specify extra layers to initialize VK instance. The 2nd value indicates if the layer is required or not.
+        /// We have to use vector instead of map here, because layer loading order matters.
+        std::vector<std::pair<std::string, bool>> layers;
+
+        /// Specify extra extension to initialize VK instance. Value indicate if the extension is required or not.
+        std::map<std::string, bool> instanceExtensions;
+
+        /// structure chain passed to VkInstanceCreateInfo::pNext
+        std::vector<SimpleStructureChain> instanceCreateInfo;
+
+        /// Set to true to enable validation layer.
+        Validation validation = RAPID_VULKAN_ENABLE_DEBUG_BUILD ? LOG_ON_VK_ERROR_WITH_CALL_STACK : VALIDATION_DISABLED;
+
+        /// Creation log output verbosity
+        Device::Verbosity printVkInfo = Device::BRIEF;
+    };
+
+    Instance(ConstructParameters);
+
+    ~Instance();
+
+    const ConstructParameters & cp() const { return _cp; }
+
+    vk::Instance handle() const { return _instance; }
+
+    operator vk::Instance() const { return _instance; }
+
+private:
+    ConstructParameters        _cp;
+    vk::Instance               _instance {};
+    vk::DebugReportCallbackEXT _debugReport {};
 };
+
+#endif // RAPID_VULKAN_ENABLE_INSTANCE
 
 } // namespace RAPID_VULKAN_NAMESPACE
 
