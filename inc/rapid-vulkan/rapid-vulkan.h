@@ -36,15 +36,8 @@ SOFTWARE.
     #define RAPID_VULKAN_ENABLE_DEBUG_BUILD 0
 #endif
 
-/// \def RAPID_VULKAN_ENABLE_INSTANCE
-/// \brief Set to non-zero value to enable wrapper of VkInstance. Note that 
-/// this will also enable rapid-vulkan's custom Vulkan loader, which could
-/// conflict with Vulkan loader in other projects. Disabled by default.
-/// \note When this option is enabled, you must initialize the Vulkan instance
-/// via rapid_vulkan::Instance class. Or else, the rest of the library will
-/// not work due to uninitialized Vulkan function pointer.
-#ifndef RAPID_VULKAN_ENABLE_INSTANCE
-    #define RAPID_VULKAN_ENABLE_INSTANCE 0
+#ifndef RAPID_VULKAN_ENABLE_LOADER
+    #define RAPID_VULKAN_ENABLE_LOADER 0
 #endif
 
 #ifndef RAPID_VULKAN_ASSERT
@@ -67,8 +60,7 @@ SOFTWARE.
     #define RAPID_VULKAN_THROW(...) throw std::runtime_error(__VA_ARGS__)
 #endif
 
-#if RAPID_VULKAN_ENABLE_INSTANCE
-    // rapid-vulkan is using vulkan.hpp's dynamic loader.
+#if RAPID_VULKAN_ENABLE_LOADER
     #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
 #endif
 
@@ -96,7 +88,7 @@ SOFTWARE.
 #ifdef VOLK_HEADER_VERSION
     #if VOLK_HEADER_VERSION < VK_HEADER_VERSION
         #pragma message("[WARNING] VOLK_HEADER_VERSION(" RVI_STR(VOLK_HEADER_VERSION) ") is older VK_HEADER_VERSION(" RVI_STR( \
-            VK_HEADER_VERSION) ")! You might see link errors of missing Vulkan symbols. Consider downgrade your Vulkan SDK to match the version of volk.h.")
+                VK_HEADER_VERSION) ")! You might see link errors of missing Vulkan symbols. Consider downgrade your Vulkan SDK to match the version of volk.h.")
     #endif
 #endif
 
@@ -562,6 +554,15 @@ public:
     RVI_NO_COPY(Device);
     RVI_NO_MOVE(Device);
 
+    /// Define level of validation on Vulkan error.
+    enum Validation {
+        VALIDATION_DISABLED = 0,
+        LOG_ON_VK_ERROR,
+        // LOG_ON_VK_ERROR_WITH_CALL_STACK,
+        THROW_ON_VK_ERROR,
+        BREAK_ON_VK_ERROR,
+    };
+
     enum Verbosity {
         SILENCE = 0,
         BRIEF,
@@ -578,11 +579,8 @@ public:
         /// Specify extra extension to initialize VK device. Value indicate if the extension is required or not.
         std::map<std::string, bool> deviceExtensions;
 
-        /// Set to true to defer to VMA for device memory allocations.
-        bool useVmaAllocator = false;
-
-        /// set to false to make the creation log less verbose.
-        Verbosity printVkInfo = BRIEF;
+        // /// Set to true to defer to VMA for device memory allocations.
+        // bool useVmaAllocator = false;
 
         /// Basic device feature list defined by Vulkan 1.0
         vk::PhysicalDeviceFeatures features1;
@@ -592,6 +590,13 @@ public:
 
         /// Pointer of an already-built feature chain. If not empty, this will be attached after feature1 and feature2.
         void * features3 = nullptr;
+
+        /// Set to true to enable validation layer.
+        /// \todo move to Device class.
+        Validation validation = RAPID_VULKAN_ENABLE_DEBUG_BUILD ? LOG_ON_VK_ERROR : VALIDATION_DISABLED;
+
+        /// set to false to make the creation log less verbose.
+        Verbosity printVkInfo = BRIEF;
 
         /// Add new feature to the feature2 list.
         template<typename T>
@@ -626,35 +631,31 @@ public:
 
     // VkResult waitIdle() const { return _vgi.device ? threadSafeDeviceWaitIdle(_vgi.device) : VK_SUCCESS; }
 
-    class Details;
-    Details & details() const { return *_details; }
-
 private:
-    Details *                   _details = nullptr;
     ConstructParameters         _cp;
     GlobalInfo                  _gi {};
-    std::vector<CommandQueue *> _queues; // one for each queue family
+    vk::DebugReportCallbackEXT  _debugReport {};
+    bool                        _lost {}; // if the device has lost.
+    std::vector<CommandQueue *> _queues;  // one for each queue family
     CommandQueue *              _graphics = nullptr;
     CommandQueue *              _compute  = nullptr;
     CommandQueue *              _transfer = nullptr;
     CommandQueue *              _present  = nullptr;
-};
 
-#if RAPID_VULKAN_ENABLE_INSTANCE
+private:
+    VkBool32 debugCallback(vk::DebugReportFlagsEXT, vk::DebugReportObjectTypeEXT, uint64_t, size_t, int32_t, const char *, const char *);
+
+    static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT objectType, uint64_t object, size_t location,
+                                                  int32_t messageCode, const char * prefix, const char * message, void * userData) {
+        auto self = (Device *) userData;
+        return self->debugCallback((vk::DebugReportFlagsEXT)flags, (vk::DebugReportObjectTypeEXT)objectType, object, location, messageCode, prefix, message);
+    }
+};
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// A wrapper class for VkInstance
 class Instance {
 public:
-    /// Define level of validation on Vulkan error.
-    enum Validation {
-        VALIDATION_DISABLED = 0,
-        LOG_ON_VK_ERROR,
-        // LOG_ON_VK_ERROR_WITH_CALL_STACK,
-        THROW_ON_VK_ERROR,
-        BREAK_ON_VK_ERROR,
-    };
-
     struct ConstructParameters {
         /// The Vulkan API version. Default is 1.2.0
         uint32_t apiVersion = VK_MAKE_VERSION(1, 2, 0);
@@ -669,15 +670,11 @@ public:
         /// structure chain passed to VkInstanceCreateInfo::pNext
         std::vector<StructureChain> instanceCreateInfo;
 
-        /// Set to true to enable validation layer.
-        /// \todo move to Device class.
-        Validation validation = RAPID_VULKAN_ENABLE_DEBUG_BUILD ? LOG_ON_VK_ERROR : VALIDATION_DISABLED;
-
         /// Creation log output verbosity
         Device::Verbosity printVkInfo = Device::BRIEF;
 
-        /// Define custom function pointer to retrieve Vulkan function address. Set to null to use the built-in one
-        /// coming with rapid-vulkan library.
+        /// Define custom function pointer to load Vulkan function pointers. Set to null to use the built-in one.
+        /// Ignored when RAPID_VULKAN_ENABLE_LOADER is not 1.
         PFN_vkGetInstanceProcAddr getInstanceProcAddr = nullptr;
     };
 
@@ -692,13 +689,16 @@ public:
     operator vk::Instance() const { return _instance; }
 
 private:
-    ConstructParameters        _cp;
-    vk::DynamicLoader          _loader;
-    vk::Instance               _instance {};
-    vk::DebugReportCallbackEXT _debugReport {};
+    ConstructParameters _cp;
+    vk::Instance        _instance {};
+#if RAPID_VULKAN_ENABLE_LOADER
+    #if 1 != VULKAN_HPP_DISPATCH_LOADER_DYNAMIC
+        #error \
+            "rapid-vulkan does not support static dispatch loader yet. When RAPID_VULKAN_ENABLE_LOADER is set to 1, VULKAN_HPP_DISPATCH_LOADER_DYNAMIC must be set to 1 as well."
+    #endif
+    vk::DynamicLoader _loader;
+#endif
 };
-
-#endif // RAPID_VULKAN_ENABLE_INSTANCE
 
 } // namespace RAPID_VULKAN_NAMESPACE
 
