@@ -7,14 +7,14 @@ def bin2h(input, output):
         data = f.read()
     with open(output, "wt") as f:
         varName = pathlib.Path(input).stem.replace("-", "_").replace(".", "_")
-        f.write(f"#pragma once\nstatic const unsigned char {varName}[] = {{\n")
+        f.write(f"#pragma once\n// clang-format off\nstatic const unsigned char {varName}[] = {{\n")
         for i in range(0, len(data), 16):
             f.write("    ")
             for j in range(0, 16):
                 if i + j < len(data):
                     f.write(f"0x{data[i+j]:02x}, ")
             f.write("\n")
-        f.write("};\n")
+        f.write("};\n// clang-format on\n")
 
 def recompile():
     # search for shader sources
@@ -56,7 +56,7 @@ def recompile():
 
 def clean():
     print(f"Delete all .spriv files in {output_dir}")
-    outputs = output_dir.glob("*.spirv")
+    outputs = output_dir.glob("*.spv")
     count = 0
     for o in outputs:
         o.unlink()
