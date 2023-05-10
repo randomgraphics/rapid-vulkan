@@ -35,8 +35,7 @@ SOFTWARE.
 #include <set>
 #include <signal.h>
 
-#if RAPID_VULKAN_ENABLE_INSTANCE
-
+#if RAPID_VULKAN_ENABLE_LOADER
 // implement the default dynamic dispatcher storage. Has to use this macro outside of any namespace.
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE;
 #endif
@@ -574,6 +573,8 @@ VkBool32 Device::debugCallback(vk::DebugReportFlagsEXT flags, vk::DebugReportObj
         } else if (v == BREAK_ON_VK_ERROR) {
             raise(5); // 5 is SIGTRAP
         }
+
+        return VK_FALSE;
     };
 
     if (flags & vk::DebugReportFlagBitsEXT::eError) reportVkError();
@@ -1232,9 +1233,11 @@ struct PhysicalDeviceInfo {
 // ---------------------------------------------------------------------------------------------------------------------
 //
 Instance::Instance(ConstructParameters cp): _cp(cp) {
+#if RAPID_VULKAN_ENABLE_LOADER
     auto getProcAddress = _cp.getInstanceProcAddr;
     if (!getProcAddress) getProcAddress = _loader.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
     VULKAN_HPP_DEFAULT_DISPATCHER.init(getProcAddress);
+#endif
 
     InstanceInfo instanceInfo;
     instanceInfo.init();
@@ -1293,8 +1296,10 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
         RAPID_VULKAN_LOG_INFO(message.data());
     }
 
+#if RAPID_VULKAN_ENABLE_LOADER
     // load all function pointers.
     VULKAN_HPP_DEFAULT_DISPATCHER.init(_instance);
+#endif
 
     RAPID_VULKAN_LOG_INFO("Vulkan instance initialized.");
 }

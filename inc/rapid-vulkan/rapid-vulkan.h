@@ -124,7 +124,11 @@ struct GlobalInfo {
 /// Helper function to set Vulkan opaque handle's name (VK_EXT_debug_utils).
 template<typename T>
 inline void setVkObjectName(vk::Device device, T handle, const char * name) {
+#if VULKAN_HPP_DISPATCH_LOADER_DYNAMIC == 1
     if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkSetDebugUtilsObjectNameEXT) return;
+#else
+    if (!::vkSetDebugUtilsObjectNameEXT) return;
+#endif
     if (!device || !handle || !name) return;
     auto info = vk::DebugUtilsObjectNameInfoEXT().setObjectType(handle.objectType).setObjectHandle((uint64_t) (T::NativeType) handle).setPObjectName(name);
     device.setDebugUtilsObjectNameEXT(info);
@@ -631,6 +635,14 @@ public:
 
     // VkResult waitIdle() const { return _vgi.device ? threadSafeDeviceWaitIdle(_vgi.device) : VK_SUCCESS; }
 
+    vk::Device handle() const { return _gi.device; }
+
+    operator vk::Device() const { return _gi.device; }
+
+    operator VkDevice() const { return _gi.device; }
+
+    vk::Device operator->() const { return _gi.device; }
+
 private:
     ConstructParameters         _cp;
     GlobalInfo                  _gi {};
@@ -670,6 +682,9 @@ public:
         /// structure chain passed to VkInstanceCreateInfo::pNext
         std::vector<StructureChain> instanceCreateInfo;
 
+        /// Set to true to enable validation layers and extensions.
+        bool validation = RAPID_VULKAN_ENABLE_DEBUG_BUILD;
+
         /// Creation log output verbosity
         Device::Verbosity printVkInfo = Device::BRIEF;
 
@@ -687,6 +702,10 @@ public:
     vk::Instance handle() const { return _instance; }
 
     operator vk::Instance() const { return _instance; }
+
+    operator VkInstance() const { return _instance; }
+
+    vk::Instance operator->() const { return _instance; }
 
 private:
     ConstructParameters _cp;
