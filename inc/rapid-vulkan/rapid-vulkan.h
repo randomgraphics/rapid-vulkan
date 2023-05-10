@@ -152,7 +152,7 @@ inline void setVkObjectName(vk::Device device, T handle, const char * name) {
     if (!::vkSetDebugUtilsObjectNameEXT) return;
 #endif
     if (!device || !handle || !name) return;
-    auto info = vk::DebugUtilsObjectNameInfoEXT().setObjectType(handle.objectType).setObjectHandle((uint64_t) (T::NativeType) handle).setPObjectName(name);
+    auto info = vk::DebugUtilsObjectNameInfoEXT().setObjectType(handle.objectType).setObjectHandle((uint64_t) (typename T::NativeType) handle).setPObjectName(name);
     device.setDebugUtilsObjectNameEXT(info);
 }
 
@@ -469,7 +469,7 @@ protected:
     vk::Pipeline                    _handle {};
 
 protected:
-    Pipeline::Pipeline(const std::string & name, vk::ArrayProxy<const Shader *> shaders);
+    Pipeline(const std::string & name, vk::ArrayProxy<const Shader *> shaders);
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
