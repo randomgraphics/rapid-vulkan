@@ -40,6 +40,9 @@ SOFTWARE.
 /// \brief Set to non-zero value to enable wrapper of VkInstance. Note that 
 /// this will also enable rapid-vulkan's custom Vulkan loader, which could
 /// conflict with Vulkan loader in other projects. Disabled by default.
+/// \note When this option is enabled, you must initialize the Vulkan instance
+/// via rapid_vulkan::Instance class. Or else, the rest of the library will
+/// not work due to uninitialized Vulkan function pointer.
 #ifndef RAPID_VULKAN_ENABLE_INSTANCE
     #define RAPID_VULKAN_ENABLE_INSTANCE 0
 #endif
@@ -129,7 +132,7 @@ struct GlobalInfo {
 /// Helper function to set Vulkan opaque handle's name (VK_EXT_debug_utils).
 template<typename T>
 inline void setVkObjectName(vk::Device device, T handle, const char * name) {
-    // TODO: need to check if vkSetDebugUtilsObjectNameEXT is loaded or not.
+    if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkSetDebugUtilsObjectNameEXT) return;
     if (!device || !handle || !name) return;
     auto info = vk::DebugUtilsObjectNameInfoEXT().setObjectType(handle.objectType).setObjectHandle((uint64_t) (T::NativeType) handle).setPObjectName(name);
     device.setDebugUtilsObjectNameEXT(info);
@@ -667,6 +670,7 @@ public:
         std::vector<StructureChain> instanceCreateInfo;
 
         /// Set to true to enable validation layer.
+        /// \todo move to Device class.
         Validation validation = RAPID_VULKAN_ENABLE_DEBUG_BUILD ? LOG_ON_VK_ERROR : VALIDATION_DISABLED;
 
         /// Creation log output verbosity
@@ -689,6 +693,7 @@ public:
 
 private:
     ConstructParameters        _cp;
+    vk::DynamicLoader          _loader;
     vk::Instance               _instance {};
     vk::DebugReportCallbackEXT _debugReport {};
 };
