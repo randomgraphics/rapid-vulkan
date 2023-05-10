@@ -1,0 +1,7 @@
+b           "python.exe ${RAPID_VULKAN_ROOT}\dev\bin\build.py $args"
+g           "git $args"
+j.root      "cd ${RAPID_VULKAN_ROOT}\$args"
+j.build     "cd ${RAPID_VULKAN_ROOT}\build"
+j.dev       "cd ${RAPID_VULKAN_ROOT}\dev\$args"
+j.env       "cd ${RAPID_VULKAN_ROOT}\dev\env\$args"
+j.inc       "cd ${RAPID_VULKAN_ROOT}\inc\$args"

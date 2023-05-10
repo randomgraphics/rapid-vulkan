@@ -1,0 +1,1 @@
+@powershell.exe -nologo -noexit %~dp0dev\\env\\env.ps1 %*
