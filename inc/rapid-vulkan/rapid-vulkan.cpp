@@ -659,9 +659,7 @@ static void printPhysicalDeviceInfo(const std::vector<vk::PhysicalDevice> & avai
     std::stringstream ss;
     ss << "===================================" << std::endl << "Available Vulkan physical devices :" << std::endl;
     for (const auto & d : available) {
-        VkPhysicalDeviceDescriptorIndexingProperties dip = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES};
-        VkPhysicalDeviceProperties2                  p2  = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2_KHR, &dip};
-        vkGetPhysicalDeviceProperties2(d, &p2);
+        auto p2  = d.getProperties2();
         const auto & p = p2.properties;
         ss << ((d == selected) ? "  * " : "    ") << p.deviceName << std::endl
            << "        API version = " << printVulkanVersion(p.apiVersion) << std::endl
@@ -908,8 +906,6 @@ Device::Device(ConstructParameters cp): _cp(cp) {
     if (cp.printVkInfo) printPhysicalDeviceInfo(phydevs, _gi.physical, verbose);
 
     // query queues
-    uint32_t count;
-    vkGetPhysicalDeviceQueueFamilyProperties(_gi.physical, &count, nullptr);
     auto families = _gi.physical.getQueueFamilyProperties();
     if (cp.printVkInfo) printAvailableQueues(_gi.physical, families, verbose);
 
@@ -1271,9 +1267,8 @@ static VkBool32 VKAPI_PTR debugCallback(VkDebugReportFlagsEXT flags, VkDebugRepo
 // ---------------------------------------------------------------------------------------------------------------------
 //
 Instance::Instance(ConstructParameters cp): _cp(cp) {
-    vk::DynamicLoader dl;
     auto              getProcAddress = _cp.getInstanceProcAddr;
-    if (!getProcAddress) getProcAddress = dl.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
+    if (!getProcAddress) getProcAddress = _loader.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
     VULKAN_HPP_DEFAULT_DISPATCHER.init(getProcAddress);
 
     InstanceInfo instanceInfo;
@@ -1288,13 +1283,8 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
 
     // setup extension list
     std::map<const char *, bool> instanceExtensions {
-        // {VK_KHR_SURFACE_EXTENSION_NAME, true}, // always request this.
-    #if PH_ANDROID
-        // somehow w/o this extension, the rt core crashes on android.
-        {
-            VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME, true
-        }
-    #endif
+        { VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME, true }
+        // {VK_KHR_SURFACE_EXTENSION_NAME, true},
     };
     if (cp.validation) {
         // Enable in-shader debug printf, if supported.
@@ -1329,7 +1319,7 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
                    .setPNext(buildStructureChain(_cp.instanceCreateInfo.begin(), _cp.instanceCreateInfo.end()))
                    .setPApplicationInfo(&appInfo)
                    .setPEnabledLayerNames(supported.layers)
-                   .setPEnabledLayerNames(supported.instanceExtensions);
+                   .setPEnabledExtensionNames(supported.instanceExtensions);
     _instance = vk::createInstance(ici);
 
     // Print instance information
