@@ -22,3 +22,6 @@ Here are the step by step instructions to integrate it with your project:
 #define RAPID_VULKAN_IMPLEMENTATION
 #include <rapid-vulkan/rapid-vulkan.h>
 ```
+
+# Usage & Samples
+Please checkout apps in [sample](dev/sample) folder for how to create Vulkan app using rapid-vulkan.
