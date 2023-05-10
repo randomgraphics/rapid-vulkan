@@ -1014,8 +1014,7 @@ Device::Device(ConstructParameters cp): _cp(cp) {
             _transfer = q;
 
         if (!_present && presenting) {
-            VkBool32 supportPresenting = false;
-            vkGetPhysicalDeviceSurfaceSupportKHR(_gi.physical, i, _cp.surface, &supportPresenting);
+            auto supportPresenting = _gi.physical.getSurfaceSupportKHR(i, _cp.surface);
             if (supportPresenting) _present = q;
         }
     }
@@ -1059,7 +1058,7 @@ struct InstanceInfo {
 
     /// initialize the structure. Populate all data members.
     void init() {
-        vk::enumerateInstanceVersion(&version);
+        version = vk::enumerateInstanceVersion();
 
         auto properties = completeEnumerate<vk::LayerProperties>(
             [&](uint32_t * count, vk::LayerProperties * data) { return vk::enumerateInstanceLayerProperties(count, data); });

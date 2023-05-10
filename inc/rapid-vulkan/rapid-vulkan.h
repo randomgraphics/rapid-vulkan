@@ -44,16 +44,30 @@ SOFTWARE.
     #define RAPID_VULKAN_ASSERT assert
 #endif
 
-#ifndef RAPID_VULKAN_LOG_INFO
-    #define RAPID_VULKAN_LOG_INFO(...) fprintf(stdout, __VA_ARGS__)
+#ifndef RAPID_VULKAN_LOG_ERROR
+    #define RAPID_VULKAN_LOG_ERROR(...)   \
+        do {                              \
+            fprintf(stderr, "[ WARN] ");  \
+            fprintf(stderr, __VA_ARGS__); \
+            fprintf(stderr, "\n");        \
+        } while (false)
 #endif
 
 #ifndef RAPID_VULKAN_LOG_WARN
-    #define RAPID_VULKAN_LOG_WARN(...) fprintf(stderr, __VA_ARGS__)
+    #define RAPID_VULKAN_LOG_WARN(...)    \
+        do {                              \
+            fprintf(stderr, "[ERROR] ");  \
+            fprintf(stderr, __VA_ARGS__); \
+            fprintf(stderr, "\n");        \
+        } while (false)
 #endif
 
-#ifndef RAPID_VULKAN_LOG_ERROR
-    #define RAPID_VULKAN_LOG_ERROR(...) fprintf(stderr, __VA_ARGS__)
+#ifndef RAPID_VULKAN_LOG_INFO
+    #define RAPID_VULKAN_LOG_INFO(...)    \
+        do {                              \
+            fprintf(stdout, __VA_ARGS__); \
+            fprintf(stdout, "\n");        \
+        } while (false)
 #endif
 
 #ifndef RAPID_VULKAN_THROW
@@ -64,7 +78,15 @@ SOFTWARE.
     #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
 #endif
 
+#ifdef VOLK_H_
+#undef VK_NO_PROTOTYPES
+#endif
+
 #include <vulkan/vulkan.hpp>
+
+#ifdef VOLK_H_
+#define VK_NO_PROTOTYPES
+#endif
 
 #include <cassert>
 #include <vector>
@@ -660,7 +682,7 @@ private:
     static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT objectType, uint64_t object, size_t location,
                                                   int32_t messageCode, const char * prefix, const char * message, void * userData) {
         auto self = (Device *) userData;
-        return self->debugCallback((vk::DebugReportFlagsEXT)flags, (vk::DebugReportObjectTypeEXT)objectType, object, location, messageCode, prefix, message);
+        return self->debugCallback((vk::DebugReportFlagsEXT) flags, (vk::DebugReportObjectTypeEXT) objectType, object, location, messageCode, prefix, message);
     }
 };
 

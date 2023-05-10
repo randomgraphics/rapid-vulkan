@@ -1,0 +1,14 @@
+[alias]
+    co = checkout
+    ci = commit
+    br = branch
+    st = status --short
+    di = diff
+    dt = difftool
+    ll = log --pretty=\"%Cgreen%h [%cd] [%an]%C(auto)%d%Creset %s\" --date=short --graph
+    sm = submodule
+[filter "lfs"]
+    clean = git-lfs clean -- %f
+    smudge = git-lfs smudge -- %f
+    process = git-lfs filter-process
+    required = true
