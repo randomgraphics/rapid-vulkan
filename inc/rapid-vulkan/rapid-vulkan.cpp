@@ -550,44 +550,51 @@ void ComputePipeline::dispatch(vk::CommandBuffer cb, const DispatchParameters & 
 // Device
 // *********************************************************************************************************************
 
-class Device::Details {
-public:
-    Details(Device * owner): _owner(owner) { add(owner); }
+// ---------------------------------------------------------------------------------------------------------------------
+//
+VkBool32 Device::debugCallback(vk::DebugReportFlagsEXT flags, vk::DebugReportObjectTypeEXT objectType,
+                               uint64_t, // object
+                               size_t,   // location,
+                               int32_t,  // messageCode,
+                               const char * prefix, const char * message) {
+    auto reportVkError = [&]() {
+        if (objectType == vk::DebugReportObjectTypeEXT::eDevice && _lost) {
+            // Ignore validation errors on lost device, to avoid spamming log with useless messages.
+            return VK_FALSE;
+        }
 
-    ~Details() { del(_owner); }
+        auto v  = _cp.validation;
+        auto ss = std::stringstream();
+        ss << "[Vulkan] " << prefix << " : " << message;
+        // if (v >= LOG_ON_VK_ERROR_WITH_CALL_STACK) { ss << std::endl << backtrace(false); }
+        auto str = ss.str();
+        RAPID_VULKAN_LOG_ERROR("%s", str.data());
+        if (v == THROW_ON_VK_ERROR) {
+            RVI_THROW("%s", str.data());
+        } else if (v == BREAK_ON_VK_ERROR) {
+            raise(5); // 5 is SIGTRAP
+        }
+    };
 
-    static Device * find(vk::Device handle) {
-        auto lock = std::lock_guard<std::mutex>(_mutex);
-        auto iter = std::find_if(_table.begin(), _table.end(), [&](auto p) { return p->gi().device == handle; });
-        return iter != _table.end() ? *iter : nullptr;
-    }
+    if (flags & vk::DebugReportFlagBitsEXT::eError) reportVkError();
 
-    bool lost() const { return _lost; }
+    // treat warning as error.
+    if (flags & vk::DebugReportFlagBitsEXT::eWarning) reportVkError();
 
-    void setLost(const char *) {
-        _lost = true;
-        // auto bt = backtrace();
-        // if (!bt.empty()) {
-        //     RAPID_VULKAN_LOG_ERROR("Device 0x%" PRIx64 ": %s failed due to VK_ERROR_DEVICE_LOST:\n%s", (uint64_t) _owner->vgi().device, action, bt.c_str());
-        // }
-    }
+    // if (flags & VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT) {
+    //     RAPID_VULKAN_LOG_WARN("[Vulkan] %s : %s", prefix, message);
+    // }
 
-private:
-    inline static std::list<Device *> _table;
-    inline static std::mutex          _mutex;
-    Device *                          _owner;
-    bool                              _lost = false;
+    // if (flags & VK_DEBUG_REPORT_INFORMATION_BIT_EXT) {
+    //     RAPID_VULKAN_LOG_INFO("[Vulkan] %s : %s", prefix, message);
+    // }
 
-    static void add(Device * p) {
-        std::lock_guard<std::mutex> lock(_mutex);
-        _table.push_back(p);
-    }
+    // if (flags & VK_DEBUG_REPORT_DEBUG_BIT_EXT) {
+    //     RAPID_VULKAN_LOG_INFO("[Vulkan] %s : %s", prefix, message);
+    // }
 
-    static void del(Device * p) {
-        std::lock_guard<std::mutex> lock(_mutex);
-        _table.remove(p);
-    }
-};
+    return VK_FALSE;
+}
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
@@ -659,8 +666,8 @@ static void printPhysicalDeviceInfo(const std::vector<vk::PhysicalDevice> & avai
     std::stringstream ss;
     ss << "===================================" << std::endl << "Available Vulkan physical devices :" << std::endl;
     for (const auto & d : available) {
-        auto p2  = d.getProperties2();
-        const auto & p = p2.properties;
+        auto         p2 = d.getProperties2();
+        const auto & p  = p2.properties;
         ss << ((d == selected) ? "  * " : "    ") << p.deviceName << std::endl
            << "        API version = " << printVulkanVersion(p.apiVersion) << std::endl
            << "        Driver version = " << printVulkanVersion(p.driverVersion)
@@ -891,11 +898,18 @@ static std::vector<const char *> validateExtensions(const std::vector<vk::Extens
 // ---------------------------------------------------------------------------------------------------------------------
 //
 Device::Device(ConstructParameters cp): _cp(cp) {
-    _details = new Details(this);
-
     // check instance pointer
     RVI_VERIFY(cp.instance);
     _gi.instance = cp.instance;
+
+    // setup debug callback
+    if (cp.validation) {
+        auto debugci = vk::DebugReportCallbackCreateInfoEXT()
+                           .setFlags(vk::DebugReportFlagBitsEXT::eError | vk::DebugReportFlagBitsEXT::eWarning)
+                           .setPfnCallback(staticDebugCallback)
+                           .setPUserData(this);
+        _debugReport = _gi.instance.createDebugReportCallbackEXT(debugci);
+    }
 
     // enumerate physical devices
     auto phydevs = enumeratePhysicalDevices(_gi.instance);
@@ -1011,7 +1025,6 @@ Device::Device(ConstructParameters cp): _cp(cp) {
 // ---------------------------------------------------------------------------------------------------------------------
 //
 Device::~Device() {
-    delete _details;
     for (auto q : _queues) delete q;
     _queues.clear();
     // if (_gi.vmaAllocator) vmaDestroyAllocator(_gi.vmaAllocator), _gi.vmaAllocator = nullptr;
@@ -1021,9 +1034,11 @@ Device::~Device() {
         _gi.device = nullptr;
         RAPID_VULKAN_LOG_INFO("[Device] device destroyed");
     }
+    if (_debugReport) {
+        ((vk::Instance)_cp.instance).destroyDebugReportCallbackEXT(_debugReport);
+         _debugReport = VK_NULL_HANDLE;
+    }
 }
-
-#if RAPID_VULKAN_ENABLE_INSTANCE
 
 // *********************************************************************************************************************
 // InstanceInfo
@@ -1216,58 +1231,8 @@ struct PhysicalDeviceInfo {
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
-static VkBool32 VKAPI_PTR debugCallback(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT objectType, uint64_t object,
-                                        size_t,  // location,
-                                        int32_t, // messageCode,
-                                        const char * prefix, const char * message, void * userData) {
-    auto inst = (Instance *) userData;
-
-    auto reportVkError = [=]() {
-        if (objectType == VK_DEBUG_REPORT_OBJECT_TYPE_DEVICE_EXT) {
-            auto dev = Device::Details::find(vk::Device((VkDevice) object));
-            if (dev && dev->details().lost()) {
-                // Ignore validation errors on lost device, to avoid spamming log with useless messages.
-                return;
-            }
-        }
-
-        auto v  = inst->cp().validation;
-        auto ss = std::stringstream();
-        ss << "[Vulkan] " << prefix << " : " << message;
-        // if (v >= Instance::LOG_ON_VK_ERROR_WITH_CALL_STACK) { ss << std::endl << backtrace(false); }
-        auto str = ss.str();
-        RAPID_VULKAN_LOG_ERROR("%s", str.data());
-        if (v == Instance::THROW_ON_VK_ERROR) {
-            RVI_THROW("%s", str.data());
-        } else if (v == Instance::BREAK_ON_VK_ERROR) {
-            raise(5); // 5 is SIGTRAP
-        }
-    };
-
-    if (flags & VK_DEBUG_REPORT_ERROR_BIT_EXT) reportVkError();
-
-    // treat warning as error.
-    if (flags & VK_DEBUG_REPORT_WARNING_BIT_EXT) reportVkError();
-
-    // if (flags & VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT) {
-    //     RAPID_VULKAN_LOG_WARN("[Vulkan] %s : %s", prefix, message);
-    // }
-
-    // if (flags & VK_DEBUG_REPORT_INFORMATION_BIT_EXT) {
-    //     RAPID_VULKAN_LOG_INFO("[Vulkan] %s : %s", prefix, message);
-    // }
-
-    // if (flags & VK_DEBUG_REPORT_DEBUG_BIT_EXT) {
-    //     RAPID_VULKAN_LOG_INFO("[Vulkan] %s : %s", prefix, message);
-    // }
-
-    return VK_FALSE;
-}
-
-// ---------------------------------------------------------------------------------------------------------------------
-//
 Instance::Instance(ConstructParameters cp): _cp(cp) {
-    auto              getProcAddress = _cp.getInstanceProcAddr;
+    auto getProcAddress = _cp.getInstanceProcAddr;
     if (!getProcAddress) getProcAddress = _loader.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
     VULKAN_HPP_DEFAULT_DISPATCHER.init(getProcAddress);
 
@@ -1283,7 +1248,7 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
 
     // setup extension list
     std::map<const char *, bool> instanceExtensions {
-        { VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME, true }
+        {VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME, true}
         // {VK_KHR_SURFACE_EXTENSION_NAME, true},
     };
     if (cp.validation) {
@@ -1331,26 +1296,14 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
     // load all function pointers.
     VULKAN_HPP_DEFAULT_DISPATCHER.init(_instance);
 
-    // setup debug callback
-    if (cp.validation) {
-        auto debugci = vk::DebugReportCallbackCreateInfoEXT()
-                           .setFlags(vk::DebugReportFlagBitsEXT::eError | vk::DebugReportFlagBitsEXT::eWarning)
-                           .setPfnCallback(debugCallback)
-                           .setPUserData(this);
-        _debugReport = _instance.createDebugReportCallbackEXT(debugci);
-    }
-
     RAPID_VULKAN_LOG_INFO("Vulkan instance initialized.");
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
 Instance::~Instance() {
-    if (_debugReport) _instance.destroyDebugReportCallbackEXT(_debugReport), _debugReport = VK_NULL_HANDLE;
     if (_instance) _instance.destroy(), _instance = VK_NULL_HANDLE;
     RAPID_VULKAN_LOG_INFO("Vulkan instance destroyed.");
 }
-
-#endif // RAPID_VULKAN_ENABLE_INSTANCE
 
 } // namespace RAPID_VULKAN_NAMESPACE
