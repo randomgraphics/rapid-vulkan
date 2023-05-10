@@ -1035,8 +1035,8 @@ Device::~Device() {
         RAPID_VULKAN_LOG_INFO("[Device] device destroyed");
     }
     if (_debugReport) {
-        ((vk::Instance)_cp.instance).destroyDebugReportCallbackEXT(_debugReport);
-         _debugReport = VK_NULL_HANDLE;
+        ((vk::Instance) _cp.instance).destroyDebugReportCallbackEXT(_debugReport);
+        _debugReport = VK_NULL_HANDLE;
     }
 }
 

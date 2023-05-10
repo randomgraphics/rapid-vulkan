@@ -79,13 +79,13 @@ SOFTWARE.
 #endif
 
 #ifdef VOLK_H_
-#undef VK_NO_PROTOTYPES
+    #undef VK_NO_PROTOTYPES
 #endif
 
 #include <vulkan/vulkan.hpp>
 
 #ifdef VOLK_H_
-#define VK_NO_PROTOTYPES
+    #define VK_NO_PROTOTYPES
 #endif
 
 #include <cassert>
@@ -96,11 +96,11 @@ SOFTWARE.
 #include <unordered_map>
 
 /// RVI stands for Rapid Vulkan Implementation. Macros started with this prefix are reserved for internal use.
-#define RVI_NO_COPY(T)                 \
-    T(const T &)             = delete; \
+#define RVI_NO_COPY(T)     \
+    T(const T &) = delete; \
     T & operator=(const T &) = delete;
-#define RVI_NO_MOVE(T)            \
-    T(T &&)             = delete; \
+#define RVI_NO_MOVE(T)    \
+    T(T &&)     = delete; \
     T & operator=(T &&) = delete;
 #define RVI_NO_COPY_NO_MOVE(T) RVI_NO_COPY(T) RVI_NO_MOVE(T)
 #define RVI_STR(x)             RVI_STR_HELPER(x)
@@ -110,7 +110,7 @@ SOFTWARE.
 #ifdef VOLK_HEADER_VERSION
     #if VOLK_HEADER_VERSION < VK_HEADER_VERSION
         #pragma message("[WARNING] VOLK_HEADER_VERSION(" RVI_STR(VOLK_HEADER_VERSION) ") is older VK_HEADER_VERSION(" RVI_STR( \
-                VK_HEADER_VERSION) ")! You might see link errors of missing Vulkan symbols. Consider downgrade your Vulkan SDK to match the version of volk.h.")
+            VK_HEADER_VERSION) ")! You might see link errors of missing Vulkan symbols. Consider downgrade your Vulkan SDK to match the version of volk.h.")
     #endif
 #endif
 
