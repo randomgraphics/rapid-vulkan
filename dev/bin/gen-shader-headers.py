@@ -46,13 +46,16 @@ def recompile():
         output = str(output_dir / s.name) + ".spv"
         cmdline = [str(glslc), str(s), "-o", output, "-g", "-O"]
         print(' '.join(cmdline))
-        subproc[s] = subprocess.Popen(cmdline)
-        # convert .spv to .h
-        bin2h(output, output + ".h")
-    for s in subproc:
-        p = subproc[s]
+        subproc[s] = [output, subprocess.Popen(cmdline)]
+    for s in subproc.keys():
+        p = subproc[s][1]
         p.wait()
-        if p.returncode != 0: utils.loge(f"failed to compile {s}. ReturnCode = {p.returncode}")
+        if 0 == p.returncode:
+            # convert .spv to .h
+            output = subproc[s][0]
+            bin2h(output, output + ".h")
+        else:
+            utils.loge(f"failed to compile {s}. ReturnCode = {p.returncode}")
 
 def clean():
     print(f"Delete all .spriv files in {output_dir}")
