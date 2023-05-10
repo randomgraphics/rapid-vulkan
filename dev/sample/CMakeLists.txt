@@ -9,4 +9,5 @@ endfunction()
 
 add_sample(built-in-loader)
 add_sample(hello-world)
+add_sample(noop-compute)
 add_sample(use-with-volk)
