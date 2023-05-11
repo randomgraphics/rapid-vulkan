@@ -23,7 +23,7 @@ SOFTWARE.
 */
 
 #ifndef RAPID_VULKAN_IMPLEMENTATION
-    #include "rapid-vulkan.h"
+#include "rapid-vulkan.h"
 #endif
 #include "3rd-party/spriv-reflect/spirv_reflect.c"
 #include <sstream>
@@ -88,6 +88,39 @@ std::vector<vk::ExtensionProperties> enumerateDeviceExtensions(vk::PhysicalDevic
 }
 
 // *********************************************************************************************************************
+// Buffer
+// *********************************************************************************************************************
+
+Buffer::Buffer(const ConstructParameters & cp): Root(cp) {
+    //
+}
+
+Buffer::Buffer(const ImportParameters & cp): Root(cp) {
+    //
+}
+
+Buffer::~Buffer() {
+    //
+}
+
+void Buffer::cmdWrite(const WriteParameters &) {
+    //
+}
+
+void Buffer::cmdCopy(const CopyParameters &) {
+    //
+}
+
+void Buffer::setContent(const SetContentParameters &) {
+    //
+}
+
+auto Buffer::readContent(const ReadParameters &) -> std::vector<uint8_t> {
+    //
+    return {};
+}
+
+// *********************************************************************************************************************
 // Shader
 // *********************************************************************************************************************
 
@@ -95,11 +128,11 @@ Shader Shader::EMPTY({});
 
 Shader::Shader(const ConstructParameters & params): Root(params), _gi(params.gi) {
     if (params.spirv.empty()) return; // Constructing an empty shader module. Not an error.
-    _handle = _gi.device.createShaderModule({{}, params.spirv.size() * sizeof(uint32_t), params.spirv.data()}, _gi.allocator);
+    _handle = _gi->device.createShaderModule({{}, params.spirv.size() * sizeof(uint32_t), params.spirv.data()}, _gi->allocator);
     _entry  = params.entry;
 }
 
-Shader::~Shader() { _gi.safeDestroy(_handle); }
+Shader::~Shader() { _gi->safeDestroy(_handle); }
 
 // *********************************************************************************************************************
 // Command Buffer/Pool/Queue
@@ -116,27 +149,27 @@ public:
 
     std::list<CommandBufferImpl *>::iterator pending;
 
-    CommandBufferImpl(const GlobalInfo & gi, uint32_t family, const std::string & name_, vk::CommandBufferLevel level): CommandBuffer({name_}), _gi(gi) {
-        _pool = _gi.device.createCommandPool(vk::CommandPoolCreateInfo().setQueueFamilyIndex(family), _gi.allocator);
+    CommandBufferImpl(const GlobalInfo * gi, uint32_t family, const std::string & name_, vk::CommandBufferLevel level): CommandBuffer({name_}), _gi(gi) {
+        _pool = _gi->device.createCommandPool(vk::CommandPoolCreateInfo().setQueueFamilyIndex(family), _gi->allocator);
 
         vk::CommandBufferAllocateInfo info;
         info.commandPool        = _pool;
         info.level              = level;
         info.commandBufferCount = 1;
-        _handle                 = _gi.device.allocateCommandBuffers(info)[0];
+        _handle                 = _gi->device.allocateCommandBuffers(info)[0];
         _level                  = level;
-        setVkObjectName(_gi.device, _handle, name());
+        setVkObjectName(_gi->device, _handle, name());
         _handle.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
     }
 
     virtual ~CommandBufferImpl() {
-        _gi.safeDestroy(_handle, _pool);
-        _gi.safeDestroy(_fence);
-        _gi.safeDestroy(_semaphore);
-        _gi.safeDestroy(_pool);
+        _gi->safeDestroy(_handle, _pool);
+        _gi->safeDestroy(_fence);
+        _gi->safeDestroy(_semaphore);
+        _gi->safeDestroy(_pool);
     }
 
-    const GlobalInfo & gi() const { return _gi; }
+    const GlobalInfo * gi() const { return _gi; }
 
     State state() const { return _state; }
 
@@ -153,10 +186,10 @@ public:
 
         // create fence and semaphore
         RAPID_VULKAN_ASSERT(!_fence && !_semaphore);
-        auto fence     = _gi.device.createFenceUnique({});
-        auto semaphore = _gi.device.createSemaphoreUnique({});
-        setVkObjectName(_gi.device, fence.get(), name());
-        setVkObjectName(_gi.device, semaphore.get(), name());
+        auto fence     = _gi->device.createFenceUnique({});
+        auto semaphore = _gi->device.createSemaphoreUnique({});
+        setVkObjectName(_gi->device, fence.get(), name());
+        setVkObjectName(_gi->device, semaphore.get(), name());
 
         // submit the command buffer
         vk::SubmitInfo si;
@@ -177,7 +210,7 @@ public:
     void finish() {
         if (EXECUTING == _state) {
             RAPID_VULKAN_ASSERT(_fence);
-            auto result = _gi.device.waitForFences({_fence}, true, UINT64_MAX);
+            auto result = _gi->device.waitForFences({_fence}, true, UINT64_MAX);
             if (result != vk::Result::eSuccess) { RAPID_VULKAN_LOG_ERROR("[ERROR] Command buffer %s failed to wait for fence!", name().c_str()); }
             _state = FINISHED;
         }
@@ -190,7 +223,7 @@ public:
     }
 
 private:
-    const GlobalInfo & _gi;
+    const GlobalInfo * _gi;
     vk::CommandPool    _pool; // one pool for each command buffer for simplicity for now.
     State              _state     = RECORDING;
     vk::Fence          _fence     = nullptr;
@@ -289,7 +322,7 @@ private:
 };
 
 CommandQueue::CommandQueue(const ConstructParameters & params): Root(params), _gi(params.gi), _family(params.family), _index(params.index) {
-    _handle = _gi.device.getQueue(_family, _index);
+    _handle = _gi->device.getQueue(_family, _index);
     _impl   = new Impl(*this);
 }
 CommandQueue::~CommandQueue() { delete _impl; }
@@ -455,7 +488,7 @@ static PipelineReflection reflectShaders(const std::string & pipelineName, vk::A
 // PipelineLayout
 // *********************************************************************************************************************
 
-PipelineLayout::PipelineLayout(const GlobalInfo & gi, const PipelineReflection & refl): Root({refl.name}), _gi(gi) {
+PipelineLayout::PipelineLayout(const GlobalInfo * gi, const PipelineReflection & refl): Root({refl.name}), _gi(gi) {
     // create descriptor set layouts
     _sets.resize(refl.descriptors.size());
     for (size_t i = 0; i < _sets.size(); ++i) {
@@ -471,7 +504,7 @@ PipelineLayout::PipelineLayout(const GlobalInfo & gi, const PipelineReflection &
         auto ci         = vk::DescriptorSetLayoutCreateInfo();
         ci.bindingCount = (uint32_t) bindings.size();
         ci.pBindings    = bindings.data();
-        _sets[i]        = gi.device.createDescriptorSetLayout(ci, gi.allocator);
+        _sets[i]        = gi->device.createDescriptorSetLayout(ci, gi->allocator);
     }
 
     // create push constant array
@@ -485,14 +518,14 @@ PipelineLayout::PipelineLayout(const GlobalInfo & gi, const PipelineReflection &
     ci.pSetLayouts            = _sets.data();
     ci.pushConstantRangeCount = (uint32_t) pc.size();
     ci.pPushConstantRanges    = pc.data();
-    _handle                   = gi.device.createPipelineLayout(ci, gi.allocator);
-    setVkObjectName(gi.device, _handle, refl.name);
+    _handle                   = gi->device.createPipelineLayout(ci, gi->allocator);
+    setVkObjectName(gi->device, _handle, refl.name);
 }
 
 PipelineLayout::~PipelineLayout() {
-    for (auto & s : _sets) _gi.safeDestroy(s);
+    for (auto & s : _sets) _gi->safeDestroy(s);
     _sets.clear();
-    _gi.safeDestroy(_handle);
+    _gi->safeDestroy(_handle);
 }
 
 // *********************************************************************************************************************
@@ -514,14 +547,13 @@ Pipeline::Pipeline(const std::string & name, vk::ArrayProxy<const Shader *> shad
     _reflection = reflectShaders(name, shaders);
 
     // create pipeline layout (TODO: use a cache to reuse layout)
-    auto & gi = shaders.front()->gi();
-    _layout   = std::make_shared<PipelineLayout>(gi, _reflection);
+    _layout = std::make_shared<PipelineLayout>(shaders.front()->gi(), _reflection);
 }
 
 Pipeline::~Pipeline() {
     if (_handle) {
         RAPID_VULKAN_ASSERT(_layout);
-        _layout->gi().safeDestroy(_handle);
+        _layout->gi()->safeDestroy(_handle);
     }
 }
 
@@ -533,14 +565,14 @@ ComputePipeline::ComputePipeline(const ConstructParameters & params): Pipeline(p
     vk::ComputePipelineCreateInfo ci;
     ci.setStage({{}, vk::ShaderStageFlagBits::eCompute, params.cs.handle(), params.cs.entry().c_str()});
     ci.setLayout(_layout->handle());
-    _handle = _gi.device.createComputePipeline(nullptr, ci, _gi.allocator).value;
+    _handle = _gi->device.createComputePipeline(nullptr, ci, _gi->allocator).value;
 }
 
 auto ComputePipeline::createArguments() -> std::unique_ptr<PipelineArguments> { return {}; }
 
-void ComputePipeline::bind(vk::CommandBuffer cb, const PipelineArguments &) { cb.bindPipeline(vk::PipelineBindPoint::eCompute, _handle); }
+void ComputePipeline::cmdBind(vk::CommandBuffer cb, const PipelineArguments &) { cb.bindPipeline(vk::PipelineBindPoint::eCompute, _handle); }
 
-void ComputePipeline::dispatch(vk::CommandBuffer cb, const DispatchParameters & dp) {
+void ComputePipeline::cmdDispatch(vk::CommandBuffer cb, const DispatchParameters & dp) {
     cb.bindPipeline(vk::PipelineBindPoint::eCompute, _handle);
     cb.dispatch(dp.width, dp.height, dp.depth);
 }
@@ -1001,7 +1033,7 @@ Device::Device(ConstructParameters cp): _cp(cp) {
 
         // create an submission proxy for each queue.
         auto name  = std::string("Default device queue #") + std::to_string(i);
-        auto q     = new CommandQueue({name, _gi, i, 0});
+        auto q     = new CommandQueue({name, &_gi, i, 0});
         _queues[i] = q;
 
         // classify all queues

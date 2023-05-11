@@ -22,7 +22,7 @@ BreakStringLiterals: 'false'
 ColumnLimit: '160'
 IndentCaseBlocks: false
 IndentCaseLabels: 'false'
-IndentPPDirectives: BeforeHash
+IndentPPDirectives: None
 IndentWidth: '4'
 MaxEmptyLinesToKeep: '1'
 NamespaceIndentation: None

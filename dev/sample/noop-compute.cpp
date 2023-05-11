@@ -10,7 +10,7 @@ int main() {
     auto p        = rapid_vulkan::ComputePipeline({"noop", noop});
     auto q        = rapid_vulkan::CommandQueue({"main", gi, device.graphics()->family(), device.graphics()->index()});
     if (auto c = q.begin("main")) {
-        p.dispatch(c->handle(), {1, 1, 1});
+        p.cmdDispatch(c->handle(), {1, 1, 1});
         q.submit(c);
     }
     q.wait();
