@@ -91,35 +91,46 @@ std::vector<vk::ExtensionProperties> enumerateDeviceExtensions(vk::PhysicalDevic
 // Buffer
 // *********************************************************************************************************************
 
-Buffer::Buffer(const ConstructParameters & cp): Root(cp) {
-    //
-}
+class Buffer::Impl {
+public:
+    Impl(const ConstructParameters &) {}
 
-Buffer::Buffer(const ImportParameters & cp): Root(cp) {
-    //
-}
+    Impl(const ImportParameters &) {}
 
-Buffer::~Buffer() {
-    //
-}
+    auto desc() const -> const Desc & { return _desc; }
 
-void Buffer::cmdWrite(const WriteParameters &) {
-    //
-}
+    void cmdWrite(const WriteParameters &) {
+        //
+    }
 
-void Buffer::cmdCopy(const CopyParameters &) {
-    //
-}
+    void cmdCopy(const CopyParameters &) {
+        //
+    }
 
-void Buffer::setContent(const SetContentParameters &) {
-    //
-}
+    void setContent(const SetContentParameters &) {
+        //
+    }
 
-auto Buffer::readContent(const ReadParameters &) -> std::vector<uint8_t> {
-    //
-    return {};
-}
+    auto readContent(const ReadParameters &) -> std::vector<uint8_t> {
+        //
+        return {};
+    }
 
+private:
+    const GlobalInfo * _gi;
+    Desc               _desc;
+    vk::Buffer         _handle {};
+    bool               _imported;
+};
+
+Buffer::Buffer(const ConstructParameters & cp): Root(cp), _impl(new Impl(cp)) {}
+Buffer::Buffer(const ImportParameters & cp): Root(cp), _impl(new Impl(cp)) {}
+Buffer::~Buffer() { delete _impl; }
+auto Buffer::desc() const -> const Desc & { return _impl->desc(); }
+void Buffer::cmdWrite(const WriteParameters & p) { return _impl->cmdWrite(p); }
+void Buffer::cmdCopy(const CopyParameters & p) { return _impl->cmdCopy(p); }
+void Buffer::setContent(const SetContentParameters & p) { return _impl->setContent(p); }
+auto Buffer::readContent(const ReadParameters & p) -> std::vector<uint8_t> { return _impl->readContent(p); }
 // *********************************************************************************************************************
 // Shader
 // *********************************************************************************************************************
@@ -232,12 +243,19 @@ private:
 
 class CommandQueue::Impl {
 public:
-    Impl(CommandQueue & owner): _owner(owner) {}
+    Impl(const ConstructParameters & params) {
+        _desc.gi     = params.gi;
+        _desc.family = params.family;
+        _desc.index  = params.index;
+        _desc.handle = params.gi->device.getQueue(params.family, params.index);
+    }
     ~Impl() {}
+
+    const Desc & desc() const { return _desc; }
 
     CommandBuffer * begin(const char * name, vk::CommandBufferLevel level) {
         auto lock = std::lock_guard {_mutex};
-        auto p    = new CommandBufferImpl(_owner.gi(), _owner.family(), name, level);
+        auto p    = new CommandBufferImpl(_desc.gi, _desc.family, name, level);
         _all.insert(p);
         return p;
     }
@@ -249,7 +267,7 @@ public:
         auto p = promote(cb);
         if (!p) return;
 
-        if (!p->submit(_owner.handle())) return;
+        if (!p->submit(_desc.handle)) return;
 
         // Done. add the command bufer to the pending list.
         p->pending = _pendings.insert(_pendings.end(), p);
@@ -271,10 +289,10 @@ private:
     typedef std::list<CommandBufferImpl *>          PendingList;
 
 private:
-    CommandQueue &   _owner;
     std::mutex       _mutex;
     CommandBufferSet _all;      /// All command buffers ever created. This is used to validate the incoming command buffer pointers.
     PendingList      _pendings; /// Command buffers that are currently being executed, sorted in order of submission.
+    Desc             _desc;
 
 private:
     CommandBufferImpl * promote(CommandBuffer * p) const {
@@ -313,7 +331,7 @@ private:
 
     void waitIdle() {
         try {
-            _owner._handle.waitIdle();
+            _desc.handle.waitIdle();
         } catch (vk::SystemError & error) { RAPID_VULKAN_LOG_ERROR(error.what()); }
 
         // then mark all command buffers as finished.
@@ -321,11 +339,9 @@ private:
     }
 };
 
-CommandQueue::CommandQueue(const ConstructParameters & params): Root(params), _gi(params.gi), _family(params.family), _index(params.index) {
-    _handle = _gi->device.getQueue(_family, _index);
-    _impl   = new Impl(*this);
-}
+CommandQueue::CommandQueue(const ConstructParameters & params): Root(params), _impl(new Impl(params)) {}
 CommandQueue::~CommandQueue() { delete _impl; }
+auto CommandQueue::desc() const -> const Desc & { return _impl->desc(); }
 auto CommandQueue::begin(const char * name, vk::CommandBufferLevel level) -> CommandBuffer * { return _impl->begin(name, level); }
 auto CommandQueue::submit(CommandBuffer * cb) -> void { _impl->submit(cb); }
 auto CommandQueue::wait(CommandBuffer * cb) -> void { _impl->wait(cb); }

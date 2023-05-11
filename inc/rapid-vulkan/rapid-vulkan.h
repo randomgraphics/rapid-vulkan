@@ -446,17 +446,15 @@ public:
 
     ~Buffer();
 
-    auto desc() const -> const Desc & { return _desc; }
+    auto desc() const -> const Desc &;
     void cmdWrite(const WriteParameters &);
     void cmdCopy(const CopyParameters &);
     void setContent(const SetContentParameters &);
     auto readContent(const ReadParameters &) -> std::vector<uint8_t>;
 
 private:
-    const GlobalInfo * _gi;
-    Desc               _desc;
-    vk::Buffer         _handle {};
-    bool               _imported;
+    class Impl;
+    Impl * _impl = nullptr;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -556,24 +554,29 @@ public:
         uint32_t           index  = 0; ///< queue index within family
     };
 
+    struct Desc {
+        const GlobalInfo * gi     = nullptr;
+        vk::Queue          handle = {};
+        uint32_t           family = 0; ///< queue family index
+        uint32_t           index  = 0; ///< queue index within family
+    };
+
     CommandQueue(const ConstructParameters &);
     ~CommandQueue() override;
 
-    auto gi() const -> const GlobalInfo * { return _gi; }
-    auto family() const -> uint32_t { return _family; }
-    auto index() const -> uint32_t { return _index; }
-    auto handle() const -> vk::Queue { return _handle; }
+    auto desc() const -> const Desc &;
     auto begin(const char * name, vk::CommandBufferLevel level = vk::CommandBufferLevel::ePrimary) -> CommandBuffer *;
     void submit(CommandBuffer *);
     void wait(CommandBuffer * = nullptr);
 
+    auto gi() const -> const GlobalInfo * { return desc().gi; }
+    auto family() const -> uint32_t { return desc().family; }
+    auto index() const -> uint32_t { return desc().index; }
+    auto handle() const -> vk::Queue { return desc().handle; }
+
 private:
     class Impl;
-    const GlobalInfo * _gi {};
-    uint32_t           _family = 0; ///< queue family index
-    uint32_t           _index  = 0; ///< queue index within family
-    vk::Queue          _handle {};
-    Impl *             _impl = nullptr;
+    Impl * _impl = nullptr;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
