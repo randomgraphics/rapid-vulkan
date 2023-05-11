@@ -23,71 +23,81 @@ SOFTWARE.
 */
 
 #pragma once
+#ifndef RAPID_VULKAN_H_
+#define RAPID_VULKAN_H_
+
+/// A monotonically increasing number that uniquely identify the revision of the header.
+#define RAPID_VULKAN_REVISION 1
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// \brief Define the namespace of rapid-vulkan library.
 #ifndef RAPID_VULKAN_NAMESPACE
-    #define RAPID_VULKAN_NAMESPACE rapid_vulkan
+#define RAPID_VULKAN_NAMESPACE rapid_vulkan
 #endif
 
 /// \def RAPID_VULKAN_ENABLE_DEBUG_BUILD
 /// Set to non-zero value to enable debug build. Disabled by default.
 #ifndef RAPID_VULKAN_ENABLE_DEBUG_BUILD
-    #define RAPID_VULKAN_ENABLE_DEBUG_BUILD 0
+#define RAPID_VULKAN_ENABLE_DEBUG_BUILD 0
 #endif
 
 #ifndef RAPID_VULKAN_ENABLE_LOADER
-    #define RAPID_VULKAN_ENABLE_LOADER 0
+#define RAPID_VULKAN_ENABLE_LOADER 0
 #endif
 
 #ifndef RAPID_VULKAN_ASSERT
-    #define RAPID_VULKAN_ASSERT assert
+#define RAPID_VULKAN_ASSERT assert
 #endif
 
 #ifndef RAPID_VULKAN_LOG_ERROR
-    #define RAPID_VULKAN_LOG_ERROR(...)   \
-        do {                              \
-            fprintf(stderr, "[ WARN] ");  \
-            fprintf(stderr, __VA_ARGS__); \
-            fprintf(stderr, "\n");        \
-        } while (false)
+#define RAPID_VULKAN_LOG_ERROR(...)   \
+    do {                              \
+        fprintf(stderr, "[ WARN] ");  \
+        fprintf(stderr, __VA_ARGS__); \
+        fprintf(stderr, "\n");        \
+    } while (false)
 #endif
 
 #ifndef RAPID_VULKAN_LOG_WARN
-    #define RAPID_VULKAN_LOG_WARN(...)    \
-        do {                              \
-            fprintf(stderr, "[ERROR] ");  \
-            fprintf(stderr, __VA_ARGS__); \
-            fprintf(stderr, "\n");        \
-        } while (false)
+#define RAPID_VULKAN_LOG_WARN(...)    \
+    do {                              \
+        fprintf(stderr, "[ERROR] ");  \
+        fprintf(stderr, __VA_ARGS__); \
+        fprintf(stderr, "\n");        \
+    } while (false)
 #endif
 
 #ifndef RAPID_VULKAN_LOG_INFO
-    #define RAPID_VULKAN_LOG_INFO(...)    \
-        do {                              \
-            fprintf(stdout, __VA_ARGS__); \
-            fprintf(stdout, "\n");        \
-        } while (false)
+#define RAPID_VULKAN_LOG_INFO(...)    \
+    do {                              \
+        fprintf(stdout, __VA_ARGS__); \
+        fprintf(stdout, "\n");        \
+    } while (false)
 #endif
 
 #ifndef RAPID_VULKAN_THROW
-    #define RAPID_VULKAN_THROW(...) throw std::runtime_error(__VA_ARGS__)
+#define RAPID_VULKAN_THROW(...) throw std::runtime_error(__VA_ARGS__)
 #endif
 
 #if RAPID_VULKAN_ENABLE_LOADER
-    #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
+#define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
 #endif
 
 #ifdef VOLK_H_
-    #undef VK_NO_PROTOTYPES
+// volk.h defines VK_NO_PROTOTYPES to avoid symbol conflicting with vulkan.h. But it
+// causes vulkan.hpp to automatically switch to dynamic loader. So we have to undefine it,
+// before including vulkan.hpp
+#undef VK_NO_PROTOTYPES
 #endif
 
 #include <vulkan/vulkan.hpp>
 
 #ifdef VOLK_H_
-    #define VK_NO_PROTOTYPES
+// Now restore it.
+#define VK_NO_PROTOTYPES
 #endif
 
+#include <atomic>
 #include <cassert>
 #include <vector>
 #include <map>
@@ -96,23 +106,20 @@ SOFTWARE.
 #include <unordered_map>
 
 /// RVI stands for Rapid Vulkan Implementation. Macros started with this prefix are reserved for internal use.
-#define RVI_NO_COPY(T)     \
-    T(const T &) = delete; \
+#define RVI_NO_COPY(T)                 \
+    T(const T &)             = delete; \
     T & operator=(const T &) = delete;
-#define RVI_NO_MOVE(T)    \
-    T(T &&)     = delete; \
+#define RVI_NO_MOVE(T)            \
+    T(T &&)             = delete; \
     T & operator=(T &&) = delete;
 #define RVI_NO_COPY_NO_MOVE(T) RVI_NO_COPY(T) RVI_NO_MOVE(T)
 #define RVI_STR(x)             RVI_STR_HELPER(x)
 #define RVI_STR_HELPER(x)      #x
 
-// If volk.h is used, check if it is too old.
-#ifdef VOLK_HEADER_VERSION
-    #if VOLK_HEADER_VERSION < VK_HEADER_VERSION
-        #pragma message("[WARNING] VOLK_HEADER_VERSION(" RVI_STR(VOLK_HEADER_VERSION) ") is older VK_HEADER_VERSION(" RVI_STR( \
-            VK_HEADER_VERSION) ")! You might see link errors of missing Vulkan symbols. Consider downgrade your Vulkan SDK to match the version of volk.h.")
-    #endif
-#endif
+// // Check volk version
+// #ifdef VOLK_HEADER_VERSION
+// static_assert(VOLK_HEADER_VERSION == VK_HEADER_VERSION, "Wrong volk header version")
+// #endif
 
 namespace RAPID_VULKAN_NAMESPACE {
 
@@ -222,6 +229,7 @@ public:
     /// Name of the object. For debug and log only. Can be any value.
     const std::string & name() const { return _name; }
 
+    /// Set name of the object. For debug and log only. Can be any value.
     void setName(std::string newName) {
         if (newName.empty()) newName = "<no-name>"s;
         if (_name == newName) return;
@@ -235,22 +243,220 @@ protected:
     virtual void onNameChanged(const std::string & oldName) { (void) oldName; }
 
 private:
-    std::string _name;
+    friend class RefBase;
+    std::string           _name;
+    std::atomic<uint64_t> _ref = 0;
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// Base class of Ref class.
+class RefBase {
+protected:
+    RefBase() {}
+
+    ~RefBase() {}
+
+    static void addRef(Root * p) {
+        RAPID_VULKAN_ASSERT(p);
+        ++p->_ref;
+    }
+
+    static void release(Root * p) {
+        RAPID_VULKAN_ASSERT(p);
+        if (1 == p->_ref.fetch_sub(1)) {
+            RAPID_VULKAN_ASSERT(0 == p->_ref);
+            delete p;
+        }
+    }
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// Reference counter of any class inherited from Root. This class is more efficient on both memory and performance,
+/// than std::shared_ptr
+template<typename T>
+class Ref : public RefBase {
+public:
+    constexpr Ref() = default;
+
+    Ref(T & t) {
+        _ptr = &t;
+        addRef(_ptr);
+    }
+
+    Ref(T * t) {
+        if (!t) return;
+        _ptr = t;
+        addRef(_ptr);
+    }
+
+    ~Ref() { clear(); }
+
+    /// copy constructor
+    Ref(const Ref & rhs) {
+        if (rhs._ptr) addRef(rhs._ptr);
+        _ptr = rhs._ptr;
+    }
+
+    /// move constructor
+    Ref(Ref && rhs) {
+        _ptr     = rhs._ptr;
+        rhs._ptr = nullptr;
+    }
+
+    void clear() {
+        if (_ptr) release(_ptr), _ptr = nullptr;
+    }
+
+    bool empty() const { return !_ptr; }
+
+    bool valid() const { return _ptr != nullptr; }
+
+    void reset(T * t) {
+        if (_ptr == t) return;
+        clear();
+        _ptr = t;
+        if (t) addRef(_ptr);
+    }
+
+    template<typename T2 = T>
+    T2 * get() const {
+        return (T2 *) _ptr;
+    }
+
+    /// get address of the underlying pointer
+    T * const * addr() const {
+        RAPID_VULKAN_ASSERT(_ptr);
+        return &_ptr;
+    }
+
+    /// copy operator
+    Ref & operator=(const Ref & rhs) {
+        if (_ptr == rhs._ptr) return *this;
+        if (_ptr) release(_ptr);
+        if (rhs._ptr) addRef(rhs._ptr);
+        _ptr = rhs._ptr;
+        return *this;
+    }
+
+    /// move operator
+    Ref & operator=(Ref && rhs) {
+        if (this != &rhs) {
+            if (_ptr) release(_ptr);
+            _ptr     = rhs._ptr;
+            rhs._ptr = nullptr;
+        }
+        return *this;
+    }
+
+    /// comparison operator
+    bool operator==(const Ref & rhs) const { return _ptr == rhs._ptr; }
+
+    /// @brief null equality operator
+    /// @return true if null, false otherwise.
+    bool operator==(std::nullptr_t) { return _ptr == nullptr; }
+
+    /// comparison operator
+    bool operator!=(const Ref & rhs) const { return _ptr != rhs._ptr; }
+
+    /// @brief not null operator.
+    /// @return true if not null, false otherwise.
+    bool operator!=(std::nullptr_t) { return _ptr != nullptr; }
+
+    /// comparison operator
+    bool operator<(const Ref & rhs) const { return _ptr < rhs._ptr; }
+
+    /// @brief boolean cast.
+    /// @return true if not null, false otherwise.
+    explicit operator bool() const { return 0 != _ptr; }
+
+    /// @brief not operator
+    /// @return true if null, false otherwise.
+    bool operator!() const { return 0 == _ptr; }
+
+    /// dereference operator
+    T * operator->() const {
+        RAPID_VULKAN_ASSERT(_ptr);
+        return _ptr;
+    }
+
+    /// dereference operator
+    T & operator*() const {
+        RAPID_VULKAN_ASSERT(_ptr);
+        return *_ptr;
+    }
+
+private:
+    /// @brief Pointer smart pointer is wrapping.
+    T * _ptr = nullptr;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// A wrapper class for VkBuffer
 class Buffer : public Root {
 public:
+    struct Desc {
+        vk::Buffer           handle = {};
+        vk::DeviceSize       size   = 0;
+        vk::BufferUsageFlags usages = {};
+    };
+
     struct ConstructParameters : public Root::ConstructParameters {
-        //
+        const GlobalInfo *      gi;
+        vk::DeviceSize          size   = 0;
+        vk::BufferUsageFlags    usages = {};
+        vk::MemoryPropertyFlags memory = vk::MemoryPropertyFlagBits::eDeviceLocal;
+        vk::MemoryAllocateFlags alloc  = {};
+    };
+
+    struct ImportParameters : public Root::ConstructParameters {
+        const GlobalInfo * gi;
+        Desc               desc;
+    };
+
+    struct WriteParameters {
+        vk::CommandBuffer cb     = {};
+        const void *      data   = {};
+        vk::DeviceSize    offset = 0;
+        vk::DeviceSize    size   = vk::DeviceSize(-1);
+    };
+
+    struct CopyParameters {
+        vk::CommandBuffer cb        = {};
+        vk::Buffer        dest      = {};
+        vk::DeviceSize    srcOffset = 0;
+        vk::DeviceSize    dstOffset = 0;
+        vk::DeviceSize    size      = vk::DeviceSize(-1);
+    };
+
+    struct SetContentParameters {
+        vk::Queue                     queue = {};
+        vk::ArrayProxy<const uint8_t> data;
+        vk::DeviceSize                offset = 0;
+    };
+
+    struct ReadParameters {
+        vk::Queue      queue  = {};
+        vk::DeviceSize offset = 0;
+        vk::DeviceSize size   = vk::DeviceSize(-1);
     };
 
     Buffer(const ConstructParameters &);
 
+    Buffer(const ImportParameters &);
+
+    ~Buffer();
+
+    auto desc() const -> const Desc & { return _desc; }
+    void cmdWrite(const WriteParameters &);
+    void cmdCopy(const CopyParameters &);
+    void setContent(const SetContentParameters &);
+    auto readContent(const ReadParameters &) -> std::vector<uint8_t>;
+
 private:
-    class Impl;
-    Impl * _impl = nullptr;
+    const GlobalInfo * _gi;
+    Desc               _desc;
+    vk::Buffer         _handle {};
+    bool               _imported;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -286,7 +492,7 @@ public:
     static Shader EMPTY;
 
     struct ConstructParameters : public Root::ConstructParameters {
-        GlobalInfo               gi {};
+        const GlobalInfo *       gi = nullptr;
         vk::ArrayProxy<uint32_t> spirv;
         const char *             entry = "main";
 
@@ -295,7 +501,8 @@ public:
             return *this;
         }
 
-        ConstructParameters & setGlobalInfo(const GlobalInfo & v) {
+        ConstructParameters & setGlobalInfo(const GlobalInfo * v) {
+            RAPID_VULKAN_ASSERT(v);
             gi = v;
             return *this;
         }
@@ -310,7 +517,7 @@ public:
 
     ~Shader() override;
 
-    const GlobalInfo & gi() const { return _gi; }
+    const GlobalInfo * gi() const { return _gi; }
 
     vk::ShaderModule handle() const { return _handle; }
 
@@ -319,7 +526,7 @@ public:
     vk::ArrayProxy<uint32_t> spirv() const { return _spirv; }
 
 private:
-    GlobalInfo            _gi;
+    const GlobalInfo *    _gi = nullptr;
     vk::ShaderModule      _handle {};
     std::string           _entry;
     std::vector<uint32_t> _spirv;
@@ -344,30 +551,29 @@ protected:
 class CommandQueue : public Root {
 public:
     struct ConstructParameters : public Root::ConstructParameters {
-        GlobalInfo gi {};
-        uint32_t   family = 0; ///< queue family index
-        uint32_t   index  = 0; ///< queue index within family
+        const GlobalInfo * gi     = nullptr;
+        uint32_t           family = 0; ///< queue family index
+        uint32_t           index  = 0; ///< queue index within family
     };
 
     CommandQueue(const ConstructParameters &);
     ~CommandQueue() override;
 
-    const GlobalInfo & gi() const { return _gi; }
-    uint32_t           family() const { return _family; }
-    uint32_t           index() const { return _index; }
-    vk::Queue          handle() const { return _handle; }
-
+    auto gi() const -> const GlobalInfo * { return _gi; }
+    auto family() const -> uint32_t { return _family; }
+    auto index() const -> uint32_t { return _index; }
+    auto handle() const -> vk::Queue { return _handle; }
     auto begin(const char * name, vk::CommandBufferLevel level = vk::CommandBufferLevel::ePrimary) -> CommandBuffer *;
     void submit(CommandBuffer *);
     void wait(CommandBuffer * = nullptr);
 
 private:
     class Impl;
-    GlobalInfo _gi {};
-    uint32_t   _family = 0; ///< queue family index
-    uint32_t   _index  = 0; ///< queue index within family
-    vk::Queue  _handle {};
-    Impl *     _impl = nullptr;
+    const GlobalInfo * _gi {};
+    uint32_t           _family = 0; ///< queue family index
+    uint32_t           _index  = 0; ///< queue index within family
+    vk::Queue          _handle {};
+    Impl *             _impl = nullptr;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -414,7 +620,7 @@ struct PipelineReflection {
 /// A wrapper class for VkPipelineLayout
 class PipelineLayout : public Root {
 public:
-    PipelineLayout(const GlobalInfo & gi, const PipelineReflection &);
+    PipelineLayout(const GlobalInfo * gi, const PipelineReflection &);
 
     ~PipelineLayout() override;
 
@@ -422,10 +628,10 @@ public:
 
     vk::PipelineLayout handle() const { return _handle; }
 
-    const GlobalInfo & gi() const { return _gi; }
+    const GlobalInfo * gi() const { return _gi; }
 
 private:
-    GlobalInfo                           _gi;
+    const GlobalInfo *                   _gi = nullptr;
     std::vector<vk::DescriptorSetLayout> _sets;
     vk::PipelineLayout                   _handle;
 };
@@ -462,7 +668,7 @@ public:
 
     virtual auto createArguments() -> std::unique_ptr<PipelineArguments> = 0;
 
-    virtual void bind(vk::CommandBuffer, const PipelineArguments &) = 0;
+    virtual void cmdBind(vk::CommandBuffer, const PipelineArguments &) = 0;
 
 protected:
     PipelineReflection              _reflection;
@@ -490,9 +696,9 @@ public:
 
     auto createArguments() -> std::unique_ptr<PipelineArguments> override;
 
-    void bind(vk::CommandBuffer, const PipelineArguments &) override;
+    void cmdBind(vk::CommandBuffer, const PipelineArguments &) override;
 
-    void draw(vk::CommandBuffer, const DrawParameters &);
+    void cmdDraw(vk::CommandBuffer, const DrawParameters &);
 
 private:
     class Impl;
@@ -517,12 +723,12 @@ public:
 
     auto createArguments() -> std::unique_ptr<PipelineArguments> override;
 
-    void bind(vk::CommandBuffer, const PipelineArguments &) override;
+    void cmdBind(vk::CommandBuffer, const PipelineArguments &) override;
 
-    void dispatch(vk::CommandBuffer, const DispatchParameters &);
+    void cmdDispatch(vk::CommandBuffer, const DispatchParameters &);
 
 private:
-    GlobalInfo _gi;
+    const GlobalInfo * _gi;
 };
 
 class Swapchain {
@@ -639,7 +845,7 @@ public:
 
     const ConstructParameters & cp() const { return _cp; }
 
-    const GlobalInfo & gi() const { return _gi; }
+    const GlobalInfo * gi() const { return &_gi; }
 
     /// The general purpose graphics queue that is able to do everything: graphics, compute and transfer. Should always be available.
     CommandQueue * graphics() const { return _graphics; }
@@ -734,10 +940,10 @@ private:
     ConstructParameters _cp;
     vk::Instance        _instance {};
 #if RAPID_VULKAN_ENABLE_LOADER
-    #if 1 != VULKAN_HPP_DISPATCH_LOADER_DYNAMIC
-        #error \
-            "rapid-vulkan does not support static dispatch loader yet. When RAPID_VULKAN_ENABLE_LOADER is set to 1, VULKAN_HPP_DISPATCH_LOADER_DYNAMIC must be set to 1 as well."
-    #endif
+#if 1 != VULKAN_HPP_DISPATCH_LOADER_DYNAMIC
+#error \
+    "rapid-vulkan does not support static dispatch loader yet. When RAPID_VULKAN_ENABLE_LOADER is set to 1, VULKAN_HPP_DISPATCH_LOADER_DYNAMIC must be set to 1 as well."
+#endif
     vk::DynamicLoader _loader;
 #endif
 };
@@ -745,5 +951,7 @@ private:
 } // namespace RAPID_VULKAN_NAMESPACE
 
 #ifdef RAPID_VULKAN_IMPLEMENTATION
-    #include "rapid-vulkan.cpp"
+#include "rapid-vulkan.cpp"
 #endif
+
+#endif // RAPID_VULKAN_H

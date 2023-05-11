@@ -21,6 +21,6 @@ our_sources = [x for x in all_files if is_our_source(x)]
 
 # run clang-format-12 on all of them
 for x in our_sources:
-    cmdline = ["clang-format-12", "-i", x]
+    cmdline = ["clang-format-14", "-i", x]
     print(' '.join(cmdline))
     subprocess.check_call(cmdline, cwd=sdk_root_dir)
