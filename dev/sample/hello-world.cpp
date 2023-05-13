@@ -1,8 +1,6 @@
-#define RAPID_VULKAN_IMPLEMENTATION
-#define RAPID_VULKAN_ENABLE_LOADER 1
-#include <rapid-vulkan/rapid-vulkan.h>
+#include <rapid-vulkan/rapid-vulkan.cpp>
 int main() {
     auto instance = rapid_vulkan::Instance({});
-    auto device   = rapid_vulkan::Device({instance});
+    auto device   = rapid_vulkan::Device(instance);
     return 0;
 }
