@@ -8,8 +8,13 @@
 - Render Pass
 - Linux support
 - Version
-- cleanup command buffer interface: should CommandQueue::begin() returns a vk::CommandBuffer?
-
+- VMA support
+- CI pipeline:
+  - make sure header version is increased for every commit to rapid-vulkan.h
+  - pass format check
+  - pass build
+  - pass cit
+  
 # P1
 - Integrate with VMA
 - Pipeline Layout Cache

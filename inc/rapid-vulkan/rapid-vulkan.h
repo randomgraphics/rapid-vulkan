@@ -22,7 +22,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-#pragma once
 #ifndef RAPID_VULKAN_H_
 #define RAPID_VULKAN_H_
 
@@ -41,12 +40,14 @@ SOFTWARE.
 #define RAPID_VULKAN_ENABLE_DEBUG_BUILD 0
 #endif
 
+/// \def RAPID_VULKAN_ENABLE_LOADER
+/// Set to 0 to disable built-in Vulkan API loader. Enabled by default.
 #ifndef RAPID_VULKAN_ENABLE_LOADER
-#define RAPID_VULKAN_ENABLE_LOADER 0
+#define RAPID_VULKAN_ENABLE_LOADER 1
 #endif
 
 #ifndef RAPID_VULKAN_ASSERT
-#define RAPID_VULKAN_ASSERT assert
+#define RAPID_VULKAN_ASSERT(expression, ...) assert(expression)
 #endif
 
 #ifndef RAPID_VULKAN_LOG_ERROR
@@ -83,6 +84,9 @@ SOFTWARE.
 #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
 #endif
 
+// ---------------------------------------------------------------------------------------------------------------------
+// include vulkan.hpp
+
 #ifdef VOLK_H_
 // volk.h defines VK_NO_PROTOTYPES to avoid symbol conflicting with vulkan.h. But it
 // causes vulkan.hpp to automatically switch to dynamic loader. So we have to undefine it,
@@ -97,6 +101,42 @@ SOFTWARE.
 #define VK_NO_PROTOTYPES
 #endif
 
+// ---------------------------------------------------------------------------------------------------------------------
+// include VMA header
+
+#ifdef _MSC_VER_
+#pragma warning(push, 0)
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#ifdef __clang__
+#pragma GCC diagnostic ignored "-Wnullability-completeness"
+#endif
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#pragma GCC diagnostic ignored "-Wunused-variable"
+#pragma GCC diagnostic ignored "-Wtype-limits"
+#pragma GCC diagnostic ignored "-Wformat"
+#pragma GCC diagnostic ignored "-Wundef"
+#endif
+// Enable these defines to help debug VK memory corruption.
+// #ifndef VMA_DEBUG_DETECT_CORRUPTION
+// #define VMA_DEBUG_DETECT_CORRUPTION 1
+// #define VMA_DEBUG_MARGIN            32
+// #endif
+#ifndef VMA_DEBUG_ERROR_LOG
+#define VMA_DEBUG_ERROR_LOG RAPID_VULKAN_LOG_INFO
+#endif
+#define VMA_STATIC_VULKAN_FUNCTIONS  0
+#define VMA_DYNAMIC_VULKAN_FUNCTIONS 0
+#include <vma/vk_mem_alloc.h>
+#ifdef _WIN32_
+#pragma warning(pop)
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
+// ---------------------------------------------------------------------------------------------------------------------
+// include other standard/system headers
+
 #include <atomic>
 #include <cassert>
 #include <vector>
@@ -104,22 +144,61 @@ SOFTWARE.
 #include <string>
 #include <cstdio>
 #include <unordered_map>
+#include <tuple>
 
-/// RVI stands for Rapid Vulkan Implementation. Macros started with this prefix are reserved for internal use.
+// ---------------------------------------------------------------------------------------------------------------------
+// RVI stands for Rapid Vulkan Implementation. Macros started with this prefix are reserved for internal use.
+
 #define RVI_NO_COPY(T)                 \
     T(const T &)             = delete; \
     T & operator=(const T &) = delete;
+
 #define RVI_NO_MOVE(T)            \
     T(T &&)             = delete; \
     T & operator=(T &&) = delete;
-#define RVI_NO_COPY_NO_MOVE(T) RVI_NO_COPY(T) RVI_NO_MOVE(T)
-#define RVI_STR(x)             RVI_STR_HELPER(x)
-#define RVI_STR_HELPER(x)      #x
 
-// // Check volk version
-// #ifdef VOLK_HEADER_VERSION
-// static_assert(VOLK_HEADER_VERSION == VK_HEADER_VERSION, "Wrong volk header version")
-// #endif
+#define RVI_NO_COPY_NO_MOVE(T) RVI_NO_COPY(T) RVI_NO_MOVE(T)
+
+#define RVI_STR(x) RVI_STR_HELPER(x)
+
+#define RVI_STR_HELPER(x) #x
+
+#define RVI_THROW(...)                                             \
+    do {                                                           \
+        std::stringstream ss;                                      \
+        ss << __FILE__ << "(" << __LINE__ << "): " << __VA_ARGS__; \
+        RAPID_VULKAN_LOG_ERROR("", ss.str().data());               \
+        RAPID_VULKAN_THROW(ss.str());                              \
+    } while (false)
+
+#define RVI_VERIFY(condition, ...)                   \
+    do {                                             \
+        if (!(condition)) { RVI_THROW(#condition); } \
+    } while (false)
+
+#define RVI_VK_VERIFY(condition, ...)                                        \
+    do {                                                                     \
+        if (VK_SUCCESS != (VkResult) (condition)) { RVI_THROW(#condition); } \
+    } while (false)
+
+// Check C++ standard
+#ifdef _MSC_VER
+#if _MSVC_LANG < 201703L
+#error "C++17 is required"
+#elif _MSVC_LANG < 202002L
+#define RVI_CXX_STANDARD 17
+#else
+#define RVI_CXX_STANDARD 20
+#endif
+#else
+#if __cplusplus < 201703L
+#error "c++17 or higher is required"
+#elif __cplusplus < 202002L
+#define RVI_CXX_STANDARD 17
+#else
+#define RVI_CXX_STANDARD 20
+#endif
+#endif
 
 namespace RAPID_VULKAN_NAMESPACE {
 
@@ -128,10 +207,12 @@ using namespace std::string_literals;
 // ---------------------------------------------------------------------------------------------------------------------
 /// A utility class used to pass commonly used Vulkan global information around.
 struct GlobalInfo {
-    const vk::AllocationCallbacks * allocator = nullptr;
-    vk::Instance                    instance  = nullptr;
-    vk::PhysicalDevice              physical  = nullptr;
-    vk::Device                      device    = nullptr;
+    const vk::AllocationCallbacks * allocator    = nullptr;
+    uint32_t                        apiVersion   = 0;
+    vk::Instance                    instance     = nullptr;
+    vk::PhysicalDevice              physical     = nullptr;
+    vk::Device                      device       = nullptr;
+    VmaAllocator                    vmaAllocator = nullptr;
 
     template<typename T, typename... ARGS>
     void safeDestroy(T & handle, ARGS... args) const {
@@ -142,12 +223,47 @@ struct GlobalInfo {
             device.destroy(handle, allocator);
         } else if constexpr (std::is_same_v<T, vk::CommandBuffer>) {
             device.freeCommandBuffers(args..., {handle});
+        } else if constexpr (std::is_same_v<T, vk::DeviceMemory>) {
+            device.freeMemory(handle, allocator);
         } else {
             device.destroy(handle, allocator);
         }
         handle = nullptr;
     }
 };
+
+// ---------------------------------------------------------------------------------------------------------------------
+//
+template<typename T>
+inline constexpr T clamp(T value, const T & vmin, const T & vmax) {
+    return vmin > value ? vmin : vmax < value ? vmax : value;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Clamp a range of [offset, offset + length) into range of [0, capacity)
+/// \return The offset change.
+template<typename T>
+inline T clampRange(T & offset, T & length, T capacity) {
+    auto begin = offset; // remember the original starting point.
+    if (length > capacity) length = capacity;
+    T end  = offset + length;
+    offset = clamp<T>(offset, 0, capacity);
+    end    = clamp<T>(end, offset, capacity);
+    RAPID_VULKAN_ASSERT(end >= offset);
+    length = end - offset;
+    return offset - begin;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Clamp source and destination ranges. So that (srcOffset, srcOffset + length) and (dstOffset, dstOffset + length) are
+// in range of [0, srcCapacity) and [0, dstCapacity) respectively.
+template<typename T>
+inline T clampRange2(T & srcOffset, T & dstOffset, T & length, const T & srcCapacity, const T & dstCapacity) {
+    auto begin = srcOffset; // remember the original starting point.
+    dstOffset += clampRange(srcOffset, length, srcCapacity);
+    srcOffset += clampRange(dstOffset, length, dstCapacity);
+    return srcOffset - begin;
+}
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// Helper function to set Vulkan opaque handle's name (VK_EXT_debug_utils).
@@ -390,67 +506,49 @@ private:
     T * _ptr = nullptr;
 };
 
+// // ---------------------------------------------------------------------------------------------------------------------
+// /// A wrapper class for VkCommandBuffer
+// class CommandBuffer : public Root {
+// public:
+//     vk::CommandBuffer handle() const { return _handle; }
+
+// protected:
+//     CommandBuffer(const Root::ConstructParameters & cp): Root(cp) {}
+//     ~CommandBuffer() override = default;
+
+//     vk::CommandBuffer      _handle {};
+//     vk::CommandBufferLevel _level = vk::CommandBufferLevel::ePrimary;
+// };
+
 // ---------------------------------------------------------------------------------------------------------------------
-/// A wrapper class for VkBuffer
-class Buffer : public Root {
+/// A wrapper class for VkQueue
+class CommandQueue : public Root {
 public:
-    struct Desc {
-        vk::Buffer           handle = {};
-        vk::DeviceSize       size   = 0;
-        vk::BufferUsageFlags usages = {};
-    };
-
     struct ConstructParameters : public Root::ConstructParameters {
-        const GlobalInfo *      gi;
-        vk::DeviceSize          size   = 0;
-        vk::BufferUsageFlags    usages = {};
-        vk::MemoryPropertyFlags memory = vk::MemoryPropertyFlagBits::eDeviceLocal;
-        vk::MemoryAllocateFlags alloc  = {};
+        const GlobalInfo * gi     = nullptr;
+        uint32_t           family = 0; ///< queue family index
+        uint32_t           index  = 0; ///< queue index within family
     };
 
-    struct ImportParameters : public Root::ConstructParameters {
-        const GlobalInfo * gi;
-        Desc               desc;
+    struct Desc {
+        const GlobalInfo * gi     = nullptr;
+        vk::Queue          handle = {};
+        uint32_t           family = 0; ///< queue family index
+        uint32_t           index  = 0; ///< queue index within family
     };
 
-    struct WriteParameters {
-        vk::CommandBuffer cb     = {};
-        const void *      data   = {};
-        vk::DeviceSize    offset = 0;
-        vk::DeviceSize    size   = vk::DeviceSize(-1);
-    };
-
-    struct CopyParameters {
-        vk::CommandBuffer cb        = {};
-        vk::Buffer        dest      = {};
-        vk::DeviceSize    srcOffset = 0;
-        vk::DeviceSize    dstOffset = 0;
-        vk::DeviceSize    size      = vk::DeviceSize(-1);
-    };
-
-    struct SetContentParameters {
-        vk::Queue                     queue = {};
-        vk::ArrayProxy<const uint8_t> data;
-        vk::DeviceSize                offset = 0;
-    };
-
-    struct ReadParameters {
-        vk::Queue      queue  = {};
-        vk::DeviceSize offset = 0;
-        vk::DeviceSize size   = vk::DeviceSize(-1);
-    };
-
-    Buffer(const ConstructParameters &);
-
-    Buffer(const ImportParameters &);
-
-    ~Buffer();
+    CommandQueue(const ConstructParameters &);
+    ~CommandQueue() override;
 
     auto desc() const -> const Desc &;
-    void cmdWrite(const WriteParameters &);
-    void cmdCopy(const CopyParameters &);
-    void setContent(const SetContentParameters &);
-    auto readContent(const ReadParameters &) -> std::vector<uint8_t>;
+    auto begin(const char * purpose, vk::CommandBufferLevel level = vk::CommandBufferLevel::ePrimary) -> vk::CommandBuffer;
+    void submit(vk::CommandBuffer);
+    void wait(vk::CommandBuffer = {});
+
+    auto gi() const -> const GlobalInfo * { return desc().gi; }
+    auto family() const -> uint32_t { return desc().family; }
+    auto index() const -> uint32_t { return desc().index; }
+    auto handle() const -> vk::Queue { return desc().handle; }
 
 private:
     class Impl;
@@ -458,12 +556,309 @@ private:
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// A wrapper class for VkImage and VkImageView
-class Image {
+/// A wrapper class for VkBuffer
+class Buffer : public Root {
 public:
-    struct ConstructParameters {
-        //
+    struct Desc {
+        vk::Buffer              handle = {};
+        vk::DeviceSize          size   = 0;
+        vk::BufferUsageFlags    usage  = {};
+        vk::MemoryPropertyFlags memory = {};
+
+        /// @brief Check if the buffer is coherently mappable.
+        bool mappable() const { return (memory & vk::MemoryPropertyFlagBits::eHostVisible) && (memory & vk::MemoryPropertyFlagBits::eHostCoherent); }
     };
+
+    /// @brief Parameters for creating a new buffer
+    struct ConstructParameters : public Root::ConstructParameters {
+        const GlobalInfo *      gi;
+        vk::DeviceSize          size   = 0; ///< size of the buffer in bytes.
+        vk::BufferUsageFlags    usage  = {};
+        vk::MemoryPropertyFlags memory = vk::MemoryPropertyFlagBits::eDeviceLocal;
+        vk::MemoryAllocateFlags alloc  = {};
+
+        ConstructParameters & setStaging() {
+            usage  = vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst;
+            memory = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
+            return *this;
+        }
+    };
+
+    /// @brief Parameters for importing an existing buffer handle.
+    struct ImportParameters : public Root::ConstructParameters {
+        const GlobalInfo * gi;
+        Desc               desc;
+    };
+
+    /// @brief Parameters to copy data from one buffer to another.
+    struct CopyParameters {
+        vk::CommandBuffer cb          = {};                 ///< command buffer to record the copy command.
+        vk::Buffer        dst         = {};                 ///< the destination buffer
+        vk::DeviceSize    dstCapacity = 0;                  ///< size of the destination buffer, in bytes. Must be positive number.
+        vk::DeviceSize    dstOffset   = 0;                  ///< offset to the beginning of the destination buffer, in bytes.
+        vk::DeviceSize    srcOffset   = 0;                  ///< offset to the beginning of the source buffer, in bytes.
+        vk::DeviceSize    size        = vk::DeviceSize(-1); ///< size of the data to be copied, in bytes.
+    };
+
+    /// @brief Parameters to synchoronsly update buffer content.
+    struct SetContentParameters {
+        uint32_t       queueFamily = 0;
+        uint32_t       queueIndex  = 0;
+        const void *   data        = {};
+        vk::DeviceSize size        = 0; ///< size of the data to be written, in bytes.
+        vk::DeviceSize offset      = 0; ///< byte offset of the destination buffer where the data will be written to.
+
+        SetContentParameters & setQueue(CommandQueue & q) {
+            queueFamily = q.family();
+            queueIndex  = q.index();
+            return *this;
+        }
+
+        SetContentParameters & setData(const void * data_, vk::DeviceSize size_) {
+            data = data_;
+            size = size_;
+            return *this;
+        }
+
+        SetContentParameters & setOffset(vk::DeviceSize o) {
+            offset = o;
+            return *this;
+        }
+    };
+
+    /// @brief Parameters to synchonously read data from buffer.
+    struct ReadParameters {
+        uint32_t       queueFamily = 0;
+        uint32_t       queueIndex  = 0;
+        vk::DeviceSize offset      = 0;                  ///< byte offset of the source buffer where the data will be read from.
+        vk::DeviceSize size        = vk::DeviceSize(-1); ///< size of the data to be read, in bytes.
+
+        ReadParameters & setQueue(CommandQueue & q) {
+            queueFamily = q.family();
+            queueIndex  = q.index();
+            return *this;
+        }
+
+        ReadParameters & setRange(vk::DeviceSize o, vk::DeviceSize s = vk::DeviceSize(-1)) {
+            offset = o;
+            size   = s;
+            return *this;
+        }
+    };
+
+    struct MapParameters {
+        vk::DeviceSize offset = 0; ///< the offset of the mapped area, in bytes.
+        vk::DeviceSize size   = 0; ///< the size of the mapped area, in bytes.
+    };
+
+    struct MappedResult {
+        void *         data   = nullptr; ///< the mapped data buffer. If null, then the mapping failed.
+        vk::DeviceSize offset = 0;       ///< the offset of the mapped area, in bytes.
+        vk::DeviceSize size   = 0;       ///< the size of the mapped area, in bytes.
+    };
+
+    /// @brief A helper class that maps the buffer and and automatically unmap the buffer when destroyed.
+    template<typename T = uint8_t>
+    struct Map {
+        Buffer *       buffer = nullptr;
+        T *            data   = nullptr;
+        vk::DeviceSize offset = 0; ///< offset of the mapped area, in unit of T.
+        vk::DeviceSize length = 0; ///< size of the mapped area, in unit of T.
+
+        RVI_NO_COPY(Map);
+        RVI_NO_MOVE(Map);
+
+        Map(Buffer & buffer_, vk::DeviceSize offset = 0, vk::DeviceSize size = vk::DeviceSize(-1)) {
+            RAPID_VULKAN_ASSERT(empty());
+            auto mapped = buffer_.map({offset, size});
+            if (!mapped.data) return;
+            buffer = &buffer_;
+            data   = (T *) mapped.data;
+            offset = mapped.offset / sizeof(T);
+            length = mapped.size / sizeof(T);
+        }
+
+        ~Map() { unmap(); }
+
+        bool empty() const { return !buffer || !data || !length; }
+
+        void unmap() {
+            if (buffer) {
+                buffer->unmap();
+                // // if (owner->allocation) {
+                // //     PH_REQUIRE(owner->global->vmaAllocator);
+                // //     vmaUnmapMemory(owner->global->vmaAllocator, owner->allocation);
+                // // } else {
+                // vkUnmapMemory(owner->global->device, owner->memory);
+                // // }
+                // owner->mapped = false;
+                buffer = nullptr;
+            }
+            RAPID_VULKAN_ASSERT(empty());
+        }
+
+        operator bool() const { return !empty(); }
+    };
+
+    Buffer(const ConstructParameters &);
+
+    Buffer(const ImportParameters &);
+
+    ~Buffer() override;
+
+    auto desc() const -> const Desc &;
+    void cmdCopy(const CopyParameters &);
+    void setContent(const SetContentParameters &);
+    auto readContent(const ReadParameters &) -> std::vector<uint8_t>;
+    auto map(const MapParameters &) -> MappedResult;
+    void unmap();
+
+    vk::Buffer handle() const { return desc().handle; }
+
+    operator vk::Buffer() const { return desc().handle; }
+
+    operator VkBuffer() const { return desc().handle; }
+
+protected:
+    void onNameChanged(const std::string &) override;
+
+private:
+    friend class MappedResult;
+    class Impl;
+    Impl * _impl = nullptr;
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// A wrapper class for VkImage and VkImageView
+class Image : public Root {
+public:
+    struct ConstructParameters : Root::ConstructParameters {
+        const GlobalInfo *      gi = nullptr;
+        vk::ImageCreateInfo     info;
+        vk::MemoryPropertyFlags memory = vk::MemoryPropertyFlagBits::eDeviceLocal;
+        vk::MemoryAllocateFlags alloc  = {};
+
+        ConstructParameters & set2D(size_t w, size_t h, size_t a = 1) {
+            info.imageType     = vk::ImageType::e2D;
+            info.extent.width  = (uint32_t) w;
+            info.extent.height = (uint32_t) h;
+            info.extent.depth  = 1;
+            info.arrayLayers   = (uint32_t) a;
+            info.flags &= ~vk::ImageCreateFlagBits::eCubeCompatible;
+        }
+
+        ConstructParameters & setCube(size_t w) {
+            info.imageType     = vk::ImageType::e2D;
+            info.extent.width  = (uint32_t) w;
+            info.extent.height = (uint32_t) w;
+            info.extent.depth  = 1;
+            info.arrayLayers   = 6;
+            info.flags |= vk::ImageCreateFlagBits::eCubeCompatible;
+        }
+
+        ConstructParameters & setFormat(vk::Format f) {
+            info.format = f;
+            return *this;
+        }
+
+        ConstructParameters & setLevels(size_t l) {
+            info.mipLevels = (uint32_t) l;
+            return *this;
+        }
+
+        ConstructParameters & setLayers(size_t f) {
+            info.arrayLayers = (uint32_t) f;
+            return *this;
+        }
+
+        ConstructParameters & setTiling(vk::ImageTiling t) {
+            info.tiling = t;
+            return *this;
+        }
+
+        ConstructParameters & setUsage(vk::ImageUsageFlags flags) {
+            info.usage = flags;
+            return *this;
+        }
+
+        ConstructParameters & addUsage(vk::ImageUsageFlags flags) {
+            info.usage |= flags;
+            return *this;
+        }
+
+        ConstructParameters & setInitialLayout(vk::ImageLayout l) {
+            info.initialLayout = l;
+            return *this;
+        }
+
+        ConstructParameters & setMemoryFlags(vk::MemoryPropertyFlags property, vk::MemoryAllocateFlags alloc_) {
+            memory = property;
+            alloc  = alloc_;
+            return *this;
+        }
+
+        bool isCube() const {
+            return vk::ImageType::e2D == info.imageType && info.extent.width == info.extent.height && 1 == info.extent.depth && 6 == info.arrayLayers &&
+                   (vk::ImageCreateFlagBits::eCubeCompatible & info.flags);
+        }
+
+        bool isCubeOrCubeArray() const {
+            return vk::ImageType::e2D == info.imageType && info.extent.width == info.extent.height && 1 == info.extent.depth && 6 <= info.arrayLayers &&
+                   0 == (info.arrayLayers % 6) && (vk::ImageCreateFlagBits::eCubeCompatible & info.flags);
+        }
+    };
+
+    struct Desc {
+        vk::Image               handle      = {};
+        vk::ImageType           type        = vk::ImageType::e2D;
+        vk::Format              format      = vk::Format::eR8G8B8A8Unorm;
+        vk::Extent3D            extent      = {1, 1, 1};
+        uint32_t                mipLevels   = 1;
+        uint32_t                arrayLayers = 1;
+        vk::SampleCountFlagBits samples     = vk::SampleCountFlagBits::e1;
+    };
+
+    struct PixelPlane {
+        vk::Format   format; ///< pixel format
+        uint32_t     width;  ///< width in pixels
+        uint32_t     height; ///< height in pixels
+        uint32_t     pitch;  ///< size in byte of a pixel block rows (could be multiple line of pixels, for compressed texture)
+        const void * pixels;
+    };
+
+    struct PixelPlaneStorage {
+        vk::Format           format; ///< pixel format
+        uint32_t             width;  ///< width in pixels
+        uint32_t             height; ///< height in pixels
+        uint32_t             pitch;  ///< size in byte of a pixel block rows (could be multiple line of pixels, for compressed texture)
+        std::vector<uint8_t> pixels;
+    };
+
+    struct SetContentParameters {
+        uint32_t             queueFamily = 0;
+        uint32_t             queueIndex  = 0;
+        vk::ImageSubresource subresource = {};
+        PixelPlane           pixels;
+    };
+
+    struct ReadContentParameters {
+        uint32_t             queueFamily = 0;
+        uint32_t             queueIndex  = 0;
+        vk::ImageSubresource subresource = {};
+    };
+
+    Image(const ConstructParameters &);
+
+    ~Image();
+
+    /// @brief Get basic properties of the image.
+    const Desc & desc() const;
+
+    /// @brief Synchronously set content of one subresource
+    void setContent(const SetContentParameters &);
+
+    /// @brief Synchronously read content of one subresource
+    PixelPlaneStorage readContent(const ReadContentParameters &);
 
 private:
     class Impl;
@@ -528,55 +923,6 @@ private:
     vk::ShaderModule      _handle {};
     std::string           _entry;
     std::vector<uint32_t> _spirv;
-};
-
-// ---------------------------------------------------------------------------------------------------------------------
-/// A wrapper class for VkCommandBuffer
-class CommandBuffer : public Root {
-public:
-    vk::CommandBuffer handle() const { return _handle; }
-
-protected:
-    CommandBuffer(const Root::ConstructParameters & cp): Root(cp) {}
-    ~CommandBuffer() override = default;
-
-    vk::CommandBuffer      _handle {};
-    vk::CommandBufferLevel _level = vk::CommandBufferLevel::ePrimary;
-};
-
-// ---------------------------------------------------------------------------------------------------------------------
-/// A wrapper class for VkQueue
-class CommandQueue : public Root {
-public:
-    struct ConstructParameters : public Root::ConstructParameters {
-        const GlobalInfo * gi     = nullptr;
-        uint32_t           family = 0; ///< queue family index
-        uint32_t           index  = 0; ///< queue index within family
-    };
-
-    struct Desc {
-        const GlobalInfo * gi     = nullptr;
-        vk::Queue          handle = {};
-        uint32_t           family = 0; ///< queue family index
-        uint32_t           index  = 0; ///< queue index within family
-    };
-
-    CommandQueue(const ConstructParameters &);
-    ~CommandQueue() override;
-
-    auto desc() const -> const Desc &;
-    auto begin(const char * name, vk::CommandBufferLevel level = vk::CommandBufferLevel::ePrimary) -> CommandBuffer *;
-    void submit(CommandBuffer *);
-    void wait(CommandBuffer * = nullptr);
-
-    auto gi() const -> const GlobalInfo * { return desc().gi; }
-    auto family() const -> uint32_t { return desc().family; }
-    auto index() const -> uint32_t { return desc().index; }
-    auto handle() const -> vk::Queue { return desc().handle; }
-
-private:
-    class Impl;
-    Impl * _impl = nullptr;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -783,6 +1129,8 @@ public:
     RenderLoop(const ConstructParameters &);
 };
 
+class Instance;
+
 // ---------------------------------------------------------------------------------------------------------------------
 /// A wrapper class for VkDevice
 class Device {
@@ -806,7 +1154,11 @@ public:
     };
 
     struct ConstructParameters {
-        /// pointer to Vulkan instance.
+        /// The API version that this device will work with. Ideally, it should be equal to the version you passed to VkInstanceCreateInfo
+        /// when creating your instance. Leaving it as zero is equivalent as set to return value of vk::enumerateInstanceVersion().
+        uint32_t apiVersion = 0;
+
+        /// Handle to Vulkan instance.
         vk::Instance instance;
 
         /// Leave it at zero to create an headless device w/o presentation support.
@@ -827,6 +1179,9 @@ public:
         /// Pointer of an already-built feature chain. If not empty, this will be attached after feature1 and feature2.
         void * features3 = nullptr;
 
+        /// Set to true to create VMA allocator and store in the GlobalInfo::vmaAllocator field.
+        bool enableVmaAllocator = true;
+
         /// Set to true to enable validation layer.
         /// \todo move to Device class.
         Validation validation = RAPID_VULKAN_ENABLE_DEBUG_BUILD ? LOG_ON_VK_ERROR : VALIDATION_DISABLED;
@@ -840,21 +1195,23 @@ public:
             features2.emplace_back(feature);
             return *(T *) features2.back().buffer.data();
         }
+
+        ConstructParameters() = default;
+
+        ConstructParameters(const Instance &);
     };
 
-    Device(ConstructParameters);
+    Device(const ConstructParameters &);
 
     ~Device();
-
-    const ConstructParameters & cp() const { return _cp; }
 
     const GlobalInfo * gi() const { return &_gi; }
 
     /// The general purpose graphics queue that is able to do everything: graphics, compute and transfer. Should always be available.
     CommandQueue * graphics() const { return _graphics; }
 
-    /// The presentation queue. Could be null if the device is headless. Could be same as the graphics queue, if the device does not support separate present
-    /// queue.
+    /// The presentation queue. Could be null if the device is headless. Could be same as the graphics queue, if the device does not support separate
+    /// present queue.
     CommandQueue * present() const { return _present; }
 
     /// the async compute queue. could be null if the device does not support async compute.
@@ -901,8 +1258,9 @@ private:
 class Instance {
 public:
     struct ConstructParameters {
-        /// The Vulkan API version. Default is 1.2.0
-        uint32_t apiVersion = VK_MAKE_VERSION(1, 2, 0);
+        /// @brief Optional parameter to specify which version of the API you want to use to create the instance.
+        /// Leaving it as zero means using the highest available version.
+        uint32_t apiVersion = 0;
 
         /// Specify extra layers to initialize VK instance. The 2nd value indicates if the layer is required or not.
         /// We have to use vector instead of map here, because layer loading order matters.
@@ -953,8 +1311,8 @@ private:
 
 } // namespace RAPID_VULKAN_NAMESPACE
 
+#endif // RAPID_VULKAN_H
+
 #ifdef RAPID_VULKAN_IMPLEMENTATION
 #include "rapid-vulkan.cpp"
 #endif
-
-#endif // RAPID_VULKAN_H

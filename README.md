@@ -6,7 +6,7 @@ The library depends on the C++ version of the Vulkan header (vulkan.hpp) coming 
 It is currently developed and tested on Windows platform. Linux support is on its way.
 
 # Integration
-The library is aiming for easy integration with any Vulkan project. Everything you need is included in [rapid-vulkan.h](inc/rapid-vulkan/rapid-vulkan.h).
+The library is aiming for easy integration with any Vulkan project. Everything you need is included in [inc](inc)folder.
 
 Here are the step by step instructions to integrate it with your project:
 
@@ -24,4 +24,4 @@ Here are the step by step instructions to integrate it with your project:
 ```
 
 # Usage & Samples
-Please checkout apps in [sample](dev/sample) folder for how to create Vulkan app using rapid-vulkan.
+Please checkout apps in [sample](dev/sample) folder for how to use rapid-vulkan to quickly create Vulkan applications.
