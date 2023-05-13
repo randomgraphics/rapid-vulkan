@@ -22,9 +22,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-#ifndef RAPID_VULKAN_IMPLEMENTATION
+#undef RAPID_VULKAN_IMPLEMENTATION
 #include "rapid-vulkan.h"
-#endif
 #include "3rd-party/spriv-reflect/spirv_reflect.c"
 #include <sstream>
 #include <stdexcept>
@@ -36,7 +35,11 @@ SOFTWARE.
 #include <signal.h>
 
 #define VMA_IMPLEMENTATION
+#ifdef _WIN32
 #include <vma/vk_mem_alloc.h>
+#else
+#include <vk_mem_alloc.h>
+#endif
 
 #if RAPID_VULKAN_ENABLE_LOADER
 // implement the default dynamic dispatcher storage. Has to use this macro outside of any namespace.
@@ -97,7 +100,7 @@ public:
     std::list<CommandBuffer *>::iterator pending;
 
     CommandBuffer(const GlobalInfo * gi, uint32_t family, const std::string & name_, vk::CommandBufferLevel level): _gi(gi), _name(name_) {
-        RAPID_VULKAN_ASSERT(_gi);
+        RVI_ASSERT(_gi);
         _pool = _gi->device.createCommandPool(vk::CommandPoolCreateInfo().setQueueFamilyIndex(family), _gi->allocator);
 
         vk::CommandBufferAllocateInfo info;
@@ -137,7 +140,7 @@ public:
         }
 
         // create fence and semaphore
-        RAPID_VULKAN_ASSERT(!_fence && !_semaphore);
+        RVI_ASSERT(!_fence && !_semaphore);
         auto fence     = _gi->device.createFenceUnique({});
         auto semaphore = _gi->device.createSemaphoreUnique({});
         setVkObjectName(_gi->device, fence.get(), _name);
@@ -161,7 +164,7 @@ public:
     // wait for the command buffer to finish executing on GPU.
     void finish() {
         if (EXECUTING == _state) {
-            RAPID_VULKAN_ASSERT(_fence);
+            RVI_ASSERT(_fence);
             auto result = _gi->device.waitForFences({_fence}, true, UINT64_MAX);
             if (result != vk::Result::eSuccess) { RAPID_VULKAN_LOG_ERROR("[ERROR] Command buffer %s failed to wait for fence!", _name.c_str()); }
             _state = FINISHED;
@@ -170,7 +173,7 @@ public:
 
     /// Only called on pending command buffers and unconditionally mark it as finished.
     void setFinished() {
-        RAPID_VULKAN_ASSERT(_state == EXECUTING);
+        RVI_ASSERT(_state == EXECUTING);
         _state = FINISHED;
     }
 
@@ -268,9 +271,8 @@ private:
             // TODO: move the command buffer to the finished list.
             // _finished.push_back(std::move(*iter));
 
-            // Remove from all list. Destroy the command buffer.
+            // Remove from all list, which will automatically delete the command buffer instance.
             _all.erase(_all.find(p->handle()));
-            delete *iter;
         }
         // Then remove them from the pending list.
         _pendings.erase(_pendings.begin(), end);
@@ -279,7 +281,7 @@ private:
     void waitIdle() {
         try {
             _desc.handle.waitIdle();
-        } catch (vk::SystemError & error) { RAPID_VULKAN_LOG_ERROR(error.what()); }
+        } catch (vk::SystemError & error) { RAPID_VULKAN_LOG_ERROR("%s", error.what()); }
 
         // then mark all command buffers as finished.
         finish(nullptr);
@@ -302,7 +304,7 @@ static vk::DeviceMemory allocateDeviceMemory(const GlobalInfo & g, const vk::Mem
                                              const vk::MemoryAllocateFlags allocFlags) {
     auto memProperties = g.physical.getMemoryProperties();
 
-    uint32_t memoryIndex = UINT_MAX;
+    uint32_t memoryIndex = uint32_t(-1);
     for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
         if (0 == (memRequirements.memoryTypeBits & (1 << i))) continue;
         auto propFlags = memProperties.memoryTypes[i].propertyFlags;
@@ -323,7 +325,7 @@ static vk::DeviceMemory allocateDeviceMemory(const GlobalInfo & g, const vk::Mem
 class Buffer::Impl {
 public:
     Impl(Buffer & owner, const ConstructParameters & cp): _owner(owner), _gi(cp.gi) {
-        RAPID_VULKAN_ASSERT(_gi);
+        RVI_ASSERT(_gi);
 
         auto ci  = vk::BufferCreateInfo {};
         ci.size  = cp.size;
@@ -356,7 +358,7 @@ public:
 
     ~Impl() {
         if (_allocation) {
-            RAPID_VULKAN_ASSERT(!_memory);
+            RVI_ASSERT(!_memory);
             vmaDestroyBuffer(_gi->vmaAllocator, _handle, _allocation);
         } else {
             if (_handle) _gi->safeDestroy(_handle);
@@ -387,8 +389,8 @@ public:
         clampRange2(srcOffset, dstOffset, size, _desc.size, params.dstCapacity);
         if (0 == size) return;
 
-        RAPID_VULKAN_ASSERT(srcOffset + size <= _desc.size);
-        RAPID_VULKAN_ASSERT(dstOffset + size <= params.dstCapacity);
+        RVI_ASSERT(srcOffset + size <= _desc.size);
+        RVI_ASSERT(dstOffset + size <= params.dstCapacity);
 
         params.cb.copyBuffer(_desc.handle, params.dst, {{srcOffset, dstOffset, size}});
     }
@@ -442,8 +444,8 @@ public:
 
         // read data from the staging buffer
         auto m = Map<uint8_t>(staging);
-        RAPID_VULKAN_ASSERT(0 == m.offset);
-        RAPID_VULKAN_ASSERT(m.length == size);
+        RVI_ASSERT(0 == m.offset);
+        RVI_ASSERT(m.length == size);
         return std::vector<uint8_t>(m.data, m.data + m.length);
     }
 
@@ -677,7 +679,7 @@ static void mergeDescriptorSet(MergedDescriptorSet & merged, const SpvReflectSha
         const char * name = getDescriptorName(i);
         auto &       d    = merged.descriptors[name];
         if (d.binding) {
-            RAPID_VULKAN_ASSERT(0 == strcmp(getDescriptorName(d.binding), name));
+            RVI_ASSERT(0 == strcmp(getDescriptorName(d.binding), name));
             // check for possible conflict
             if (d.binding->binding != i->binding)
                 RAPID_VULKAN_LOG_ERROR("Shader variable %s has conflicting bindings: %d != %d", name, d.binding->binding, i->binding);
@@ -711,7 +713,7 @@ static PipelineReflection convertRefl(std::map<uint32_t, MergedDescriptorSet> & 
     if (!descriptors.empty()) {
         refl.descriptors.resize(descriptors.rbegin()->first + 1);
         for (const auto & kv : descriptors) {
-            RAPID_VULKAN_ASSERT(kv.first < refl.descriptors.size());
+            RVI_ASSERT(kv.first < refl.descriptors.size());
             refl.descriptors[kv.first] = convertSet(kv.second);
         }
     }
@@ -727,7 +729,7 @@ static void convertVertexInputs(PipelineReflection & refl, vk::ArrayProxy<SpvRef
 }
 
 static PipelineReflection reflectShaders(const std::string & pipelineName, vk::ArrayProxy<const Shader *> shaders) {
-    RAPID_VULKAN_ASSERT(!shaders.empty());
+    RVI_ASSERT(!shaders.empty());
 
     // The first uint32_t is set index. The 2nd one is shader variable name.
     std::map<uint32_t, MergedDescriptorSet> merged;
@@ -761,8 +763,8 @@ static PipelineReflection reflectShaders(const std::string & pipelineName, vk::A
                 range.stageFlags = (vk::ShaderStageFlags) module.shader_stage;
             } else {
                 auto & range = constants[c->name];
-                RAPID_VULKAN_ASSERT(range.offset == c->offset);
-                RAPID_VULKAN_ASSERT(range.size == c->size);
+                RVI_ASSERT(range.offset == c->offset);
+                RVI_ASSERT(range.size == c->size);
                 range.stageFlags |= (vk::ShaderStageFlags) module.shader_stage;
             }
         }
@@ -856,12 +858,12 @@ Pipeline::Pipeline(const std::string & name, vk::ArrayProxy<const Shader *> shad
     _reflection = reflectShaders(name, shaders);
 
     // create pipeline layout (TODO: use a cache to reuse layout)
-    _layout = std::make_shared<PipelineLayout>(shaders.front()->gi(), _reflection);
+    _layout.reset(new PipelineLayout(shaders.front()->gi(), _reflection));
 }
 
 Pipeline::~Pipeline() {
     if (_handle) {
-        RAPID_VULKAN_ASSERT(_layout);
+        RVI_ASSERT(_layout);
         _layout->gi()->safeDestroy(_handle);
     }
 }
@@ -877,7 +879,7 @@ ComputePipeline::ComputePipeline(const ConstructParameters & params): Pipeline(p
     _handle = _gi->device.createComputePipeline(nullptr, ci, _gi->allocator).value;
 }
 
-auto ComputePipeline::createArguments() -> std::unique_ptr<PipelineArguments> { return {}; }
+auto ComputePipeline::createArguments() -> Ref<PipelineArguments> { return {}; }
 
 void ComputePipeline::cmdBind(vk::CommandBuffer cb, const PipelineArguments &) { cb.bindPipeline(vk::PipelineBindPoint::eCompute, _handle); }
 
@@ -914,7 +916,7 @@ VkBool32 Device::debugCallback(vk::DebugReportFlagsEXT flags, vk::DebugReportObj
 #ifdef _WIN32
             ::DebugBreak();
 #else
-            asm { int 3; }
+            asm("int $3");
 #endif
         }
 
@@ -1608,8 +1610,8 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
 
     // setup extension list
     std::map<const char *, bool> instanceExtensions {
-        {VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME, true}
-        // {VK_KHR_SURFACE_EXTENSION_NAME, true},
+        {VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME, true},
+        {VK_KHR_SURFACE_EXTENSION_NAME, true},
     };
     if (cp.validation) {
         // Enable in-shader debug printf, if supported.
@@ -1635,7 +1637,7 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
         for (auto & l : supported.instanceExtensions) { instanceCreationPrompt << " " << l; }
     }
     instanceCreationPrompt << std::endl;
-    RAPID_VULKAN_LOG_INFO(instanceCreationPrompt.str().c_str());
+    RAPID_VULKAN_LOG_INFO("%s", instanceCreationPrompt.str().c_str());
 
     // create VK 1.1 instance
     // TODO: check against available version.
@@ -1645,12 +1647,18 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
                    .setPApplicationInfo(&appInfo)
                    .setPEnabledLayerNames(supported.layers)
                    .setPEnabledExtensionNames(supported.instanceExtensions);
-    _instance = vk::createInstance(ici);
+    try {
+        _instance = vk::createInstance(ici);
+    } catch (vk::SystemError & e) {
+        // TODO: print instance information
+        RAPID_VULKAN_LOG_ERROR("Failed to create Vulkan instance: %s", e.what());
+        throw;
+    }
 
     // Print instance information
     if (cp.printVkInfo) {
         auto message = instanceInfo.print(ici, Device::VERBOSE == cp.printVkInfo);
-        RAPID_VULKAN_LOG_INFO(message.data());
+        RAPID_VULKAN_LOG_INFO("%s", message.data());
     }
 
 #if RAPID_VULKAN_ENABLE_LOADER
