@@ -112,13 +112,21 @@ def get_cmake_build_type(variant, build_dir, for_android = False):
     return [build_type, build_dir]
 
 def search_for_the_latest_binary_ex(path_template):
-    platform = "posix" if os.name != "nt" else "mswin"
-    candidates = [
-        ["", path_template.format(variant = "")],
-        [".d", path_template.format(variant = "Debug")],
-        [".p", path_template.format(variant = "RelWithDebInfo")],
-        [".r", path_template.format(variant = "Release")],
-    ]
+    if os.name == "nt":
+        platform = "mswin"
+        candidates = [
+            [".d", path_template.format(variant = "Debug")],
+            [".p", path_template.format(variant = "RelWithDebInfo")],
+            [".r", path_template.format(variant = "Release")],
+        ]
+    else:
+        platform = "posix"
+        candidates = [
+            [".d", path_template.format(variant = "")],
+            [".p", path_template.format(variant = "")],
+            [".r", path_template.format(variant = "")],
+        ]
+
     # Loop through all candidates
     latest = 0
     chosen = None

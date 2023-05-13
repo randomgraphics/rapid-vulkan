@@ -29,7 +29,7 @@ SOFTWARE.
 #define RAPID_VULKAN_REVISION 1
 
 /// \def RAPID_VULKAN_NAMESPACE
-/// \brief Define the namespace of rapid-vulkan library.
+/// Define the namespace of rapid-vulkan library.
 #ifndef RAPID_VULKAN_NAMESPACE
 #define RAPID_VULKAN_NAMESPACE rapid_vulkan
 #endif
@@ -46,6 +46,9 @@ SOFTWARE.
 #define RAPID_VULKAN_ENABLE_LOADER 1
 #endif
 
+/// \def RAPID_VULKAN_ASSERT
+/// The runtime assert macro for debug build only. This macro has no effect when
+/// RAPID_VULKAN_ENABLE_DEBUG_BUILD is 0.
 #ifndef RAPID_VULKAN_ASSERT
 #define RAPID_VULKAN_ASSERT(expression, ...) assert(expression)
 #endif
@@ -127,8 +130,12 @@ SOFTWARE.
 #endif
 #define VMA_STATIC_VULKAN_FUNCTIONS  0
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 0
+#ifdef _WIN32
 #include <vma/vk_mem_alloc.h>
-#ifdef _WIN32_
+#else
+#include <vk_mem_alloc.h>
+#endif
+#ifdef _WIN32
 #pragma warning(pop)
 #elif defined(__GNUC__)
 #pragma GCC diagnostic pop
@@ -167,9 +174,16 @@ SOFTWARE.
     do {                                                           \
         std::stringstream ss;                                      \
         ss << __FILE__ << "(" << __LINE__ << "): " << __VA_ARGS__; \
-        RAPID_VULKAN_LOG_ERROR("", ss.str().data());               \
+        RAPID_VULKAN_LOG_ERROR("%s", ss.str().data());             \
         RAPID_VULKAN_THROW(ss.str());                              \
     } while (false)
+
+#if RAPID_VULKAN_ENABLE_DEBUG_BUILD
+// assert is enabled only in debug build
+#define RVI_ASSERT RAPID_VULKAN_ASSERT
+#else
+#define RVI_ASSERT(...) ((void) 0)
+#endif
 
 #define RVI_VERIFY(condition, ...)                   \
     do {                                             \
@@ -217,7 +231,7 @@ struct GlobalInfo {
     template<typename T, typename... ARGS>
     void safeDestroy(T & handle, ARGS... args) const {
         if (!handle) return;
-        RAPID_VULKAN_ASSERT(device);
+        RVI_ASSERT(device);
         if constexpr (std::is_same_v<T, vk::CommandPool>) {
             device.resetCommandPool(handle, vk::CommandPoolResetFlagBits::eReleaseResources);
             device.destroy(handle, allocator);
@@ -249,7 +263,7 @@ inline T clampRange(T & offset, T & length, T capacity) {
     T end  = offset + length;
     offset = clamp<T>(offset, 0, capacity);
     end    = clamp<T>(end, offset, capacity);
-    RAPID_VULKAN_ASSERT(end >= offset);
+    RVI_ASSERT(end >= offset);
     length = end - offset;
     return offset - begin;
 }
@@ -373,14 +387,14 @@ protected:
     ~RefBase() {}
 
     static void addRef(Root * p) {
-        RAPID_VULKAN_ASSERT(p);
+        RVI_ASSERT(p);
         ++p->_ref;
     }
 
     static void release(Root * p) {
-        RAPID_VULKAN_ASSERT(p);
+        RVI_ASSERT(p);
         if (1 == p->_ref.fetch_sub(1)) {
-            RAPID_VULKAN_ASSERT(0 == p->_ref);
+            RVI_ASSERT(0 == p->_ref);
             delete p;
         }
     }
@@ -441,7 +455,7 @@ public:
 
     /// get address of the underlying pointer
     T * const * addr() const {
-        RAPID_VULKAN_ASSERT(_ptr);
+        RVI_ASSERT(_ptr);
         return &_ptr;
     }
 
@@ -491,13 +505,13 @@ public:
 
     /// dereference operator
     T * operator->() const {
-        RAPID_VULKAN_ASSERT(_ptr);
+        RVI_ASSERT(_ptr);
         return _ptr;
     }
 
     /// dereference operator
     T & operator*() const {
-        RAPID_VULKAN_ASSERT(_ptr);
+        RVI_ASSERT(_ptr);
         return *_ptr;
     }
 
@@ -669,7 +683,7 @@ public:
         RVI_NO_MOVE(Map);
 
         Map(Buffer & buffer_, vk::DeviceSize offset = 0, vk::DeviceSize size = vk::DeviceSize(-1)) {
-            RAPID_VULKAN_ASSERT(empty());
+            RVI_ASSERT(empty());
             auto mapped = buffer_.map({offset, size});
             if (!mapped.data) return;
             buffer = &buffer_;
@@ -694,7 +708,7 @@ public:
                 // owner->mapped = false;
                 buffer = nullptr;
             }
-            RAPID_VULKAN_ASSERT(empty());
+            RVI_ASSERT(empty());
         }
 
         operator bool() const { return !empty(); }
@@ -745,6 +759,7 @@ public:
             info.extent.depth  = 1;
             info.arrayLayers   = (uint32_t) a;
             info.flags &= ~vk::ImageCreateFlagBits::eCubeCompatible;
+            return *this;
         }
 
         ConstructParameters & setCube(size_t w) {
@@ -754,6 +769,7 @@ public:
             info.extent.depth  = 1;
             info.arrayLayers   = 6;
             info.flags |= vk::ImageCreateFlagBits::eCubeCompatible;
+            return *this;
         }
 
         ConstructParameters & setFormat(vk::Format f) {
@@ -895,7 +911,7 @@ public:
         }
 
         ConstructParameters & setGlobalInfo(const GlobalInfo * v) {
-            RAPID_VULKAN_ASSERT(v);
+            RVI_ASSERT(v);
             gi = v;
             return *this;
         }
@@ -997,9 +1013,9 @@ public:
 
     ~PipelineArguments() override;
 
-    void setBuffer(const std::string & name, std::shared_ptr<Buffer>);
-    void setImage(const std::string & name, std::shared_ptr<Image>);
-    void setSampler(const std::string & name, std::shared_ptr<Sampler>);
+    void setBuffer(const std::string & name, Ref<Buffer>);
+    void setImage(const std::string & name, Ref<Image>);
+    void setSampler(const std::string & name, Ref<Sampler>);
     void setConstant(size_t offset, size_t size, const void * data);
 
 private:
@@ -1015,14 +1031,14 @@ public:
 
     auto reflect() const -> const PipelineReflection & { return _reflection; }
 
-    virtual auto createArguments() -> std::unique_ptr<PipelineArguments> = 0;
+    virtual auto createArguments() -> Ref<PipelineArguments> = 0;
 
     virtual void cmdBind(vk::CommandBuffer, const PipelineArguments &) = 0;
 
 protected:
-    PipelineReflection              _reflection;
-    std::shared_ptr<PipelineLayout> _layout;
-    vk::Pipeline                    _handle {};
+    PipelineReflection  _reflection;
+    Ref<PipelineLayout> _layout;
+    vk::Pipeline        _handle {};
 
 protected:
     Pipeline(const std::string & name, vk::ArrayProxy<const Shader *> shaders);
@@ -1043,7 +1059,7 @@ public:
 
     GraphicsPipeline(const ConstructParameters &);
 
-    auto createArguments() -> std::unique_ptr<PipelineArguments> override;
+    auto createArguments() -> Ref<PipelineArguments> override;
 
     void cmdBind(vk::CommandBuffer, const PipelineArguments &) override;
 
@@ -1070,7 +1086,7 @@ public:
 
     ComputePipeline(const ConstructParameters &);
 
-    auto createArguments() -> std::unique_ptr<PipelineArguments> override;
+    auto createArguments() -> Ref<PipelineArguments> override;
 
     void cmdBind(vk::CommandBuffer, const PipelineArguments &) override;
 

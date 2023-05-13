@@ -1,5 +1,9 @@
 #define VOLK_IMPLEMENTATION
+#ifdef _WIN32
 #include <Volk/volk.h>
+#else
+#include <volk.h>
+#endif
 
 #define RAPID_VULKAN_ENABLE_LOADER 0
 #define RAPID_VULKAN_IMPLEMENTATION

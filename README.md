@@ -23,5 +23,28 @@ Here are the step by step instructions to integrate it with your project:
 #include <rapid-vulkan/rapid-vulkan.h>
 ```
 
-# Usage & Samples
+# Compile Time Configurations
+
+All macros started with RAPID_VULKAN_ (like RAPID_VULKAN_ASSERT) are compile time configurations that you can set to customize rapid-vulkan's behavior. All macros are explained in the header at where the macro is defined.
+
+# Usage
 Please checkout apps in [sample](dev/sample) folder for how to use rapid-vulkan to quickly create Vulkan applications.
+
+# Build Sample & Test Apps
+To build test and sample apps. You'll need to install Vulkan SDK and VMA memory manager.
+
+On Linux, just run [bootstrap.sh](dev/env/bootstrap.sh) to install all dependencies.
+
+On Windows, install Vulkan SDK from LunarG website, as well as cmake, git, python 3.8+.
+
+After than run [env.sh](env.sh)/[env.cmd](env.cmd) to launch the dev console. Then type:
+    - `b d` to build debug variant;
+    - `b p` to build profile variant; and
+    - `b r` to build release variant.
+
+Type `b --help` for detail help.
+
+After everything is built. You can run cit.sh/cit.cmd to run check-in-test suite.
+
+# License
+The library is released under MIT license. See [LICENSE](LICENSE) file for details.
