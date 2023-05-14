@@ -107,7 +107,7 @@ SOFTWARE.
 // ---------------------------------------------------------------------------------------------------------------------
 // include VMA header
 
-#ifdef _MSC_VER_
+#ifdef _MSC_VER
 #pragma warning(push, 0)
 #elif defined(__GNUC__)
 #pragma GCC diagnostic push
@@ -130,12 +130,12 @@ SOFTWARE.
 #endif
 #define VMA_STATIC_VULKAN_FUNCTIONS  0
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 0
-#ifdef _WIN32
+#ifdef _MSC_VER
 #include <vma/vk_mem_alloc.h>
 #else
 #include <vk_mem_alloc.h>
 #endif
-#ifdef _WIN32
+#ifdef _MSC_VER
 #pragma warning(pop)
 #elif defined(__GNUC__)
 #pragma GCC diagnostic pop
@@ -173,12 +173,12 @@ SOFTWARE.
 
 #define RVI_STR_HELPER(x) #x
 
-#define RVI_THROW(...)                                                                             \
-    do {                                                                                           \
-        std::stringstream ss;                                                                      \
-        ss << __FILE__ << "(" << __LINE__ << "): " << RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__); \
-        RAPID_VULKAN_LOG_ERROR("%s", ss.str().data());                                             \
-        RAPID_VULKAN_THROW(ss.str());                                                              \
+#define RVI_THROW(...)                                                                                \
+    do {                                                                                              \
+        std::stringstream ss___;                                                                      \
+        ss___ << __FILE__ << "(" << __LINE__ << "): " << RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__); \
+        RAPID_VULKAN_LOG_ERROR("%s", ss___.str().data());                                             \
+        RAPID_VULKAN_THROW(ss___.str());                                                              \
     } while (false)
 
 #if RAPID_VULKAN_ENABLE_DEBUG_BUILD
