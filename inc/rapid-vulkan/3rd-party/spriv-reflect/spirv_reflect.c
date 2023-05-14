@@ -3686,7 +3686,7 @@ static SpvReflectResult CreateShaderModule(
     memcpy(p_module->_internal->spirv_code, p_code, size);
   }
 
-  SpvReflectPrvParser parser = { 0 };
+  SpvReflectPrvParser parser = {};
   SpvReflectResult result = CreateParser(p_module->_internal->spirv_size,
                                          p_module->_internal->spirv_code,
                                          &parser);

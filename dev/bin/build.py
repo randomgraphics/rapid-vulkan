@@ -44,7 +44,7 @@ def update_submodules():
 def cmake_config(args, build_dir, build_type):
     update_submodules()
     os.makedirs(build_dir, exist_ok=True)
-    config = f"-S {sdk_root_dir} -B {build_dir} -DCMAKE_BUILD_TYPE={build_type}"
+    config = f"-S {sdk_root_dir} -B {build_dir} -DCMAKE_BUILD_TYPE={build_type}" # -DCMAKE_C_COMPILER=clang-14 -DCMAKE_CXX_COMPILER=clang++-14"
     if args.android_build:
         # Support only arm64 for now
         sdk = pathlib.Path(os.getenv('ANDROID_SDK_ROOT'))

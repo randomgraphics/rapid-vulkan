@@ -24,7 +24,16 @@ SOFTWARE.
 
 #undef RAPID_VULKAN_IMPLEMENTATION
 #include "rapid-vulkan.h"
+
 #include "3rd-party/spriv-reflect/spirv_reflect.c"
+
+#define VMA_IMPLEMENTATION
+#ifdef _WIN32
+#include <vma/vk_mem_alloc.h>
+#else
+#include <vk_mem_alloc.h>
+#endif
+
 #include <sstream>
 #include <stdexcept>
 #include <iomanip>
@@ -33,13 +42,6 @@ SOFTWARE.
 #include <list>
 #include <set>
 #include <signal.h>
-
-#define VMA_IMPLEMENTATION
-#ifdef _WIN32
-#include <vma/vk_mem_alloc.h>
-#else
-#include <vk_mem_alloc.h>
-#endif
 
 #if RAPID_VULKAN_ENABLE_LOADER
 // implement the default dynamic dispatcher storage. Has to use this macro outside of any namespace.
@@ -149,7 +151,7 @@ public:
         // submit the command buffer
         vk::SubmitInfo si;
         si.setSignalSemaphoreCount(1);
-        si.setPSignalSemaphores({&semaphore.get()});
+        si.setPSignalSemaphores(&semaphore.get());
         si.setCommandBufferCount(1);
         si.setPCommandBuffers(&_handle);
         queue.submit({si}, fence.get());
@@ -408,13 +410,13 @@ public:
         auto source = (const uint8_t *) params.data + srcOffset;
 
         // copy data into the staging buffer.
-        auto staging = Buffer(ConstructParameters {_owner.name(), _gi, size}.setStaging());
+        auto staging = Buffer(ConstructParameters {{_owner.name()}, _gi, size}.setStaging());
         auto m       = Map<uint8_t>(staging);
         memcpy(m.data, source, size);
         m.unmap();
 
         // copy to the target buffer.
-        auto queue = CommandQueue({_owner.name().c_str(), _gi, params.queueFamily, params.queueIndex});
+        auto queue = CommandQueue({{_owner.name()}, _gi, params.queueFamily, params.queueIndex});
         if (auto cb = queue.begin(_owner.name().c_str(), vk::CommandBufferLevel::ePrimary)) {
             staging.cmdCopy({cb, _owner.handle(), _desc.size, dstOffset, 0, size});
             queue.submit(cb);
@@ -432,8 +434,8 @@ public:
         // Always copy buffer content to another staging buffer. This is to ensure all pending
         // work items in the queue are finished before we read the buffer content.
         // TODO: change buffer barrier to make it a copy source.
-        auto staging = Buffer(ConstructParameters {_owner.name(), _gi, size}.setStaging());
-        auto queue   = CommandQueue({_owner.name().c_str(), _gi, params.queueFamily, params.queueIndex});
+        auto staging = Buffer(ConstructParameters {{_owner.name()}, _gi, size}.setStaging());
+        auto queue   = CommandQueue({{_owner.name()}, _gi, params.queueFamily, params.queueIndex});
         if (auto cb = queue.begin(_owner.name().c_str(), vk::CommandBufferLevel::ePrimary)) {
             cmdCopy({cb, staging.handle(), size, 0, offset});
             queue.submit(cb);
@@ -529,34 +531,34 @@ void Buffer::onNameChanged(const std::string &) { _impl->onNameChanged(); }
 // Image
 // *********************************************************************************************************************
 
-static vk::ImageAspectFlags determineImageAspect(vk::ImageAspectFlags aspect, vk::Format format) {
-    switch (format) {
-    // depth only format
-    case vk::Format::eD16Unorm:
-    case vk::Format::eD32Sfloat:
-    case vk::Format::eX8D24UnormPack32:
-        return vk::ImageAspectFlagBits::eDepth;
+// static vk::ImageAspectFlags determineImageAspect(vk::ImageAspectFlags aspect, vk::Format format) {
+//     switch (format) {
+//     // depth only format
+//     case vk::Format::eD16Unorm:
+//     case vk::Format::eD32Sfloat:
+//     case vk::Format::eX8D24UnormPack32:
+//         return vk::ImageAspectFlagBits::eDepth;
 
-    // stencil only format
-    case vk::Format::eS8Uint:
-        return vk::ImageAspectFlagBits::eStencil;
+//     // stencil only format
+//     case vk::Format::eS8Uint:
+//         return vk::ImageAspectFlagBits::eStencil;
 
-    // depth + stencil format
-    case vk::Format::eD16UnormS8Uint:
-    case vk::Format::eD24UnormS8Uint:
-    case vk::Format::eD32SfloatS8Uint:
-        if (vk::ImageAspectFlagBits::eDepth == aspect || vk::ImageAspectFlagBits::eStencil == aspect)
-            return aspect;
-        else
-            return vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil;
+//     // depth + stencil format
+//     case vk::Format::eD16UnormS8Uint:
+//     case vk::Format::eD24UnormS8Uint:
+//     case vk::Format::eD32SfloatS8Uint:
+//         if (vk::ImageAspectFlagBits::eDepth == aspect || vk::ImageAspectFlagBits::eStencil == aspect)
+//             return aspect;
+//         else
+//             return vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil;
 
-    // TODO: multi-planer formats
+//     // TODO: multi-planer formats
 
-    // default format
-    default:
-        return vk::ImageAspectFlagBits::eColor;
-    }
-}
+//     // default format
+//     default:
+//         return vk::ImageAspectFlagBits::eColor;
+//     }
+// }
 
 class Image::Impl {
 public:
@@ -1352,7 +1354,7 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
 
         // create an submission proxy for each queue.
         auto name  = std::string("Default device queue #") + std::to_string(i);
-        auto q     = new CommandQueue({name, &_gi, i, 0});
+        auto q     = new CommandQueue({{name}, &_gi, i, 0});
         _queues[i] = q;
 
         // classify all queues
