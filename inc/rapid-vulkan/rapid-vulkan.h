@@ -144,12 +144,15 @@ SOFTWARE.
 // ---------------------------------------------------------------------------------------------------------------------
 // include other standard/system headers
 
-#include <atomic>
 #include <cassert>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cstdarg>
+#include <atomic>
 #include <vector>
 #include <map>
 #include <string>
-#include <cstdio>
 #include <unordered_map>
 #include <tuple>
 
@@ -170,12 +173,12 @@ SOFTWARE.
 
 #define RVI_STR_HELPER(x) #x
 
-#define RVI_THROW(...)                                             \
-    do {                                                           \
-        std::stringstream ss;                                      \
-        ss << __FILE__ << "(" << __LINE__ << "): " << __VA_ARGS__; \
-        RAPID_VULKAN_LOG_ERROR("%s", ss.str().data());             \
-        RAPID_VULKAN_THROW(ss.str());                              \
+#define RVI_THROW(...)                                                                             \
+    do {                                                                                           \
+        std::stringstream ss;                                                                      \
+        ss << __FILE__ << "(" << __LINE__ << "): " << RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__); \
+        RAPID_VULKAN_LOG_ERROR("%s", ss.str().data());                                             \
+        RAPID_VULKAN_THROW(ss.str());                                                              \
     } while (false)
 
 #if RAPID_VULKAN_ENABLE_DEBUG_BUILD
@@ -245,6 +248,38 @@ struct GlobalInfo {
         handle = nullptr;
     }
 };
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// \def format
+/// \brief A printf like string formatting function.
+#if __clang__
+__attribute__((format(printf, 1, 2)))
+#endif
+inline std::string
+format(const char * format, ...) {
+    va_list args;
+    va_start(args, format);
+
+    // Get the size of the buffer needed to store the formatted string.
+    int size = vsnprintf(NULL, 0, format, args);
+    if (size == -1) {
+        // Error getting the size of the buffer.
+        va_end(args);
+        return {};
+    }
+
+    // Allocate the buffer.
+    std::string buffer(size + 1, '\0');
+
+    // Format the string.
+    vsnprintf(&buffer[0], size + 1, format, args);
+
+    // Free the argument list.
+    va_end(args);
+
+    // Return the formatted string.
+    return buffer;
+}
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
@@ -737,7 +772,6 @@ protected:
     void onNameChanged(const std::string &) override;
 
 private:
-    friend class MappedResult;
     class Impl;
     Impl * _impl = nullptr;
 };
@@ -1280,13 +1314,13 @@ public:
 
         /// Specify extra layers to initialize VK instance. The 2nd value indicates if the layer is required or not.
         /// We have to use vector instead of map here, because layer loading order matters.
-        std::vector<std::pair<std::string, bool>> layers;
+        std::vector<std::pair<std::string, bool>> layers {};
 
         /// Specify extra extension to initialize VK instance. Value indicate if the extension is required or not.
-        std::map<std::string, bool> instanceExtensions;
+        std::map<std::string, bool> instanceExtensions {};
 
         /// structure chain passed to VkInstanceCreateInfo::pNext
-        std::vector<StructureChain> instanceCreateInfo;
+        std::vector<StructureChain> instanceCreateInfo {};
 
         /// Set to true to enable validation layers and extensions.
         bool validation = RAPID_VULKAN_ENABLE_DEBUG_BUILD;

@@ -3,13 +3,13 @@
 
 TEST_CASE("buffer-dtor") {
     using namespace rapid_vulkan;
-    auto buffer = Buffer({"dtor-test", TestVulkanInstance::device->gi(), 8});
+    auto buffer = Buffer({{"dtor-test"}, TestVulkanInstance::device->gi(), 8});
 }
 
 TEST_CASE("buffer-read-write") {
     using namespace rapid_vulkan;
 
-    auto buffer = Buffer({"buf1", TestVulkanInstance::device->gi(), 8});
+    auto buffer = Buffer({{"buf1"}, TestVulkanInstance::device->gi(), 8});
     REQUIRE(buffer.handle());
     REQUIRE(buffer.desc().memory);
 

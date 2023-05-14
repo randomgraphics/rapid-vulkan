@@ -6,9 +6,9 @@ int main() {
     auto instance = Instance({});
     auto device   = Device(instance);
     auto gi       = device.gi();
-    auto noop     = Shader({"noop", gi, {sizeof(noop_comp) / sizeof(uint32_t), (const uint32_t *) noop_comp}});
-    auto p        = ComputePipeline({"noop", noop});
-    auto q        = CommandQueue({"main", gi, device.graphics()->family(), device.graphics()->index()});
+    auto noop     = Shader({{"noop"}, gi, {sizeof(noop_comp) / sizeof(uint32_t), (const uint32_t *) noop_comp}});
+    auto p        = ComputePipeline({{"noop"}, noop});
+    auto q        = CommandQueue({{"main"}, gi, device.graphics()->family(), device.graphics()->index()});
     if (auto c = q.begin("main")) {
         p.cmdDispatch(c, {1, 1, 1});
         q.submit(c);
