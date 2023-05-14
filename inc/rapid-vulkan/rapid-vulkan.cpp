@@ -28,10 +28,28 @@ SOFTWARE.
 #include "3rd-party/spriv-reflect/spirv_reflect.c"
 
 #define VMA_IMPLEMENTATION
+#ifdef _MSC_VER
+#pragma warning(push, 0)
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#ifdef __clang__
+#pragma GCC diagnostic ignored "-Wnullability-completeness"
+#endif
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#pragma GCC diagnostic ignored "-Wunused-variable"
+#pragma GCC diagnostic ignored "-Wtype-limits"
+#pragma GCC diagnostic ignored "-Wformat"
+#pragma GCC diagnostic ignored "-Wundef"
+#endif
 #ifdef _WIN32
 #include <vma/vk_mem_alloc.h>
 #else
 #include <vk_mem_alloc.h>
+#endif
+#ifdef _MSC_VER
+#pragma warning(pop)
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
 #endif
 
 #include <sstream>
@@ -268,13 +286,13 @@ private:
         // Mark this command buffer and all command buffers submitted before it as finished.
         auto end = p ? p->pending++ : _pendings.end();
         for (auto iter = _pendings.begin(); iter != end; ++iter) {
-            auto p = *iter;
-            p->setFinished();
+            auto cb = *iter;
+            cb->setFinished();
             // TODO: move the command buffer to the finished list.
             // _finished.push_back(std::move(*iter));
 
             // Remove from all list, which will automatically delete the command buffer instance.
-            _all.erase(_all.find(p->handle()));
+            _all.erase(_all.find(cb->handle()));
         }
         // Then remove them from the pending list.
         _pendings.erase(_pendings.begin(), end);
