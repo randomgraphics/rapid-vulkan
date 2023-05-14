@@ -29,9 +29,9 @@ TEST_CASE("buffer-read-write") {
     buffer.setContent(content);
 
     // ready the whole buffer back.
-    auto readback = buffer.readContent(Buffer::ReadParameters{}.setQueue(*TestVulkanInstance::device->graphics()));
+    auto readback = buffer.readContent(Buffer::ReadParameters {}.setQueue(*TestVulkanInstance::device->graphics()));
     REQUIRE(readback.size() == 8);
-    auto p32 = (const uint32_t *)readback.data();
+    auto p32 = (const uint32_t *) readback.data();
     CHECK(0xbadbabe == p32[0]);
     CHECK(0xdeadbeef == p32[1]);
 }
@@ -45,7 +45,7 @@ TEST_CASE("buffer-write-overflow") {
     content.setQueue(*TestVulkanInstance::device->graphics());
 
     // make content longer than the buffer.
-    std::vector<uint32_t> v (5, 0xbadbabe);
+    std::vector<uint32_t> v(5, 0xbadbabe);
     content.setData(v.data(), v.size());
 
     // set content should not throw any error.
