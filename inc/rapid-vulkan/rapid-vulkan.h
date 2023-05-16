@@ -54,20 +54,20 @@ SOFTWARE.
 #endif
 
 #ifndef RAPID_VULKAN_LOG_ERROR
-#define RAPID_VULKAN_LOG_ERROR(...)   \
-    do {                              \
-        fprintf(stderr, "[ WARN] ");  \
-        fprintf(stderr, __VA_ARGS__); \
-        fprintf(stderr, "\n");        \
+#define RAPID_VULKAN_LOG_ERROR(...)    \
+    do {                               \
+        fprintf(stderr, "[ ERROR ] "); \
+        fprintf(stderr, __VA_ARGS__);  \
+        fprintf(stderr, "\n");         \
     } while (false)
 #endif
 
-#ifndef RAPID_VULKAN_LOG_WARN
-#define RAPID_VULKAN_LOG_WARN(...)    \
-    do {                              \
-        fprintf(stderr, "[ERROR] ");  \
-        fprintf(stderr, __VA_ARGS__); \
-        fprintf(stderr, "\n");        \
+#ifndef RAPID_VULKAN_LOG_WARNING
+#define RAPID_VULKAN_LOG_WARNING(...)  \
+    do {                               \
+        fprintf(stderr, "[WARNING] "); \
+        fprintf(stderr, __VA_ARGS__);  \
+        fprintf(stderr, "\n");         \
     } while (false)
 #endif
 
@@ -605,6 +605,85 @@ private:
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
+/// A helper function to insert resource/memory barriers to command buffer
+struct Barrier {
+    vk::PipelineStageFlags               srcStage     = vk::PipelineStageFlagBits::eBottomOfPipe;
+    vk::PipelineStageFlags               dstStage     = vk::PipelineStageFlagBits::eTopOfPipe;
+    vk::DependencyFlags                  dependencies = vk::DependencyFlagBits::eByRegion;
+    std::vector<vk::MemoryBarrier>       memories;
+    std::vector<vk::BufferMemoryBarrier> buffers;
+    std::vector<vk::ImageMemoryBarrier>  images;
+
+    Barrier & clear() {
+        memories.clear();
+        buffers.clear();
+        images.clear();
+        return *this;
+    }
+
+    /// @brief Generic function call chain
+    /// This is to make it possible to call any function in a call chain: Barrier{}.m(...).b(...).i(...).p([](auto & b) {...});
+    template<typename PROC>
+    Barrier & p(PROC proc) {
+        proc(*this);
+        return *this;
+    }
+
+    /// @brief Setup a full pipeline barrier that blocks all stages.
+    Barrier & full() {
+        clear();
+        srcStage = dstStage = vk::PipelineStageFlagBits::eAllCommands;
+        auto flags = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eMemoryRead | vk::AccessFlagBits::eMemoryWrite;
+        m(flags, flags);
+        return *this;
+    }
+
+    /// @brief Add a memory barrier
+    Barrier & m(vk::AccessFlags srcAccess, vk::AccessFlags dstAccess) {
+        memories.emplace_back(vk::MemoryBarrier(srcAccess, dstAccess));
+        return *this;
+    }
+
+    /// @brief Add a buffer barrier
+    Barrier & b(vk::Buffer buffer, vk::DeviceSize offset = 0, vk::DeviceSize size = VK_WHOLE_SIZE,
+                vk::AccessFlags srcAccess = vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eMemoryRead,
+                vk::AccessFlags dstAccess = vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eMemoryRead) {
+        if (!buffer) return *this;
+        buffers.emplace_back(vk::BufferMemoryBarrier {srcAccess, dstAccess, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, buffer, offset, size});
+        return *this;
+    }
+
+    /// @brief Add an image barrier
+    Barrier & i(vk::Image image, vk::AccessFlags srcAccess, vk::AccessFlags dstAccess, vk::ImageLayout oldLayout, vk::ImageLayout newLayout,
+                vk::ImageSubresourceRange subresourceRange) {
+        if (!image) return *this;
+        images.emplace_back(
+            vk::ImageMemoryBarrier {srcAccess, dstAccess, oldLayout, newLayout, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, image, subresourceRange});
+        return *this;
+    }
+
+    /// @brief Add an image barrier
+    Barrier & i(vk::Image image, vk::AccessFlags srcAccess, vk::AccessFlags dstAccess, vk::ImageLayout oldLayout, vk::ImageLayout newLayout,
+                vk::ImageAspectFlags aspect) {
+        vk::ImageSubresourceRange range = {aspect, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS};
+        return i(image, srcAccess, dstAccess, oldLayout, newLayout, range);
+    }
+
+    /// @brief Set pipeline stages
+    Barrier & s(vk::PipelineStageFlags src, vk::PipelineStageFlags dst) {
+        srcStage = src;
+        dstStage = dst;
+        return *this;
+    }
+
+    /// @brief Write barriers to command buffer
+    void write(vk::CommandBuffer cb) const {
+        if (memories.empty() && buffers.empty() && images.empty()) return;
+        cb.pipelineBarrier(srcStage, dstStage, dependencies, memories, buffers, images);
+    }
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
 /// A wrapper class for VkBuffer
 class Buffer : public Root {
 public:
@@ -620,7 +699,7 @@ public:
 
     /// @brief Parameters for creating a new buffer
     struct ConstructParameters : public Root::ConstructParameters {
-        const GlobalInfo *      gi;
+        const GlobalInfo *      gi     = nullptr;
         vk::DeviceSize          size   = 0; ///< size of the buffer in bytes.
         vk::BufferUsageFlags    usage  = {};
         vk::MemoryPropertyFlags memory = vk::MemoryPropertyFlagBits::eDeviceLocal;
@@ -649,7 +728,7 @@ public:
         vk::DeviceSize    size        = vk::DeviceSize(-1); ///< size of the data to be copied, in bytes.
     };
 
-    /// @brief Parameters to synchoronsly update buffer content.
+    /// @brief Parameters to synchronously update buffer content.
     struct SetContentParameters {
         uint32_t       queueFamily = 0;
         uint32_t       queueIndex  = 0;
@@ -696,12 +775,12 @@ public:
     };
 
     struct MapParameters {
-        vk::DeviceSize offset = 0; ///< the offset of the mapped area, in bytes.
-        vk::DeviceSize size   = 0; ///< the size of the mapped area, in bytes.
+        vk::DeviceSize offset = 0;                  ///< the offset of the mapped area, in bytes.
+        vk::DeviceSize size   = vk::DeviceSize(-1); ///< the size of the mapped area, in bytes.
     };
 
     struct MappedResult {
-        void *         data   = nullptr; ///< the mapped data buffer. If null, then the mapping failed.
+        uint8_t *      data   = nullptr; ///< the mapped data buffer. If null, then the mapping failed.
         vk::DeviceSize offset = 0;       ///< the offset of the mapped area, in bytes.
         vk::DeviceSize size   = 0;       ///< the size of the mapped area, in bytes.
     };
@@ -781,8 +860,9 @@ private:
 class Image : public Root {
 public:
     struct ConstructParameters : Root::ConstructParameters {
-        const GlobalInfo *      gi = nullptr;
-        vk::ImageCreateInfo     info;
+        const GlobalInfo *      gi     = nullptr;
+        vk::ImageCreateInfo     info   = vk::ImageCreateInfo({}, vk::ImageType::e2D, vk::Format::eR8G8B8A8Unorm, {1, 1, 1}, 1, 1, vk::SampleCountFlagBits::e1,
+                                                             vk::ImageTiling::eOptimal, vk::ImageUsageFlagBits::eSampled);
         vk::MemoryPropertyFlags memory = vk::MemoryPropertyFlagBits::eDeviceLocal;
         vk::MemoryAllocateFlags alloc  = {};
 
@@ -868,33 +948,75 @@ public:
         vk::SampleCountFlagBits samples     = vk::SampleCountFlagBits::e1;
     };
 
-    struct PixelPlane {
-        vk::Format   format; ///< pixel format
-        uint32_t     width;  ///< width in pixels
-        uint32_t     height; ///< height in pixels
-        uint32_t     pitch;  ///< size in byte of a pixel block rows (could be multiple line of pixels, for compressed texture)
-        const void * pixels;
-    };
+    // struct PixelPlane {
+    //     vk::Format   format; ///< pixel format
+    //     uint32_t     width;  ///< width in pixels
+    //     uint32_t     height; ///< height in pixels
+    //     uint32_t     depth;  ///< depth in pixels
+    //     uint32_t     pitch;  ///< size in byte of a pixel block rows (could be multiple line of pixels, for compressed texture)
+    //     const void * pixels;
 
-    struct PixelPlaneStorage {
-        vk::Format           format; ///< pixel format
-        uint32_t             width;  ///< width in pixels
-        uint32_t             height; ///< height in pixels
-        uint32_t             pitch;  ///< size in byte of a pixel block rows (could be multiple line of pixels, for compressed texture)
-        std::vector<uint8_t> pixels;
+    //     vk::DeviceSize size() const { return pitch * height; }
+    // };
+
+    struct Rect3D {
+        uint32_t x = 0;            ///< x offset of the area.
+        uint32_t y = 0;            ///< y offset of the area.
+        uint32_t z = 0;            ///< z offset of the area.
+        uint32_t w = uint32_t(-1); ///< width of the area.
+        uint32_t h = uint32_t(-1); ///< height of the area
+        uint32_t d = uint32_t(-1); ///< depth of the area
     };
 
     struct SetContentParameters {
-        uint32_t             queueFamily = 0;
-        uint32_t             queueIndex  = 0;
-        vk::ImageSubresource subresource = {};
-        PixelPlane           pixels;
+        uint32_t     queueFamily = 0;
+        uint32_t     queueIndex  = 0;
+        uint32_t     mipLevel    = 0;
+        uint32_t     arrayLayer  = 0;
+        Rect3D       area        = {};
+        size_t       pitch       = 0; ///< size in byte of a pixel block rows. This is multiple scan line of pixels for compressed texture.
+        const void * pixels      = nullptr;
+
+        SetContentParameters & setQueue(CommandQueue & q) {
+            queueFamily = q.family();
+            queueIndex  = q.index();
+            return *this;
+        }
+
+        SetContentParameters & setPixels(const void * p) {
+            pixels = p;
+            return *this;
+        }
     };
 
     struct ReadContentParameters {
-        uint32_t             queueFamily = 0;
-        uint32_t             queueIndex  = 0;
-        vk::ImageSubresource subresource = {};
+        uint32_t queueFamily = 0;
+        uint32_t queueIndex  = 0;
+
+        ReadContentParameters & setQueue(CommandQueue & q) {
+            queueFamily = q.family();
+            queueIndex  = q.index();
+            return *this;
+        }
+    };
+
+    struct SubresourceContent {
+        uint32_t       mipLevel;
+        uint32_t       arrayLayer;
+        vk::Extent3D   extent; ///< size of the image in pixels.
+        uint32_t       pitch;  ///< size in byte of one pixel block.
+        vk::DeviceSize offset; ///< offset in bytes into the pixel storage buffer.
+    };
+
+    struct Content {
+        /// @brief The format of the pixel.
+        vk::Format format;
+
+        /// @brief The storage of all pixels.
+        std::vector<uint8_t> storage;
+
+        /// @brief content of each subresource. index by (mipLevel * layerCount + arrayLayer)
+        std::vector<SubresourceContent> subresources;
     };
 
     Image(const ConstructParameters &);
@@ -905,10 +1027,12 @@ public:
     const Desc & desc() const;
 
     /// @brief Synchronously set content of one subresource
+    /// This method, if succeeded, will transfer the subresource into vk::ImageLayout::eTransferDstOptimal layout.
     void setContent(const SetContentParameters &);
 
-    /// @brief Synchronously read content of one subresource
-    PixelPlaneStorage readContent(const ReadContentParameters &);
+    /// @brief Synchronously read content of the whole image.
+    /// This method, if succeeded, will transfer the image into vk::ImageLayout::eTransferSrcOptimal layout.
+    Content readContent(const ReadContentParameters &);
 
 private:
     class Impl;
@@ -917,15 +1041,46 @@ private:
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// A wrapper class for VkSampler
-class Sampler {
+class Sampler : public Root {
 public:
-    struct ConstructParameters {
-        //
+    struct ConstructParameters : public Root::ConstructParameters {
+        const GlobalInfo *    gi = {};
+        vk::SamplerCreateInfo info;
+
+        ConstructParameters & setLinear() {
+            info.magFilter = info.minFilter = vk::Filter::eLinear;
+            info.mipmapMode                 = vk::SamplerMipmapMode::eLinear;
+            return *this;
+        }
+
+        ConstructParameters & setNearest() {
+            info.magFilter = info.minFilter = vk::Filter::eNearest;
+            info.mipmapMode                 = vk::SamplerMipmapMode::eNearest;
+            return *this;
+        }
     };
 
+    Sampler(const ConstructParameters & cp): Root(cp), _gi(cp.gi) {
+        _handle = _gi->device.createSampler(cp.info, _gi->allocator);
+        onNameChanged("");
+    }
+
+    ~Sampler() override { _gi->safeDestroy(_handle); }
+
+    vk::Sampler handle() const { return _handle; }
+
+    operator vk::Sampler() const { return _handle; }
+
+    operator VkSampler() const { return _handle; }
+
+protected:
+    void onNameChanged(const std::string &) override {
+        if (_handle) setVkObjectName(_gi->device, _handle, name());
+    }
+
 private:
-    class Impl;
-    Impl * _impl = nullptr;
+    const GlobalInfo * _gi = nullptr;
+    vk::Sampler        _handle;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------

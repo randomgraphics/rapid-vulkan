@@ -452,7 +452,7 @@ public:
         // Always copy buffer content to another staging buffer. This is to ensure all pending
         // work items in the queue are finished before we read the buffer content.
         // TODO: change buffer barrier to make it a copy source.
-        auto staging = Buffer(ConstructParameters {{_owner.name()}, _gi, size}.setStaging());
+        auto staging = Buffer(Buffer::ConstructParameters {{_owner.name()}, _gi, size}.setStaging());
         auto queue   = CommandQueue({{_owner.name()}, _gi, params.queueFamily, params.queueIndex});
         if (auto cb = queue.begin(_owner.name().c_str(), vk::CommandBufferLevel::ePrimary)) {
             cmdCopy({cb, staging.handle(), size, 0, offset});
@@ -496,13 +496,13 @@ public:
         //     RVI_VK_VERIFY(vmaMapMemory(global->vmaAllocator, allocation, (void **) &dst));
         //     dst += offsetInUnitOfT;
         // } else {
-        void * p = _gi->device.mapMemory(_memory, o, s);
+        auto p = _gi->device.mapMemory(_memory, o, s);
         if (!p) {
             RAPID_VULKAN_LOG_ERROR("Failed to map buffer %s.", _owner.name().c_str());
             return {};
         }
         _mapped = true;
-        return {p, o, s};
+        return {(uint8_t *) p, o, s};
     }
 
     void unmap() {
@@ -549,52 +549,347 @@ void Buffer::onNameChanged(const std::string &) { _impl->onNameChanged(); }
 // Image
 // *********************************************************************************************************************
 
-// static vk::ImageAspectFlags determineImageAspect(vk::ImageAspectFlags aspect, vk::Format format) {
-//     switch (format) {
-//     // depth only format
-//     case vk::Format::eD16Unorm:
-//     case vk::Format::eD32Sfloat:
-//     case vk::Format::eX8D24UnormPack32:
-//         return vk::ImageAspectFlagBits::eDepth;
+struct VkFormatDesc {
+    uint32_t sizeBytes;
+    uint32_t blockW;
+    uint32_t blockH;
 
-//     // stencil only format
-//     case vk::Format::eS8Uint:
-//         return vk::ImageAspectFlagBits::eStencil;
+    static VkFormatDesc get(vk::Format format) {
+        static const VkFormatDesc table[] = {
+            {0, 0, 0},                       // VK_FORMAT_UNDEFINED = 0,
+            {(4 + 4) / 8, 1, 1},             // VK_FORMAT_R4G4_UNORM_PACK8 = 1,
+            {(4 + 4 + 4 + 4) / 8, 1, 1},     // VK_FORMAT_R4G4B4A4_UNORM_PACK16 = 2,
+            {(4 + 4 + 4 + 4) / 8, 1, 1},     // VK_FORMAT_B4G4R4A4_UNORM_PACK16 = 3,
+            {(5 + 6 + 5) / 8, 1, 1},         // VK_FORMAT_R5G6B5_UNORM_PACK16 = 4,
+            {(5 + 6 + 5) / 8, 1, 1},         // VK_FORMAT_B5G6R5_UNORM_PACK16 = 5,
+            {(5 + 5 + 5 + 1) / 8, 1, 1},     // VK_FORMAT_R5G5B5A1_UNORM_PACK16 = 6,
+            {(5 + 5 + 5 + 1) / 8, 1, 1},     // VK_FORMAT_B5G5R5A1_UNORM_PACK16 = 7,
+            {(1 + 5 + 5 + 5) / 8, 1, 1},     // VK_FORMAT_A1R5G5B5_UNORM_PACK16 = 8,
+            {(8) / 8, 1, 1},                 // VK_FORMAT_R8_UNORM = 9,
+            {(8) / 8, 1, 1},                 // VK_FORMAT_R8_SNORM = 10,
+            {(8) / 8, 1, 1},                 // VK_FORMAT_R8_USCALED = 11,
+            {(8) / 8, 1, 1},                 // VK_FORMAT_R8_SSCALED = 12,
+            {(8) / 8, 1, 1},                 // VK_FORMAT_R8_UINT = 13,
+            {(8) / 8, 1, 1},                 // VK_FORMAT_R8_SINT = 14,
+            {(8) / 8, 1, 1},                 // VK_FORMAT_R8_SRGB = 15,
+            {(8 + 8) / 8, 1, 1},             // VK_FORMAT_R8G8_UNORM = 16,
+            {(8 + 8) / 8, 1, 1},             // VK_FORMAT_R8G8_SNORM = 17,
+            {(8 + 8) / 8, 1, 1},             // VK_FORMAT_R8G8_USCALED = 18,
+            {(8 + 8) / 8, 1, 1},             // VK_FORMAT_R8G8_SSCALED = 19,
+            {(8 + 8) / 8, 1, 1},             // VK_FORMAT_R8G8_UINT = 20,
+            {(8 + 8) / 8, 1, 1},             // VK_FORMAT_R8G8_SINT = 21,
+            {(8 + 8) / 8, 1, 1},             // VK_FORMAT_R8G8_SRGB = 22,
+            {(8 + 8 + 8) / 8, 1, 1},         // VK_FORMAT_R8G8B8_UNORM = 23,
+            {(8 + 8 + 8) / 8, 1, 1},         // VK_FORMAT_R8G8B8_SNORM = 24,
+            {(8 + 8 + 8) / 8, 1, 1},         // VK_FORMAT_R8G8B8_USCALED = 25,
+            {(8 + 8 + 8) / 8, 1, 1},         // VK_FORMAT_R8G8B8_SSCALED = 26,
+            {(8 + 8 + 8) / 8, 1, 1},         // VK_FORMAT_R8G8B8_UINT = 27,
+            {(8 + 8 + 8) / 8, 1, 1},         // VK_FORMAT_R8G8B8_SINT = 28,
+            {(8 + 8 + 8) / 8, 1, 1},         // VK_FORMAT_R8G8B8_SRGB = 29,
+            {(8 + 8 + 8) / 8, 1, 1},         // VK_FORMAT_B8G8R8_UNORM = 30,
+            {(8 + 8 + 8) / 8, 1, 1},         // VK_FORMAT_B8G8R8_SNORM = 31,
+            {(8 + 8 + 8) / 8, 1, 1},         // VK_FORMAT_B8G8R8_USCALED = 32,
+            {(8 + 8 + 8) / 8, 1, 1},         // VK_FORMAT_B8G8R8_SSCALED = 33,
+            {(8 + 8 + 8) / 8, 1, 1},         // VK_FORMAT_B8G8R8_UINT = 34,
+            {(8 + 8 + 8) / 8, 1, 1},         // VK_FORMAT_B8G8R8_SINT = 35,
+            {(8 + 8 + 8) / 8, 1, 1},         // VK_FORMAT_B8G8R8_SRGB = 36,
+            {(8 + 8 + 8 + 8) / 8, 1, 1},     // VK_FORMAT_R8G8B8A8_UNORM = 37,
+            {(8 + 8 + 8 + 8) / 8, 1, 1},     // VK_FORMAT_R8G8B8A8_SNORM = 38,
+            {(8 + 8 + 8 + 8) / 8, 1, 1},     // VK_FORMAT_R8G8B8A8_USCALED = 39,
+            {(8 + 8 + 8 + 8) / 8, 1, 1},     // VK_FORMAT_R8G8B8A8_SSCALED = 40,
+            {(8 + 8 + 8 + 8) / 8, 1, 1},     // VK_FORMAT_R8G8B8A8_UINT = 41,
+            {(8 + 8 + 8 + 8) / 8, 1, 1},     // VK_FORMAT_R8G8B8A8_SINT = 42,
+            {(8 + 8 + 8 + 8) / 8, 1, 1},     // VK_FORMAT_R8G8B8A8_SRGB = 43,
+            {(8 + 8 + 8 + 8) / 8, 1, 1},     // VK_FORMAT_B8G8R8A8_UNORM = 44,
+            {(8 + 8 + 8 + 8) / 8, 1, 1},     // VK_FORMAT_B8G8R8A8_SNORM = 45,
+            {(8 + 8 + 8 + 8) / 8, 1, 1},     // VK_FORMAT_B8G8R8A8_USCALED = 46,
+            {(8 + 8 + 8 + 8) / 8, 1, 1},     // VK_FORMAT_B8G8R8A8_SSCALED = 47,
+            {(8 + 8 + 8 + 8) / 8, 1, 1},     // VK_FORMAT_B8G8R8A8_UINT = 48,
+            {(8 + 8 + 8 + 8) / 8, 1, 1},     // VK_FORMAT_B8G8R8A8_SINT = 49,
+            {(8 + 8 + 8 + 8) / 8, 1, 1},     // VK_FORMAT_B8G8R8A8_SRGB = 50,
+            {(8 + 8 + 8 + 8) / 8, 1, 1},     // VK_FORMAT_A8B8G8R8_UNORM_PACK32 = 51,
+            {(8 + 8 + 8 + 8) / 8, 1, 1},     // VK_FORMAT_A8B8G8R8_SNORM_PACK32 = 52,
+            {(8 + 8 + 8 + 8) / 8, 1, 1},     // VK_FORMAT_A8B8G8R8_USCALED_PACK32 = 53,
+            {(8 + 8 + 8 + 8) / 8, 1, 1},     // VK_FORMAT_A8B8G8R8_SSCALED_PACK32 = 54,
+            {(8 + 8 + 8 + 8) / 8, 1, 1},     // VK_FORMAT_A8B8G8R8_UINT_PACK32 = 55,
+            {(8 + 8 + 8 + 8) / 8, 1, 1},     // VK_FORMAT_A8B8G8R8_SINT_PACK32 = 56,
+            {(8 + 8 + 8 + 8) / 8, 1, 1},     // VK_FORMAT_A8B8G8R8_SRGB_PACK32 = 57,
+            {(2 + 10 + 10 + 10) / 8, 1, 1},  // VK_FORMAT_A2R10G10B10_UNORM_PACK32 = 58,
+            {(2 + 10 + 10 + 10) / 8, 1, 1},  // VK_FORMAT_A2R10G10B10_SNORM_PACK32 = 59,
+            {(2 + 10 + 10 + 10) / 8, 1, 1},  // VK_FORMAT_A2R10G10B10_USCALED_PACK32 = 60,
+            {(2 + 10 + 10 + 10) / 8, 1, 1},  // VK_FORMAT_A2R10G10B10_SSCALED_PACK32 = 61,
+            {(2 + 10 + 10 + 10) / 8, 1, 1},  // VK_FORMAT_A2R10G10B10_UINT_PACK32 = 62,
+            {(2 + 10 + 10 + 10) / 8, 1, 1},  // VK_FORMAT_A2R10G10B10_SINT_PACK32 = 63,
+            {(2 + 10 + 10 + 10) / 8, 1, 1},  // VK_FORMAT_A2B10G10R10_UNORM_PACK32 = 64,
+            {(2 + 10 + 10 + 10) / 8, 1, 1},  // VK_FORMAT_A2B10G10R10_SNORM_PACK32 = 65,
+            {(2 + 10 + 10 + 10) / 8, 1, 1},  // VK_FORMAT_A2B10G10R10_USCALED_PACK32 = 66,
+            {(2 + 10 + 10 + 10) / 8, 1, 1},  // VK_FORMAT_A2B10G10R10_SSCALED_PACK32 = 67,
+            {(2 + 10 + 10 + 10) / 8, 1, 1},  // VK_FORMAT_A2B10G10R10_UINT_PACK32 = 68,
+            {(2 + 10 + 10 + 10) / 8, 1, 1},  // VK_FORMAT_A2B10G10R10_SINT_PACK32 = 69,
+            {(16) / 8, 1, 1},                // VK_FORMAT_R16_UNORM = 70,
+            {(16) / 8, 1, 1},                // VK_FORMAT_R16_SNORM = 71,
+            {(16) / 8, 1, 1},                // VK_FORMAT_R16_USCALED = 72,
+            {(16) / 8, 1, 1},                // VK_FORMAT_R16_SSCALED = 73,
+            {(16) / 8, 1, 1},                // VK_FORMAT_R16_UINT = 74,
+            {(16) / 8, 1, 1},                // VK_FORMAT_R16_SINT = 75,
+            {(16) / 8, 1, 1},                // VK_FORMAT_R16_SFLOAT = 76,
+            {(16 + 16) / 8, 1, 1},           // VK_FORMAT_R16G16_UNORM = 77,
+            {(16 + 16) / 8, 1, 1},           // VK_FORMAT_R16G16_SNORM = 78,
+            {(16 + 16) / 8, 1, 1},           // VK_FORMAT_R16G16_USCALED = 79,
+            {(16 + 16) / 8, 1, 1},           // VK_FORMAT_R16G16_SSCALED = 80,
+            {(16 + 16) / 8, 1, 1},           // VK_FORMAT_R16G16_UINT = 81,
+            {(16 + 16) / 8, 1, 1},           // VK_FORMAT_R16G16_SINT = 82,
+            {(16 + 16) / 8, 1, 1},           // VK_FORMAT_R16G16_SFLOAT = 83,
+            {(16 + 16 + 16) / 8, 1, 1},      // VK_FORMAT_R16G16B16_UNORM = 84,
+            {(16 + 16 + 16) / 8, 1, 1},      // VK_FORMAT_R16G16B16_SNORM = 85,
+            {(16 + 16 + 16) / 8, 1, 1},      // VK_FORMAT_R16G16B16_USCALED = 86,
+            {(16 + 16 + 16) / 8, 1, 1},      // VK_FORMAT_R16G16B16_SSCALED = 87,
+            {(16 + 16 + 16) / 8, 1, 1},      // VK_FORMAT_R16G16B16_UINT = 88,
+            {(16 + 16 + 16) / 8, 1, 1},      // VK_FORMAT_R16G16B16_SINT = 89,
+            {(16 + 16 + 16) / 8, 1, 1},      // VK_FORMAT_R16G16B16_SFLOAT = 90,
+            {(16 + 16 + 16 + 16) / 8, 1, 1}, // VK_FORMAT_R16G16B16A16_UNORM = 91,
+            {(16 + 16 + 16 + 16) / 8, 1, 1}, // VK_FORMAT_R16G16B16A16_SNORM = 92,
+            {(16 + 16 + 16 + 16) / 8, 1, 1}, // VK_FORMAT_R16G16B16A16_USCALED = 93,
+            {(16 + 16 + 16 + 16) / 8, 1, 1}, // VK_FORMAT_R16G16B16A16_SSCALED = 94,
+            {(16 + 16 + 16 + 16) / 8, 1, 1}, // VK_FORMAT_R16G16B16A16_UINT = 95,
+            {(16 + 16 + 16 + 16) / 8, 1, 1}, // VK_FORMAT_R16G16B16A16_SINT = 96,
+            {(16 + 16 + 16 + 16) / 8, 1, 1}, // VK_FORMAT_R16G16B16A16_SFLOAT = 97,
+            {(32) / 8, 1, 1},                // VK_FORMAT_R32_UINT = 98,
+            {(32) / 8, 1, 1},                // VK_FORMAT_R32_SINT = 99,
+            {(32) / 8, 1, 1},                // VK_FORMAT_R32_SFLOAT = 100,
+            {(32 + 32) / 8, 1, 1},           // VK_FORMAT_R32G32_UINT = 101,
+            {(32 + 32) / 8, 1, 1},           // VK_FORMAT_R32G32_SINT = 102,
+            {(32 + 32) / 8, 1, 1},           // VK_FORMAT_R32G32_SFLOAT = 103,
+            {(32 + 32 + 32) / 8, 1, 1},      // VK_FORMAT_R32G32B32_UINT = 104,
+            {(32 + 32 + 32) / 8, 1, 1},      // VK_FORMAT_R32G32B32_SINT = 105,
+            {(32 + 32 + 32) / 8, 1, 1},      // VK_FORMAT_R32G32B32_SFLOAT = 106,
+            {(32 + 32 + 32 + 32) / 8, 1, 1}, // VK_FORMAT_R32G32B32A32_UINT = 107,
+            {(32 + 32 + 32 + 32) / 8, 1, 1}, // VK_FORMAT_R32G32B32A32_SINT = 108,
+            {(32 + 32 + 32 + 32) / 8, 1, 1}, // VK_FORMAT_R32G32B32A32_SFLOAT = 109,
+            {(64) / 8, 1, 1},                // VK_FORMAT_R64_UINT = 110,
+            {(64) / 8, 1, 1},                // VK_FORMAT_R64_SINT = 111,
+            {(64) / 8, 1, 1},                // VK_FORMAT_R64_SFLOAT = 112,
+            {(64 + 64) / 8, 1, 1},           // VK_FORMAT_R64G64_UINT = 113,
+            {(64 + 64) / 8, 1, 1},           // VK_FORMAT_R64G64_SINT = 114,
+            {(64 + 64) / 8, 1, 1},           // VK_FORMAT_R64G64_SFLOAT = 115,
+            {(64 + 64 + 64) / 8, 1, 1},      // VK_FORMAT_R64G64B64_UINT = 116,
+            {(64 + 64 + 64) / 8, 1, 1},      // VK_FORMAT_R64G64B64_SINT = 117,
+            {(64 + 64 + 64) / 8, 1, 1},      // VK_FORMAT_R64G64B64_SFLOAT = 118,
+            {(64 + 64 + 64 + 64) / 8, 1, 1}, // VK_FORMAT_R64G64B64A64_UINT = 119,
+            {(64 + 64 + 64 + 64) / 8, 1, 1}, // VK_FORMAT_R64G64B64A64_SINT = 120,
+            {(64 + 64 + 64 + 64) / 8, 1, 1}, // VK_FORMAT_R64G64B64A64_SFLOAT = 121,
+            {(10 + 11 + 11) / 8, 1, 1},      // VK_FORMAT_B10G11R11_UFLOAT_PACK32 = 122,
+            {(5 + 9 + 9 + 9) / 8, 1, 1},     // VK_FORMAT_E5B9G9R9_UFLOAT_PACK32 = 123,
+            {(16) / 8, 1, 1},                // VK_FORMAT_D16_UNORM = 124,
+            {(8) / 8, 1, 1},                 // VK_FORMAT_X8_D24_UNORM_PACK32 = 125,
+            {(32) / 8, 1, 1},                // VK_FORMAT_D32_SFLOAT = 126,
+            {(8) / 8, 1, 1},                 // VK_FORMAT_S8_UINT = 127,
+            {(16) / 8, 1, 1},                // VK_FORMAT_D16_UNORM_S8_UINT = 128,
+            {(24) / 8, 1, 1},                // VK_FORMAT_D24_UNORM_S8_UINT = 129,
+            {(32) / 8, 1, 1},                // VK_FORMAT_D32_SFLOAT_S8_UINT = 130,
+            {0, 4, 4},                       // VK_FORMAT_BC1_RGB_UNORM_BLOCK = 131,
+            {0, 4, 4},                       // VK_FORMAT_BC1_RGB_SRGB_BLOCK = 132,
+            {0, 4, 4},                       // VK_FORMAT_BC1_RGBA_UNORM_BLOCK = 133,
+            {0, 4, 4},                       // VK_FORMAT_BC1_RGBA_SRGB_BLOCK = 134,
+            {0, 4, 4},                       // VK_FORMAT_BC2_UNORM_BLOCK = 135,
+            {0, 4, 4},                       // VK_FORMAT_BC2_SRGB_BLOCK = 136,
+            {0, 4, 4},                       // VK_FORMAT_BC3_UNORM_BLOCK = 137,
+            {0, 4, 4},                       // VK_FORMAT_BC3_SRGB_BLOCK = 138,
+            {0, 4, 4},                       // VK_FORMAT_BC4_UNORM_BLOCK = 139,
+            {0, 4, 4},                       // VK_FORMAT_BC4_SNORM_BLOCK = 140,
+            {0, 4, 4},                       // VK_FORMAT_BC5_UNORM_BLOCK = 141,
+            {0, 4, 4},                       // VK_FORMAT_BC5_SNORM_BLOCK = 142,
+            {0, 4, 4},                       // VK_FORMAT_BC6H_UFLOAT_BLOCK = 143,
+            {0, 4, 4},                       // VK_FORMAT_BC6H_SFLOAT_BLOCK = 144,
+            {0, 4, 4},                       // VK_FORMAT_BC7_UNORM_BLOCK = 145,
+            {0, 4, 4},                       // VK_FORMAT_BC7_SRGB_BLOCK = 146,
+            {0, 4, 4},                       // VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK = 147,
+            {0, 4, 4},                       // VK_FORMAT_ETC2_R8G8B8_SRGB_BLOCK = 148,
+            {0, 4, 4},                       // VK_FORMAT_ETC2_R8G8B8A1_UNORM_BLOCK = 149,
+            {0, 4, 4},                       // VK_FORMAT_ETC2_R8G8B8A1_SRGB_BLOCK = 150,
+            {0, 4, 4},                       // VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK = 151,
+            {0, 4, 4},                       // VK_FORMAT_ETC2_R8G8B8A8_SRGB_BLOCK = 152,
+            {0, 4, 4},                       // VK_FORMAT_EAC_R11_UNORM_BLOCK = 153,
+            {0, 4, 4},                       // VK_FORMAT_EAC_R11_SNORM_BLOCK = 154,
+            {0, 4, 4},                       // VK_FORMAT_EAC_R11G11_UNORM_BLOCK = 155,
+            {0, 4, 4},                       // VK_FORMAT_EAC_R11G11_SNORM_BLOCK = 156,
+            {0, 4, 4},                       // VK_FORMAT_ASTC_4x4_UNORM_BLOCK = 157,
+            {0, 4, 4},                       // VK_FORMAT_ASTC_4x4_SRGB_BLOCK = 158,
+            {0, 5, 4},                       // VK_FORMAT_ASTC_5x4_UNORM_BLOCK = 159,
+            {0, 5, 4},                       // VK_FORMAT_ASTC_5x4_SRGB_BLOCK = 160,
+            {0, 5, 5},                       // VK_FORMAT_ASTC_5x5_UNORM_BLOCK = 161,
+            {0, 5, 5},                       // VK_FORMAT_ASTC_5x5_SRGB_BLOCK = 162,
+            {0, 6, 5},                       // VK_FORMAT_ASTC_6x5_UNORM_BLOCK = 163,
+            {0, 6, 5},                       // VK_FORMAT_ASTC_6x5_SRGB_BLOCK = 164,
+            {0, 6, 6},                       // VK_FORMAT_ASTC_6x6_UNORM_BLOCK = 165,
+            {0, 6, 6},                       // VK_FORMAT_ASTC_6x6_SRGB_BLOCK = 166,
+            {0, 8, 5},                       // VK_FORMAT_ASTC_8x5_UNORM_BLOCK = 167,
+            {0, 8, 5},                       // VK_FORMAT_ASTC_8x5_SRGB_BLOCK = 168,
+            {0, 8, 6},                       // VK_FORMAT_ASTC_8x6_UNORM_BLOCK = 169,
+            {0, 8, 6},                       // VK_FORMAT_ASTC_8x6_SRGB_BLOCK = 170,
+            {0, 8, 8},                       // VK_FORMAT_ASTC_8x8_UNORM_BLOCK = 171,
+            {0, 8, 8},                       // VK_FORMAT_ASTC_8x8_SRGB_BLOCK = 172,
+            {0, 10, 5},                      // VK_FORMAT_ASTC_10x5_UNORM_BLOCK = 173,
+            {0, 10, 5},                      // VK_FORMAT_ASTC_10x5_SRGB_BLOCK = 174,
+            {0, 10, 6},                      // VK_FORMAT_ASTC_10x6_UNORM_BLOCK = 175,
+            {0, 10, 6},                      // VK_FORMAT_ASTC_10x6_SRGB_BLOCK = 176,
+            {0, 10, 8},                      // VK_FORMAT_ASTC_10x8_UNORM_BLOCK = 177,
+            {0, 10, 8},                      // VK_FORMAT_ASTC_10x8_SRGB_BLOCK = 178,
+            {0, 10, 10},                     // VK_FORMAT_ASTC_10x10_UNORM_BLOCK = 179,
+            {0, 10, 10},                     // VK_FORMAT_ASTC_10x10_SRGB_BLOCK = 180,
+            {0, 12, 10},                     // VK_FORMAT_ASTC_12x10_UNORM_BLOCK = 181,
+            {0, 12, 10},                     // VK_FORMAT_ASTC_12x10_SRGB_BLOCK = 182,
+            {0, 12, 12},                     // VK_FORMAT_ASTC_12x12_UNORM_BLOCK = 183,
+            {0, 12, 12},                     // VK_FORMAT_ASTC_12x12_SRGB_BLOCK = 184,
+        };
+        static_assert(std::size(table) == (size_t) vk::Format::eAstc12x12SrgbBlock + 1, "table size mismatch");
+        static const std::unordered_map<VkFormat, VkFormatDesc> extra = {
+            {VK_FORMAT_G8B8G8R8_422_UNORM, {4, 1, 1}},
+            {VK_FORMAT_B8G8R8G8_422_UNORM, {4, 1, 1}},
+            {VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM, {0, 1, 1}},
+            {VK_FORMAT_G8_B8R8_2PLANE_420_UNORM, {0, 1, 1}},
+            {VK_FORMAT_G8_B8_R8_3PLANE_422_UNORM, {0, 1, 1}},
+            {VK_FORMAT_G8_B8R8_2PLANE_422_UNORM, {0, 1, 1}},
+            {VK_FORMAT_G8_B8_R8_3PLANE_444_UNORM, {0, 1, 1}},
+            {VK_FORMAT_R10X6_UNORM_PACK16, {2, 1, 1}},
+            {VK_FORMAT_R10X6G10X6_UNORM_2PACK16, {4, 2, 1}},
+            {VK_FORMAT_R10X6G10X6B10X6A10X6_UNORM_4PACK16, {8, 1, 1}},
+            {VK_FORMAT_G10X6B10X6G10X6R10X6_422_UNORM_4PACK16, {8, 1, 1}},
+            {VK_FORMAT_B10X6G10X6R10X6G10X6_422_UNORM_4PACK16, {8, 1, 1}},
+            {VK_FORMAT_G10X6_B10X6_R10X6_3PLANE_420_UNORM_3PACK16, {0, 1, 1}},
+            {VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16, {0, 1, 1}},
+            {VK_FORMAT_G10X6_B10X6_R10X6_3PLANE_422_UNORM_3PACK16, {0, 1, 1}},
+            {VK_FORMAT_G10X6_B10X6R10X6_2PLANE_422_UNORM_3PACK16, {0, 1, 1}},
+            {VK_FORMAT_G10X6_B10X6_R10X6_3PLANE_444_UNORM_3PACK16, {0, 1, 1}},
+            {VK_FORMAT_R12X4_UNORM_PACK16, {2, 1, 1}},
+            {VK_FORMAT_R12X4G12X4_UNORM_2PACK16, {0, 1, 1}},
+            {VK_FORMAT_R12X4G12X4B12X4A12X4_UNORM_4PACK16, {0, 1, 1}},
+            {VK_FORMAT_G12X4B12X4G12X4R12X4_422_UNORM_4PACK16, {0, 1, 1}},
+            {VK_FORMAT_B12X4G12X4R12X4G12X4_422_UNORM_4PACK16, {0, 1, 1}},
+            {VK_FORMAT_G12X4_B12X4_R12X4_3PLANE_420_UNORM_3PACK16, {0, 1, 1}},
+            {VK_FORMAT_G12X4_B12X4R12X4_2PLANE_420_UNORM_3PACK16, {0, 1, 1}},
+            {VK_FORMAT_G12X4_B12X4_R12X4_3PLANE_422_UNORM_3PACK16, {0, 1, 1}},
+            {VK_FORMAT_G12X4_B12X4R12X4_2PLANE_422_UNORM_3PACK16, {0, 1, 1}},
+            {VK_FORMAT_G12X4_B12X4_R12X4_3PLANE_444_UNORM_3PACK16, {0, 1, 1}},
+            {VK_FORMAT_G16B16G16R16_422_UNORM, {0, 1, 1}},
+            {VK_FORMAT_B16G16R16G16_422_UNORM, {0, 1, 1}},
+            {VK_FORMAT_G16_B16_R16_3PLANE_420_UNORM, {0, 1, 1}},
+            {VK_FORMAT_G16_B16R16_2PLANE_420_UNORM, {0, 1, 1}},
+            {VK_FORMAT_G16_B16_R16_3PLANE_422_UNORM, {0, 1, 1}},
+            {VK_FORMAT_G16_B16R16_2PLANE_422_UNORM, {0, 1, 1}},
+            {VK_FORMAT_G16_B16_R16_3PLANE_444_UNORM, {0, 1, 1}},
+            {VK_FORMAT_G8_B8R8_2PLANE_444_UNORM, {0, 1, 1}},
+            {VK_FORMAT_G10X6_B10X6R10X6_2PLANE_444_UNORM_3PACK16, {0, 1, 1}},
+            {VK_FORMAT_G12X4_B12X4R12X4_2PLANE_444_UNORM_3PACK16, {0, 1, 1}},
+            {VK_FORMAT_G16_B16R16_2PLANE_444_UNORM, {0, 1, 1}},
+            {VK_FORMAT_A4R4G4B4_UNORM_PACK16, {2, 1, 1}},
+            {VK_FORMAT_A4B4G4R4_UNORM_PACK16, {2, 1, 1}},
+            {VK_FORMAT_ASTC_4x4_SFLOAT_BLOCK, {0, 4, 4}},
+            {VK_FORMAT_ASTC_5x4_SFLOAT_BLOCK, {0, 5, 4}},
+            {VK_FORMAT_ASTC_5x5_SFLOAT_BLOCK, {0, 5, 5}},
+            {VK_FORMAT_ASTC_6x5_SFLOAT_BLOCK, {0, 6, 5}},
+            {VK_FORMAT_ASTC_6x6_SFLOAT_BLOCK, {0, 6, 6}},
+            {VK_FORMAT_ASTC_8x5_SFLOAT_BLOCK, {0, 8, 5}},
+            {VK_FORMAT_ASTC_8x6_SFLOAT_BLOCK, {0, 8, 6}},
+            {VK_FORMAT_ASTC_8x8_SFLOAT_BLOCK, {0, 8, 8}},
+            {VK_FORMAT_ASTC_10x5_SFLOAT_BLOCK, {0, 10, 5}},
+            {VK_FORMAT_ASTC_10x6_SFLOAT_BLOCK, {0, 10, 6}},
+            {VK_FORMAT_ASTC_10x8_SFLOAT_BLOCK, {0, 10, 8}},
+            {VK_FORMAT_ASTC_10x10_SFLOAT_BLOCK, {0, 10, 10}},
+            {VK_FORMAT_ASTC_12x10_SFLOAT_BLOCK, {0, 12, 10}},
+            {VK_FORMAT_ASTC_12x12_SFLOAT_BLOCK, {0, 12, 12}},
+            {VK_FORMAT_PVRTC1_2BPP_UNORM_BLOCK_IMG, {0, 1, 1}},
+            {VK_FORMAT_PVRTC1_4BPP_UNORM_BLOCK_IMG, {0, 1, 1}},
+            {VK_FORMAT_PVRTC2_2BPP_UNORM_BLOCK_IMG, {0, 1, 1}},
+            {VK_FORMAT_PVRTC2_4BPP_UNORM_BLOCK_IMG, {0, 1, 1}},
+            {VK_FORMAT_PVRTC1_2BPP_SRGB_BLOCK_IMG, {0, 1, 1}},
+            {VK_FORMAT_PVRTC1_4BPP_SRGB_BLOCK_IMG, {0, 1, 1}},
+            {VK_FORMAT_PVRTC2_2BPP_SRGB_BLOCK_IMG, {0, 1, 1}},
+            {VK_FORMAT_PVRTC2_4BPP_SRGB_BLOCK_IMG, {0, 1, 1}},
+            {VK_FORMAT_R16G16_S10_5_NV, {0, 1, 1}},
+        };
+        auto i = (size_t) format;
+        if (0 <= i && i < std::size(table)) {
+            return table[i];
+        } else {
+            auto iter = extra.find((VkFormat) format);
+            if (iter != extra.end()) return iter->second;
+            RAPID_VULKAN_LOG_ERROR("Unknown format: %d", (int) format);
+            return {0, 0, 0};
+        }
+    }
+};
 
-//     // depth + stencil format
-//     case vk::Format::eD16UnormS8Uint:
-//     case vk::Format::eD24UnormS8Uint:
-//     case vk::Format::eD32SfloatS8Uint:
-//         if (vk::ImageAspectFlagBits::eDepth == aspect || vk::ImageAspectFlagBits::eStencil == aspect)
-//             return aspect;
-//         else
-//             return vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil;
+static vk::ImageAspectFlags determineImageAspect(vk::ImageAspectFlags aspect, vk::Format format) {
+    switch (format) {
+    // depth only format
+    case vk::Format::eD16Unorm:
+    case vk::Format::eD32Sfloat:
+    case vk::Format::eX8D24UnormPack32:
+        return vk::ImageAspectFlagBits::eDepth;
 
-//     // TODO: multi-planer formats
+    // stencil only format
+    case vk::Format::eS8Uint:
+        return vk::ImageAspectFlagBits::eStencil;
 
-//     // default format
-//     default:
-//         return vk::ImageAspectFlagBits::eColor;
-//     }
-// }
+    // depth + stencil format
+    case vk::Format::eD16UnormS8Uint:
+    case vk::Format::eD24UnormS8Uint:
+    case vk::Format::eD32SfloatS8Uint:
+        if (vk::ImageAspectFlagBits::eDepth == aspect || vk::ImageAspectFlagBits::eStencil == aspect)
+            return aspect;
+        else
+            return vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil;
+
+    // TODO: multi-planer formats
+
+    // default format
+    default:
+        return vk::ImageAspectFlagBits::eColor;
+    }
+}
 
 class Image::Impl {
 public:
     Impl(Image & o, const ConstructParameters & cp): _owner(o), _gi(cp.gi) {
+        // check image format.
+        auto fd = VkFormatDesc::get(cp.info.format);
+        if (0 == fd.sizeBytes || 0 == fd.blockW || 0 == fd.blockH) { RVI_THROW("unsupported image format %d", (int) cp.info.format); }
+
+        // update image usage to include transfer source and destination.
         auto info = cp.info;
         info.usage |= vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst;
 
+        // update mipmap level count
+        uint32_t maxLevels = (uint32_t) std::floor(std::log2(std::max(info.extent.width, info.extent.height))) + 1;
+        if (info.mipLevels > maxLevels) {
+            RAPID_VULKAN_LOG_WARNING("mipmap level count %u is too large, clamped to %u", info.mipLevels, maxLevels);
+            info.mipLevels = maxLevels;
+        } else if (0 == info.mipLevels) {
+            info.mipLevels = maxLevels;
+        }
+
+        // create image handle and memory
         if (_gi->vmaAllocator) {
             VmaAllocationCreateInfo aci {};
             aci.requiredFlags = (VkMemoryPropertyFlags) cp.memory;
-            RVI_VK_VERIFY(vmaCreateImage(_gi->vmaAllocator, (const VkImageCreateInfo *) &cp.info, &aci, (VkImage *) &_handle, &_allocation, nullptr));
+            RVI_VK_VERIFY(vmaCreateImage(_gi->vmaAllocator, (const VkImageCreateInfo *) &info, &aci, (VkImage *) &_handle, &_allocation, nullptr));
         } else {
-            _handle = _gi->device.createImage(cp.info, _gi->allocator);
-            // TODO: _memory = allocateDeviceMemory(*_gi, _gi->device.getImageMemoryRequirements(_handle), ci.memory);
+            _handle = _gi->device.createImage(info, _gi->allocator);
+            _memory = allocateDeviceMemory(*_gi, _gi->device.getImageMemoryRequirements(_handle), cp.memory, cp.alloc);
             _gi->device.bindImageMemory(_handle, _memory, 0);
         }
 
         onNameChanged();
+
+        // store image description
+        _desc.handle      = _handle;
+        _desc.type        = info.imageType;
+        _desc.format      = info.format;
+        _desc.extent      = info.extent;
+        _desc.mipLevels   = info.mipLevels;
+        _desc.arrayLayers = info.arrayLayers;
+        _desc.samples     = info.samples;
 
         // // create a default image view that covers the whole image
         // auto aspect          = determineImageAspect(ci.aspect, ci.format);
@@ -619,11 +914,131 @@ public:
 
     const Desc & desc() const { return _desc; }
 
-    void setContent(const SetContentParameters &) {
-        //
+    void setContent(const SetContentParameters & params) {
+        // make sure area is aligned to block size
+        auto formatDesc = VkFormatDesc::get(_desc.format);
+        if ((params.area.x % formatDesc.blockW) != 0 || (params.area.y % formatDesc.blockH) != 0 || (params.area.w % formatDesc.blockW) != 0 ||
+            (params.area.h % formatDesc.blockH) != 0) {
+            RAPID_VULKAN_LOG_ERROR("Image::setContent: area is not aligned to block size");
+            return;
+        }
+
+        // validate row pitch
+        const auto mipExtent = getMipExtent(params.mipLevel);
+        auto       width     = params.area.w;
+        if (uint32_t(-1) == width) width = mipExtent.width;
+        auto rowPitch = params.pitch;
+        if (0 == rowPitch) { rowPitch = width * formatDesc.sizeBytes; }
+        if (rowPitch < width * formatDesc.sizeBytes) {
+            RAPID_VULKAN_LOG_ERROR("Image::setContent: row pitch is too small");
+            return;
+        }
+
+        // TODO: validate mip level and array layer.
+
+        // adjust area to fit image size
+        auto area = clampRect3D(params.area, mipExtent);
+        if (area.w == 0 || area.h == 0 || area.d == 0) return;
+
+        // adjust pixel array pointer and size based on the clamped area.
+        // (TODO: revisit this math. could be wrong)
+        auto offset   = (area.x - params.area.x) * formatDesc.sizeBytes + (area.y - params.area.y) * rowPitch + (area.z - params.area.z) * rowPitch * area.h;
+        auto pixels   = (const uint8_t *) params.pixels + offset;
+        auto dataSize = rowPitch * area.h * area.d - rowPitch + area.w * formatDesc.sizeBytes - offset;
+
+        // Copy texture data into staging buffer
+        auto staging = Buffer(Buffer::ConstructParameters {{_owner.name()}, _gi, dataSize}.setStaging());
+        auto mapped  = staging.map({});
+        RVI_ASSERT(mapped.data);
+        RVI_ASSERT(mapped.size == dataSize);
+        memcpy(mapped.data, pixels, dataSize);
+        staging.unmap();
+
+        // determine subresource aspect
+        auto aspect = determineImageAspect(vk::ImageAspectFlagBits::eNone, _desc.format);
+
+        // Setup buffer copy regions for the subresource
+        auto copyRegion = vk::BufferImageCopy()
+                              .setImageSubresource({aspect, params.mipLevel, params.arrayLayer, 1})
+                              .setImageOffset({(int) area.x, (int) area.y, (int) area.z})
+                              .setImageExtent({area.w, area.h, area.d});
+
+        // copy image content from staging buffer to image
+        auto q = CommandQueue({{_owner.name()}, _gi, params.queueFamily, params.queueIndex});
+        auto c = q.begin(_owner.name().data());
+        if (c) {
+            auto r = vk::ImageSubresourceRange(aspect, params.mipLevel, 1, params.arrayLayer, 1);
+            Barrier {}
+                .s(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer)
+                .i(_handle, vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead, vk::ImageLayout::eUndefined,
+                   vk::ImageLayout::eTransferDstOptimal, r)
+                .write(c);
+            c.copyBufferToImage(staging, _handle, vk::ImageLayout::eTransferDstOptimal, {copyRegion});
+            q.submit(c);
+            q.wait(c);
+        }
     }
 
-    PixelPlaneStorage readContent(const ReadContentParameters &) { return {}; }
+    Content readContent(const ReadContentParameters & params) {
+        // uint32_t mipLevel   = params.mipLevel;
+        // uint32_t levelCount = params.layerCount;
+        // uint32_t arrayLayer = params.arrayLayer;
+        // uint32_t layerCount = params.layerCount;
+        // clampRange(mipLevel, levelCount, _desc.mipLevels);
+        // clampRange(arrayLayer, layerCount, _desc.arrayLayers);
+        // if (0 == levelCount || 0 == layerCount) return {};
+
+        auto formatDesc = VkFormatDesc::get(_desc.format);
+        auto aspect     = determineImageAspect(vk::ImageAspectFlagBits::eNone, _desc.format);
+        auto mipExtents = buildMipExtentArray();
+
+        Content                          content;
+        std::vector<vk::BufferImageCopy> copyRegions;
+        vk::DeviceSize                   dataSize = 0;
+        for (uint32_t m = 0; m < mipExtents.size(); ++m) {
+            auto extent   = mipExtents[m];
+            auto rowPitch = extent.width * formatDesc.sizeBytes;
+            auto mipSize  = rowPitch * extent.height * extent.depth;
+            for (uint32_t a = 0; a < _desc.arrayLayers; ++a) {
+                copyRegions.push_back(vk::BufferImageCopy()
+                                          .setBufferOffset(dataSize)
+                                          .setBufferRowLength(extent.width)
+                                          .setBufferImageHeight(extent.height)
+                                          .setImageSubresource({aspect, m, a, 1})
+                                          .setImageOffset({0, 0, 0})
+                                          .setImageExtent(extent));
+                content.subresources.push_back({m, a, extent, rowPitch, dataSize});
+                dataSize += mipSize;
+            }
+        }
+
+        // Allocate staging buffer
+        auto staging = Buffer(Buffer::ConstructParameters {{_owner.name()}, _gi, dataSize}.setStaging());
+
+        // Copy image content into the staging buffer
+        auto q = CommandQueue({{_owner.name()}, _gi, params.queueFamily, params.queueIndex});
+        auto c = q.begin(_owner.name().data());
+        if (c) {
+            auto r = vk::ImageSubresourceRange(aspect, 0, _desc.mipLevels, 0, _desc.arrayLayers);
+            Barrier {}
+                .s(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer)
+                .i(_handle, vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead, vk::ImageLayout::eUndefined,
+                   vk::ImageLayout::eTransferSrcOptimal, r)
+                .write(c);
+            c.copyImageToBuffer(_handle, vk::ImageLayout::eTransferSrcOptimal, staging, copyRegions);
+            q.submit(c);
+            q.wait(c);
+        }
+
+        // read data out of the staging buffer
+        auto mapped = staging.map({});
+        RVI_ASSERT(mapped.size == dataSize);
+        content.storage.assign(mapped.data, mapped.data + mapped.size);
+
+        // done
+        content.format = _desc.format;
+        return content;
+    }
 
     void onNameChanged() {
         const auto & name = _owner.name();
@@ -639,13 +1054,43 @@ private:
     vk::Image          _handle {};
     vk::DeviceMemory   _memory {};
     VmaAllocation      _allocation {};
+
+    static Rect3D clampRect3D(Rect3D rect, const vk::Extent3D & extent) {
+        clampRange(rect.x, rect.w, extent.width);
+        clampRange(rect.y, rect.h, extent.height);
+        clampRange(rect.z, rect.d, extent.depth);
+        return rect;
+    }
+
+    vk::Extent3D getMipExtent(size_t level) const {
+        auto extent = _desc.extent;
+        for (size_t i = 0; i < level; ++i) {
+            extent.width  = std::max(extent.width / 2, 1u);
+            extent.height = std::max(extent.height / 2, 1u);
+            extent.depth  = std::max(extent.depth / 2, 1u);
+        }
+        return extent;
+    }
+
+    std::vector<vk::Extent3D> buildMipExtentArray() const {
+        std::vector<vk::Extent3D> result;
+        result.reserve(_desc.mipLevels);
+        auto extent = _desc.extent;
+        for (size_t i = 0; i < _desc.mipLevels; ++i) {
+            result.push_back(extent);
+            extent.width  = std::max(extent.width / 2, 1u);
+            extent.height = std::max(extent.height / 2, 1u);
+            extent.depth  = std::max(extent.depth / 2, 1u);
+        }
+        return result;
+    }
 };
 
 Image::Image(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this, cp); }
 Image::~Image() { delete _impl; }
 auto Image::desc() const -> const Desc & { return _impl->desc(); }
 void Image::setContent(const SetContentParameters & p) { return _impl->setContent(p); }
-auto Image::readContent(const ReadContentParameters & p) -> PixelPlaneStorage { return _impl->readContent(p); }
+auto Image::readContent(const ReadContentParameters & p) -> Content { return _impl->readContent(p); }
 
 // *********************************************************************************************************************
 // Shader
@@ -949,7 +1394,7 @@ VkBool32 Device::debugCallback(vk::DebugReportFlagsEXT flags, vk::DebugReportObj
     if (flags & vk::DebugReportFlagBitsEXT::eWarning) reportVkError();
 
     // if (flags & VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT) {
-    //     RAPID_VULKAN_LOG_WARN("[Vulkan] %s : %s", prefix, message);
+    //     RAPID_VULKAN_LOG_WARNING("[Vulkan] %s : %s", prefix, message);
     // }
 
     // if (flags & VK_DEBUG_REPORT_INFORMATION_BIT_EXT) {
@@ -1256,7 +1701,7 @@ static std::vector<const char *> validateExtensions(const std::vector<vk::Extens
         if (a.second) {
             RVI_THROW("Extension %s is not supported by current device.", a.first.c_str());
         } else {
-            RAPID_VULKAN_LOG_WARN("Optional feature %s is not supported by the current device.", a.first.c_str());
+            RAPID_VULKAN_LOG_WARNING("Optional feature %s is not supported by the current device.", a.first.c_str());
         }
     }
     return supported;
@@ -1337,27 +1782,26 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
     deviceCreateInfo.setPEnabledExtensionNames(enabledDeviceExtensions);
     _gi.device = _gi.physical.createDevice(deviceCreateInfo, _gi.allocator);
 
-    // initialize a memory allocator for Vulkan images
-    if (cp.enableVmaAllocator) {
-        //         VmaAllocatorCreateInfo ai {};
-        //         ai.vulkanApiVersion = cp.apiVersion;
-        //         ai.physicalDevice   = _gi.physical;
-        //         ai.device           = _gi.device;
-        //         ai.instance         = _gi.instance;
+    //     // initialize a memory allocator for Vulkan images
+    //     if (cp.enableVmaAllocator) {
+    //         VmaAllocatorCreateInfo ai {};
+    //         ai.vulkanApiVersion = cp.apiVersion;
+    //         ai.physicalDevice   = _gi.physical;
+    //         ai.device           = _gi.device;
+    //         ai.instance         = _gi.instance;
 
-        // #if 0 // uncomment this section to enable vma allocation recording
-        //         VmaRecordSettings vmaRecordSettings;
-        //         vmaRecordSettings.pFilePath = "vmaReplay.csv";
-        //         vmaRecordSettings.flags = VMA_RECORD_FLUSH_AFTER_CALL_BIT;
-        //         ai.pRecordSettings = &vmaRecordSettings;
-        // #endif
-
-        //         if (askedDeviceExtensions.find(VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME) != askedDeviceExtensions.end()) {
-        //             RAPID_VULKAN_LOG_INFO("Enable VMA allocator with buffer device address.");
-        //             ai.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
-        //         }
-        //         RVI_VK_VERIFY(vmaCreateAllocator(&ai, &_gi.vmaAllocator));
-    }
+    // #if 0 // uncomment this section to enable vma allocation recording
+    //         VmaRecordSettings vmaRecordSettings;
+    //         vmaRecordSettings.pFilePath = "vmaReplay.csv";
+    //         vmaRecordSettings.flags = VMA_RECORD_FLUSH_AFTER_CALL_BIT;
+    //         ai.pRecordSettings = &vmaRecordSettings;
+    // #endif
+    //         if (askedDeviceExtensions.find(VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME) != askedDeviceExtensions.end()) {
+    //             RAPID_VULKAN_LOG_INFO("Enable VMA allocator with buffer device address.");
+    //             ai.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+    //         }
+    //         RVI_VK_VERIFY(vmaCreateAllocator(&ai, &_gi.vmaAllocator));
+    //     }
 
     // print device information
     if (cp.printVkInfo) {
@@ -1398,7 +1842,7 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
 Device::~Device() {
     for (auto q : _queues) delete q;
     _queues.clear();
-    // if (_gi.vmaAllocator) vmaDestroyAllocator(_gi.vmaAllocator), _gi.vmaAllocator = nullptr;
+    if (_gi.vmaAllocator) vmaDestroyAllocator(_gi.vmaAllocator), _gi.vmaAllocator = nullptr;
     if (_gi.device) {
         RAPID_VULKAN_LOG_INFO("[Device] destroying device...");
         _gi.device.destroy(_gi.allocator);
@@ -1501,7 +1945,7 @@ struct InstanceInfo {
                 if (l.second) {
                     RVI_THROW("Required VK layer %s is not supported.", l.first);
                 } else {
-                    RAPID_VULKAN_LOG_WARN("Optional VK layer %s is not supported.", l.first);
+                    RAPID_VULKAN_LOG_WARNING("Optional VK layer %s is not supported.", l.first);
                 }
                 continue;
             }
@@ -1520,7 +1964,7 @@ struct InstanceInfo {
             if (asked.second) {
                 RVI_THROW("Required VK extension %s is not supported.", asked.first);
             } else {
-                RAPID_VULKAN_LOG_WARN("Optional VK extension %s is not supported.", asked.first);
+                RAPID_VULKAN_LOG_WARNING("Optional VK extension %s is not supported.", asked.first);
             }
         }
 
@@ -1616,8 +2060,8 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
     if (0 == _cp.apiVersion)
         _cp.apiVersion = instanceInfo.version;
     else if (_cp.apiVersion > instanceInfo.version) {
-        RAPID_VULKAN_LOG_WARN("Requested version %d is higher than the supported version %d. The instance will be created with %d instead.", _cp.apiVersion,
-                              instanceInfo.version, instanceInfo.version);
+        RAPID_VULKAN_LOG_WARNING("Requested version %d is higher than the supported version %d. The instance will be created with %d instead.", _cp.apiVersion,
+                                 instanceInfo.version, instanceInfo.version);
         _cp.apiVersion = instanceInfo.version;
     }
 
