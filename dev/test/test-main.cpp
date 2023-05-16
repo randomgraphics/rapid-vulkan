@@ -3,7 +3,8 @@
 #define CATCH_CONFIG_RUNNER // use custom main function
 #include "3rd-party/catch2.hpp"
 
-#include <rapid-vulkan/rapid-vulkan.cpp>
+#define RAPID_VULKAN_IMPLEMENTATION
+#include <rapid-vulkan/rapid-vulkan.h>
 
 struct EventListener : Catch::TestEventListenerBase {
     using TestEventListenerBase::TestEventListenerBase;
