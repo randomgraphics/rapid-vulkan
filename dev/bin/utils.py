@@ -9,7 +9,7 @@ class FatalError (RuntimeError):
         super(FatalError, self).__init__(message)
 
 def rip(message, exit_code = -1):
-    print("\n\n[  FATAL] {0}\n\n".format(message))
+    print(termcolor.colored("\n\n[  FATAL] {0}\n\n".format(message), "magenta"))
     sys.exit(exit_code)
 
 def loge(message):

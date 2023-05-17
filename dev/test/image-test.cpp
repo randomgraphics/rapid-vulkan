@@ -1,11 +1,18 @@
 #include "test-instance.h"
-#include "3rd-party/catch2.hpp"
+#include "3rd-party/catch2/catch2.hpp"
 
 TEST_CASE("image-smoke") {
     using namespace rapid_vulkan;
     // default parameter should generate an valid image.
     auto cp    = Image::ConstructParameters {{}, TestVulkanInstance::device->gi()};
     auto image = Image(cp);
+}
+TEST_CASE("image-view") {
+    using namespace rapid_vulkan;
+    auto cp    = Image::ConstructParameters {{}, TestVulkanInstance::device->gi()};
+    auto image = Image(cp);
+    auto view  = image.getView({});
+    CHECK(view);
 }
 
 TEST_CASE("image-read-write") {

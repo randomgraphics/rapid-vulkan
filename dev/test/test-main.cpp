@@ -1,10 +1,7 @@
 #include "test-instance.h"
 
 #define CATCH_CONFIG_RUNNER // use custom main function
-#include "3rd-party/catch2.hpp"
-
-#define RAPID_VULKAN_IMPLEMENTATION
-#include <rapid-vulkan/rapid-vulkan.h>
+#include "3rd-party/catch2/catch2.hpp"
 
 struct EventListener : Catch::TestEventListenerBase {
     using TestEventListenerBase::TestEventListenerBase;
@@ -44,7 +41,7 @@ struct TestVulkanInstanceImpl : public TestVulkanInstance {
         using namespace rapid_vulkan;
         auto icp       = Instance::ConstructParameters {.validation = true};
         instance       = std::make_unique<Instance>(icp);
-        auto dcp       = Device::ConstructParameters(*instance);
+        auto dcp       = instance->dcp();
         dcp.validation = Device::BREAK_ON_VK_ERROR;
         device         = std::make_unique<Device>(dcp);
     }
