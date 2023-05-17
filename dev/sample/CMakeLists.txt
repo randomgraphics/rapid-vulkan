@@ -10,6 +10,6 @@ function(add_sample name)
 endfunction()
 
 add_sample(hello-world)
+add_sample(alternative-namespace)
 add_sample(external-loader)
 add_sample(noop-compute)
-

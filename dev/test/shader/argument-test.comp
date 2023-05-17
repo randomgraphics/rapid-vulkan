@@ -1,0 +1,23 @@
+#version 430
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) buffer InputBuffer {
+    // Assuming the input data is an array of floats
+    float inputData[];
+};
+
+layout(std430, binding = 1) buffer OutputBuffer {
+    // Assuming the output data is an array of floats
+    float outputData[];
+};
+
+void main() {
+    // Calculate the global index
+    uint index = gl_GlobalInvocationID.x;
+
+    if (index >= inputData.length()) return;
+
+    // Copy the data from the input buffer to the output buffer
+    outputData[index] = inputData[index];
+}

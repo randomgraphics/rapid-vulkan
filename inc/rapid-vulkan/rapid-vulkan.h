@@ -46,6 +46,12 @@ SOFTWARE.
 #define RAPID_VULKAN_ENABLE_LOADER 1
 #endif
 
+/// \def RAPID_VULKAN_ENABLE_VMA
+/// Set to 0 to disable VMA support. Enabled by default.
+#ifndef RAPID_VULKAN_ENABLE_VMA
+#define RAPID_VULKAN_ENABLE_VMA 1
+#endif
+
 /// \def RAPID_VULKAN_ASSERT
 /// The runtime assert macro for debug build only. This macro has no effect when
 /// RAPID_VULKAN_ENABLE_DEBUG_BUILD is 0.
@@ -105,8 +111,10 @@ SOFTWARE.
 #endif
 
 // ---------------------------------------------------------------------------------------------------------------------
-// include VMA header
-
+// include VMA header if not already included.
+#if RAPID_VULKAN_ENABLE_VMA
+#ifndef AMD_VULKAN_MEMORY_ALLOCATOR_H
+#define RVI_NEED_VMA_IMPL // this is to tell rapid-vulkan.cpp to include VMA implementation.
 #ifdef _MSC_VER
 #pragma warning(push, 0)
 #elif defined(__GNUC__)
@@ -140,6 +148,8 @@ SOFTWARE.
 #elif defined(__GNUC__)
 #pragma GCC diagnostic pop
 #endif
+#endif // AMD_VULKAN_MEMORY_ALLOCATOR_H
+#endif // RAPID_VULKAN_ENABLE_VMA
 
 // ---------------------------------------------------------------------------------------------------------------------
 // include other standard/system headers
@@ -224,12 +234,14 @@ using namespace std::string_literals;
 // ---------------------------------------------------------------------------------------------------------------------
 /// A utility class used to pass commonly used Vulkan global information around.
 struct GlobalInfo {
-    const vk::AllocationCallbacks * allocator    = nullptr;
-    uint32_t                        apiVersion   = 0;
-    vk::Instance                    instance     = nullptr;
-    vk::PhysicalDevice              physical     = nullptr;
-    vk::Device                      device       = nullptr;
-    VmaAllocator                    vmaAllocator = nullptr;
+    const vk::AllocationCallbacks * allocator  = nullptr;
+    uint32_t                        apiVersion = 0;
+    vk::Instance                    instance   = nullptr;
+    vk::PhysicalDevice              physical   = nullptr;
+    vk::Device                      device     = nullptr;
+#if RAPID_VULKAN_ENABLE_VMA
+    VmaAllocator vmaAllocator = nullptr;
+#endif
 
     template<typename T, typename... ARGS>
     void safeDestroy(T & handle, ARGS... args) const {
@@ -402,6 +414,15 @@ public:
         onNameChanged(newName); // newName is currently holding the old name.
     }
 
+    /// @brief Mark the object as "not being automatically deleted when reference count reaches zero".
+    /// This is a ver hacky way to keep the object allocated on stack alive even after all references are gone.
+    /// The intended scenario is passing a stack allocated object to a function that takes a Ref<T> parameter.
+    /// By calling this method, the object will not be deleted even when all references are gone. Instead, it will be
+    /// destroyed automatically along with the stack frame, regardless if there are still references to it.
+    /// So it is the caller's responsibility to make sure that all references are gone before the stack frame is
+    /// destroyed.
+    void markAsNotDeleteable() { _noDeleteOnZeroRef = true; }
+
 protected:
     Root(const ConstructParameters & params): _name("<no-name>"s) { setName(params.name); }
 
@@ -410,7 +431,8 @@ protected:
 private:
     friend class RefBase;
     std::string           _name;
-    std::atomic<uint64_t> _ref = 0;
+    std::atomic<uint64_t> _ref               = 0;
+    bool                  _noDeleteOnZeroRef = false;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -430,7 +452,7 @@ protected:
         RVI_ASSERT(p);
         if (1 == p->_ref.fetch_sub(1)) {
             RVI_ASSERT(0 == p->_ref);
-            delete p;
+            if (!p->_noDeleteOnZeroRef) delete p;
         }
     }
 };
@@ -607,14 +629,15 @@ private:
 // ---------------------------------------------------------------------------------------------------------------------
 /// A helper function to insert resource/memory barriers to command buffer
 struct Barrier {
-    vk::PipelineStageFlags               srcStage     = vk::PipelineStageFlagBits::eBottomOfPipe;
-    vk::PipelineStageFlags               dstStage     = vk::PipelineStageFlagBits::eTopOfPipe;
+    vk::PipelineStageFlags               srcStage     = vk::PipelineStageFlagBits::eAllCommands;
+    vk::PipelineStageFlags               dstStage     = vk::PipelineStageFlagBits::eAllCommands;
     vk::DependencyFlags                  dependencies = vk::DependencyFlagBits::eByRegion;
     std::vector<vk::MemoryBarrier>       memories;
     std::vector<vk::BufferMemoryBarrier> buffers;
     std::vector<vk::ImageMemoryBarrier>  images;
 
     Barrier & clear() {
+        srcStage = dstStage = vk::PipelineStageFlagBits::eAllCommands;
         memories.clear();
         buffers.clear();
         images.clear();
@@ -632,7 +655,6 @@ struct Barrier {
     /// @brief Setup a full pipeline barrier that blocks all stages.
     Barrier & full() {
         clear();
-        srcStage = dstStage = vk::PipelineStageFlagBits::eAllCommands;
         auto flags = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eMemoryRead | vk::AccessFlagBits::eMemoryWrite;
         m(flags, flags);
         return *this;
@@ -645,12 +667,17 @@ struct Barrier {
     }
 
     /// @brief Add a buffer barrier
+    Barrier & b(const vk::BufferMemoryBarrier & bmb) {
+        if (!bmb.buffer) return *this;
+        buffers.emplace_back(bmb);
+        return *this;
+    }
+
+    /// @brief Add a buffer barrier
     Barrier & b(vk::Buffer buffer, vk::DeviceSize offset = 0, vk::DeviceSize size = VK_WHOLE_SIZE,
                 vk::AccessFlags srcAccess = vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eMemoryRead,
                 vk::AccessFlags dstAccess = vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eMemoryRead) {
-        if (!buffer) return *this;
-        buffers.emplace_back(vk::BufferMemoryBarrier {srcAccess, dstAccess, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, buffer, offset, size});
-        return *this;
+        return b(vk::BufferMemoryBarrier {srcAccess, dstAccess, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, buffer, offset, size});
     }
 
     /// @brief Add an image barrier
@@ -705,9 +732,39 @@ public:
         vk::MemoryPropertyFlags memory = vk::MemoryPropertyFlagBits::eDeviceLocal;
         vk::MemoryAllocateFlags alloc  = {};
 
+        ConstructParameters & setSize(vk::DeviceSize v) {
+            size = v;
+            return *this;
+        }
+
+        ConstructParameters & setUsage(vk::BufferUsageFlags v) {
+            usage = v;
+            return *this;
+        }
+
         ConstructParameters & setStaging() {
             usage  = vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst;
             memory = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
+            return *this;
+        }
+
+        ConstructParameters & setStorage() {
+            usage = vk::BufferUsageFlagBits::eStorageBuffer;
+            return *this;
+        }
+
+        ConstructParameters & setUniform() {
+            usage = vk::BufferUsageFlagBits::eUniformBuffer;
+            return *this;
+        }
+
+        ConstructParameters & setVertex() {
+            usage = vk::BufferUsageFlagBits::eVertexBuffer;
+            return *this;
+        }
+
+        ConstructParameters & setIndex() {
+            usage = vk::BufferUsageFlagBits::eIndexBuffer;
             return *this;
         }
     };
@@ -745,6 +802,13 @@ public:
         SetContentParameters & setData(const void * data_, vk::DeviceSize size_) {
             data = data_;
             size = size_;
+            return *this;
+        }
+
+        template<typename T>
+        SetContentParameters & setData(vk::ArrayProxy<T> data_) {
+            data = data_.data();
+            size = data_.size() * sizeof(T);
             return *this;
         }
 
@@ -948,16 +1012,26 @@ public:
         vk::SampleCountFlagBits samples     = vk::SampleCountFlagBits::e1;
     };
 
-    // struct PixelPlane {
-    //     vk::Format   format; ///< pixel format
-    //     uint32_t     width;  ///< width in pixels
-    //     uint32_t     height; ///< height in pixels
-    //     uint32_t     depth;  ///< depth in pixels
-    //     uint32_t     pitch;  ///< size in byte of a pixel block rows (could be multiple line of pixels, for compressed texture)
-    //     const void * pixels;
+    struct GetViewParameters {
+        vk::ImageViewType         type   = (vk::ImageViewType) -1; ///< set to -1 to use the default view type.
+        vk::Format                format = vk::Format::eUndefined; ///< set to eUndefined to use image's format.
+        vk::ImageSubresourceRange range  = {{}, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS};
 
-    //     vk::DeviceSize size() const { return pitch * height; }
-    // };
+        GetViewParameters & setType(vk::ImageViewType t) {
+            type = t;
+            return *this;
+        }
+
+        GetViewParameters & setFormat(vk::Format f) {
+            format = f;
+            return *this;
+        }
+
+        GetViewParameters & setRange(const vk::ImageSubresourceRange & r) {
+            range = r;
+            return *this;
+        }
+    };
 
     struct Rect3D {
         uint32_t x = 0;            ///< x offset of the area.
@@ -1025,6 +1099,9 @@ public:
 
     /// @brief Get basic properties of the image.
     const Desc & desc() const;
+
+    /// @brief Retrieve a vk::ImageView of the image.
+    vk::ImageView getView(const GetViewParameters &) const;
 
     /// @brief Synchronously set content of one subresource
     /// This method, if succeeded, will transfer the subresource into vk::ImageLayout::eTransferDstOptimal layout.
@@ -1130,14 +1207,14 @@ private:
     std::vector<uint32_t> _spirv;
 };
 
-// ---------------------------------------------------------------------------------------------------------------------
-/// A wrapper class for VkDescriptorPool
-class DescriptorPool : public Root {
-    struct ConstructParameters : public Root::ConstructParameters {
-        //;
-    };
-    DescriptorPool(const ConstructParameters &);
-};
+// // ---------------------------------------------------------------------------------------------------------------------
+// /// A wrapper class for VkDescriptorPool
+// class DescriptorPool : public Root {
+//     struct ConstructParameters : public Root::ConstructParameters {
+//         //;
+//     };
+//     DescriptorPool(const ConstructParameters &);
+// };
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// A utility class that represents the full layout of a pipeline object.
@@ -1171,41 +1248,136 @@ struct PipelineReflection {
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// A wrapper class for VkPipelineLayout
-class PipelineLayout : public Root {
-public:
-    PipelineLayout(const GlobalInfo * gi, const PipelineReflection &);
+/// @brief View to a sub-range of a buffer.
+struct BufferView {
+    vk::Buffer     buffer = {};
+    vk::DeviceSize offset = 0;
+    vk::DeviceSize size   = vk::DeviceSize(-1);
 
-    ~PipelineLayout() override;
+    bool operator==(const BufferView & rhs) const {
+        if (this == &rhs) return true;
+        if (buffer != rhs.buffer) return false;
+        if (offset != rhs.offset) return false;
+        return size == rhs.size;
+    }
 
-    vk::ArrayProxy<vk::DescriptorSetLayout> descriptorSetLayouts() const { return _sets; }
-
-    vk::PipelineLayout handle() const { return _handle; }
-
-    const GlobalInfo * gi() const { return _gi; }
-
-private:
-    const GlobalInfo *                   _gi = nullptr;
-    std::vector<vk::DescriptorSetLayout> _sets;
-    vk::PipelineLayout                   _handle;
+    bool operator!=(const BufferView & rhs) const { return !(*this == rhs); }
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// A utility class that are used to feed data to a pipeline.
-class PipelineArguments : public Root {
+/// @brief A structure to represent one of the following 3 items: image, sampler or combined-image-sampler
+///
+/// The struct represents an image (either sampled image or storage image), when sampler is empty and image is not.
+///
+/// The struct represents an sampler, when image is empty and sampler is not.
+///
+/// The struct represents an combined-image-sampler, when both image and sampler are valid.
+///
+/// The case that both image and sampler are empty is not allowed and could trigger undefined behavior.
+struct ImageSampler {
+    /// @brief The view of the image
+    vk::ImageView imageView {};
+
+    /// @brief The layout of the image view. Ignored when image view is empty.
+    vk::ImageLayout imageLayout = vk::ImageLayout::eUndefined;
+
+    /// @brief The sampler object.
+    vk::Sampler sampler {};
+
+    bool operator==(const ImageSampler & rhs) const {
+        if (this == &rhs) return true;
+        if (imageView != rhs.imageView) return false;
+        return sampler != rhs.sampler;
+    }
+
+    bool operator!=(const ImageSampler & rhs) const { return !(*this == rhs); }
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// Represent a single pipeline argument
+class Argument {
 public:
-    struct ConstructParameters : Root::ConstructParameters {
-        //
+    RVI_NO_COPY_NO_MOVE(Argument);
+
+    /// @brief Set value of buffer argument. No effect, if the argument is not a buffer.
+    void b(vk::ArrayProxy<BufferView>);
+
+    /// @brief Set value of image/sampler argument. No effect, if the argument is not a image/sampler
+    void i(vk::ArrayProxy<ImageSampler>);
+
+    /// @brief Set value of push constant. No effect, if the argument is not a push constant.
+    void c(size_t offset, size_t size, const void * data);
+
+protected:
+    Argument();
+    ~Argument(); // No need make this virtual, since we'll always delete it through the derived class.
+
+    class Impl;
+    Impl * _impl = nullptr;
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// Represent a full set of arguments that can be applied to a pipeline
+class ArgumentPack : public Root {
+public:
+    struct ConstructParameters : public Root::ConstructParameters {
+        // const GlobalInfo *         gi         = nullptr;
+        // const PipelineReflection * reflection = nullptr;
     };
 
-    PipelineArguments(const ConstructParameters &);
+    ArgumentPack(const ConstructParameters &);
 
-    ~PipelineArguments() override;
+    ~ArgumentPack();
 
-    void setBuffer(const std::string & name, Ref<Buffer>);
-    void setImage(const std::string & name, Ref<Image>);
-    void setSampler(const std::string & name, Ref<Sampler>);
-    void setConstant(size_t offset, size_t size, const void * data);
+    /// @brief clear all arguments.
+    void clear();
+
+    /// @brief Set value of buffer argument. If the argument has not been set before, a new argument will be created.
+    void b(const std::string & name, vk::ArrayProxy<BufferView>);
+
+    /// @brief Set value of image/sampler argument. If the argument has not been set before, a new argument will be created.
+    void i(const std::string & name, vk::ArrayProxy<ImageSampler>);
+
+    /// @brief Set value of push constant. If the argument has not been set before, a new argument will be created.
+    void c(const std::string & name, size_t offset, size_t size, const void * data);
+
+    /// @brief Get argument by name.
+    /// The returned argument instance can be used to set value of that argument w/o paying the cost of string hashing.
+    /// If the argument has not been set before, a new argument will be created and returned.
+    Argument * get(const std::string & name);
+
+    /// @brief Get an existing argument by name. Returns nullptr if the argument has not been set.
+    const Argument * get(const std::string & name) const;
+
+private:
+    class Impl;
+    Impl * _impl = nullptr;
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// A wrapper class for VkPipelineLayout
+class PipelineLayout : public Root {
+public:
+    struct ConstructParameters : public Root::ConstructParameters {
+        vk::ArrayProxy<const Shader *> shaders;
+    };
+
+    PipelineLayout(const ConstructParameters &);
+
+    ~PipelineLayout() override;
+
+    /// @brief Returns the underlying Vulkan handle.
+    vk::PipelineLayout handle() const;
+
+    /// @brief Returns the pipeline reflection object that is used to construct this pipeline layout.
+    const PipelineReflection & reflection() const;
+
+    /// @brief Bind argument pack to the command buffer
+    /// After this method succeeded (returns true), it is ready to bind issue draw/dispatch commands.
+    bool cmdBind(vk::CommandBuffer, vk::PipelineBindPoint, const ArgumentPack &) const;
+
+protected:
+    void onNameChanged(const std::string &) override;
 
 private:
     class Impl;
@@ -1218,19 +1390,15 @@ class Pipeline : public Root {
 public:
     ~Pipeline() override;
 
-    auto reflect() const -> const PipelineReflection & { return _reflection; }
+    const PipelineLayout & layout() const;
 
-    virtual auto createArguments() -> Ref<PipelineArguments> = 0;
-
-    virtual void cmdBind(vk::CommandBuffer, const PipelineArguments &) = 0;
-
-protected:
-    PipelineReflection  _reflection;
-    Ref<PipelineLayout> _layout;
-    vk::Pipeline        _handle {};
+    void cmdBind(vk::CommandBuffer cb, const ArgumentPack & ap) const;
 
 protected:
     Pipeline(const std::string & name, vk::ArrayProxy<const Shader *> shaders);
+
+    class Impl;
+    Impl * _impl = nullptr;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1247,10 +1415,6 @@ public:
     };
 
     GraphicsPipeline(const ConstructParameters &);
-
-    auto createArguments() -> Ref<PipelineArguments> override;
-
-    void cmdBind(vk::CommandBuffer, const PipelineArguments &) override;
 
     void cmdDraw(vk::CommandBuffer, const DrawParameters &);
 
@@ -1275,14 +1439,7 @@ public:
 
     ComputePipeline(const ConstructParameters &);
 
-    auto createArguments() -> Ref<PipelineArguments> override;
-
-    void cmdBind(vk::CommandBuffer, const PipelineArguments &) override;
-
     void cmdDispatch(vk::CommandBuffer, const DispatchParameters &);
-
-private:
-    const GlobalInfo * _gi;
 };
 
 class Swapchain {
@@ -1400,10 +1557,6 @@ public:
             features2.emplace_back(feature);
             return *(T *) features2.back().buffer.data();
         }
-
-        ConstructParameters() = default;
-
-        ConstructParameters(const Instance &);
     };
 
     Device(const ConstructParameters &);
@@ -1501,6 +1654,14 @@ public:
     operator VkInstance() const { return _instance; }
 
     vk::Instance operator->() const { return _instance; }
+
+    /// Return a device construct parameter that works with this instance.
+    Device::ConstructParameters dcp() const {
+        Device::ConstructParameters r;
+        r.apiVersion = cp().apiVersion;
+        r.instance   = handle();
+        return r;
+    }
 
 private:
     ConstructParameters _cp;

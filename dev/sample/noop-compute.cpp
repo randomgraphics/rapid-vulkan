@@ -4,7 +4,7 @@
 int main() {
     using namespace rapid_vulkan;
     auto instance = Instance({});
-    auto device   = Device(instance);
+    auto device   = Device(instance.dcp());
     auto gi       = device.gi();
     auto noop     = Shader({{"noop"}, gi, {sizeof(noop_comp) / sizeof(uint32_t), (const uint32_t *) noop_comp}});
     auto p        = ComputePipeline({{"noop"}, noop});

@@ -13,6 +13,6 @@ int main() {
     volkInitialize();
     auto instance = Instance({});
     volkLoadInstance(instance);
-    auto device = Device(instance);
+    auto device = Device(instance.dcp());
     return 0;
 }
