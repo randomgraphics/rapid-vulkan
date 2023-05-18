@@ -1,5 +1,7 @@
 set(CMAKE_CXX_STANDARD 17)
 
+Include(CheckIncludeFileCXX)
+
 function(add_sample name)
     add_executable(${name} ${name}.cpp)
     if (NOT (${name} STREQUAL "hello-world"))
@@ -9,7 +11,16 @@ function(add_sample name)
     endif()
 endfunction()
 
+# Check volk.h on Linux
+if (UNIX)
+    check_include_file_cxx(volk.h HAS_VOLK_H)
+else()
+    set(HAS_VOLK_H 1) # Assume volk.h exists on Windows
+endif()
+
 add_sample(hello-world)
 add_sample(alternative-namespace)
-add_sample(external-loader)
+if (HAS_VOLK_H)
+    add_sample(use-with-volk-loader)
+endif()
 add_sample(noop-compute)

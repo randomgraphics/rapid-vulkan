@@ -121,6 +121,7 @@ SOFTWARE.
 #pragma GCC diagnostic push
 #ifdef __clang__
 #pragma GCC diagnostic ignored "-Wnullability-completeness"
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #endif
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 #pragma GCC diagnostic ignored "-Wunused-variable"
@@ -138,11 +139,7 @@ SOFTWARE.
 #endif
 #define VMA_STATIC_VULKAN_FUNCTIONS  0
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 0
-#ifdef _MSC_VER
-#include <vma/vk_mem_alloc.h>
-#else
-#include <vk_mem_alloc.h>
-#endif
+#include "3rd-party/vma-3.0.1/vk_mem_alloc.h"
 #ifdef _MSC_VER
 #pragma warning(pop)
 #elif defined(__GNUC__)
@@ -336,8 +333,8 @@ inline void setVkObjectName(vk::Device device, T handle, const char * name) {
     if (!::vkSetDebugUtilsObjectNameEXT) return;
 #endif
     if (!device || !handle || !name) return;
-    auto info =
-        vk::DebugUtilsObjectNameInfoEXT().setObjectType(handle.objectType).setObjectHandle((uint64_t) (typename T::NativeType) handle).setPObjectName(name);
+    auto u64  = *(const uint64_t *) &handle; // TODO: this is not safe when compiling for 32-bit platform.
+    auto info = vk::DebugUtilsObjectNameInfoEXT().setObjectType(handle.objectType).setObjectHandle(u64).setPObjectName(name);
     device.setDebugUtilsObjectNameEXT(info);
 }
 
@@ -1167,9 +1164,9 @@ public:
     static Shader EMPTY;
 
     struct ConstructParameters : public Root::ConstructParameters {
-        const GlobalInfo *       gi = nullptr;
-        vk::ArrayProxy<uint32_t> spirv;
-        const char *             entry = "main";
+        const GlobalInfo *             gi = nullptr;
+        vk::ArrayProxy<const uint32_t> spirv;
+        const char *                   entry = "main";
 
         ConstructParameters & setName(const char * v) {
             name = v;
@@ -1183,7 +1180,7 @@ public:
         }
 
         ConstructParameters & setSpirv(size_t countInUInt32, const uint32_t * data) {
-            spirv = vk::ArrayProxy<uint32_t>((uint32_t) countInUInt32, data);
+            spirv = vk::ArrayProxy<const uint32_t>((uint32_t) countInUInt32, data);
             return *this;
         }
     };
@@ -1198,7 +1195,7 @@ public:
 
     const std::string & entry() const { return _entry; }
 
-    vk::ArrayProxy<uint32_t> spirv() const { return _spirv; }
+    vk::ArrayProxy<const uint32_t> spirv() const { return _spirv; }
 
 private:
     const GlobalInfo *    _gi = nullptr;
@@ -1300,10 +1297,10 @@ public:
     RVI_NO_COPY_NO_MOVE(Argument);
 
     /// @brief Set value of buffer argument. No effect, if the argument is not a buffer.
-    void b(vk::ArrayProxy<BufferView>);
+    void b(vk::ArrayProxy<const BufferView>);
 
     /// @brief Set value of image/sampler argument. No effect, if the argument is not a image/sampler
-    void i(vk::ArrayProxy<ImageSampler>);
+    void i(vk::ArrayProxy<const ImageSampler>);
 
     /// @brief Set value of push constant. No effect, if the argument is not a push constant.
     void c(size_t offset, size_t size, const void * data);
@@ -1314,6 +1311,8 @@ protected:
 
     class Impl;
     Impl * _impl = nullptr;
+
+    friend class PipelineLayout;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1333,10 +1332,10 @@ public:
     void clear();
 
     /// @brief Set value of buffer argument. If the argument has not been set before, a new argument will be created.
-    void b(const std::string & name, vk::ArrayProxy<BufferView>);
+    void b(const std::string & name, vk::ArrayProxy<const BufferView>);
 
     /// @brief Set value of image/sampler argument. If the argument has not been set before, a new argument will be created.
-    void i(const std::string & name, vk::ArrayProxy<ImageSampler>);
+    void i(const std::string & name, vk::ArrayProxy<const ImageSampler>);
 
     /// @brief Set value of push constant. If the argument has not been set before, a new argument will be created.
     void c(const std::string & name, size_t offset, size_t size, const void * data);
@@ -1359,7 +1358,7 @@ private:
 class PipelineLayout : public Root {
 public:
     struct ConstructParameters : public Root::ConstructParameters {
-        vk::ArrayProxy<const Shader *> shaders;
+        vk::ArrayProxy<const Shader * const> shaders;
     };
 
     PipelineLayout(const ConstructParameters &);
@@ -1395,7 +1394,7 @@ public:
     void cmdBind(vk::CommandBuffer cb, const ArgumentPack & ap) const;
 
 protected:
-    Pipeline(const std::string & name, vk::ArrayProxy<const Shader *> shaders);
+    Pipeline(const std::string & name, vk::ArrayProxy<const Shader * const> shaders);
 
     class Impl;
     Impl * _impl = nullptr;
