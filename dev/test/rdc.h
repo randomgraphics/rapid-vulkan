@@ -27,7 +27,11 @@ public:
 #else
         // At init, on linux/android.
         // For android replace librenderdoc.so with libVkLayer_GLES_RenderDoc.so
-        const char * path = PH_ANDROID ? "libVkLayer_GLES_RenderDoc.so" : "librenderdoc.so";
+#ifdef __ANDROID__
+        const char * path = "libVkLayer_GLES_RenderDoc.so";
+#else
+        const char * path = "librenderdoc.so";
+#endif
         void *       mod  = dlopen(path, RTLD_NOW | RTLD_NOLOAD);
         if (!mod) {
             logi("%s is not loaded. RDC capture functionalities are disabled.", path);

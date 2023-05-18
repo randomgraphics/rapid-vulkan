@@ -35,6 +35,7 @@ SOFTWARE.
 #pragma GCC diagnostic push
 #ifdef __clang__
 #pragma GCC diagnostic ignored "-Wnullability-completeness"
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #endif
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 #pragma GCC diagnostic ignored "-Wunused-variable"
@@ -42,11 +43,7 @@ SOFTWARE.
 #pragma GCC diagnostic ignored "-Wformat"
 #pragma GCC diagnostic ignored "-Wundef"
 #endif
-#ifdef _WIN32
-#include <vma/vk_mem_alloc.h>
-#else
-#include <vk_mem_alloc.h>
-#endif
+#include "3rd-party/vma-3.0.1/vk_mem_alloc.h"
 #ifdef _MSC_VER
 #pragma warning(pop)
 #elif defined(__GNUC__)
@@ -54,6 +51,7 @@ SOFTWARE.
 #endif
 #endif // RVI_NEED_VMA_IMPL
 
+#include <cmath>
 #include <sstream>
 #include <stdexcept>
 #include <iomanip>
@@ -793,6 +791,7 @@ struct VkFormatDesc {
             {VK_FORMAT_G16_B16_R16_3PLANE_422_UNORM, {0, 1, 1}},
             {VK_FORMAT_G16_B16R16_2PLANE_422_UNORM, {0, 1, 1}},
             {VK_FORMAT_G16_B16_R16_3PLANE_444_UNORM, {0, 1, 1}},
+#if VK_HEADER_VERSION >= 239
             {VK_FORMAT_G8_B8R8_2PLANE_444_UNORM, {0, 1, 1}},
             {VK_FORMAT_G10X6_B10X6R10X6_2PLANE_444_UNORM_3PACK16, {0, 1, 1}},
             {VK_FORMAT_G12X4_B12X4R12X4_2PLANE_444_UNORM_3PACK16, {0, 1, 1}},
@@ -822,6 +821,7 @@ struct VkFormatDesc {
             {VK_FORMAT_PVRTC2_2BPP_SRGB_BLOCK_IMG, {0, 1, 1}},
             {VK_FORMAT_PVRTC2_4BPP_SRGB_BLOCK_IMG, {0, 1, 1}},
             {VK_FORMAT_R16G16_S10_5_NV, {0, 1, 1}},
+#endif
         };
         auto i = (size_t) format;
         if (0 <= i && i < std::size(table)) {
@@ -875,7 +875,7 @@ public:
         _cp.info.usage |= vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst;
 
         // update mipmap level count
-        uint32_t maxLevels = (uint32_t) std::floor(std::log2(std::max(_cp.info.extent.width, _cp.info.extent.height))) + 1;
+        uint32_t maxLevels = (uint32_t) std::floor(std::log2((double)std::max(_cp.info.extent.width, _cp.info.extent.height))) + 1;
         if (_cp.info.mipLevels > maxLevels) {
             RAPID_VULKAN_LOG_WARNING("mipmap level count %u is too large, clamped to %u", _cp.info.mipLevels, maxLevels);
             _cp.info.mipLevels = maxLevels;
@@ -990,7 +990,7 @@ public:
         staging.unmap();
 
         // determine subresource aspect
-        auto aspect = determineImageAspect(vk::ImageAspectFlagBits::eNone, _desc.format);
+        auto aspect = determineImageAspect({}, _desc.format);
 
         // Setup buffer copy regions for the subresource
         auto copyRegion = vk::BufferImageCopy()
@@ -1024,7 +1024,7 @@ public:
         // if (0 == levelCount || 0 == layerCount) return {};
 
         auto formatDesc = VkFormatDesc::get(_desc.format);
-        auto aspect     = determineImageAspect(vk::ImageAspectFlagBits::eNone, _desc.format);
+        auto aspect     = determineImageAspect({}, _desc.format);
         auto mipExtents = buildMipExtentArray();
 
         Content                          content;
@@ -1228,7 +1228,7 @@ public:
 
     ~Impl() {}
 
-    void b(vk::ArrayProxy<BufferView> v) {
+    void b(vk::ArrayProxy<const BufferView> v) {
         auto sameValue = [&]() {
             auto p = std::get_if<BufferArgs>(&_value);
             if (!p) return false;
@@ -1251,7 +1251,7 @@ public:
         _timestamp.fetch_add(1);
     }
 
-    void i(vk::ArrayProxy<ImageSampler> v) {
+    void i(vk::ArrayProxy<const ImageSampler> v) {
         auto sameValue = [&]() {
             auto p = std::get_if<ImageArgs>(&_value);
             if (!p) return false;
@@ -1336,8 +1336,7 @@ public:
             case ImageArgs::SAMPLER:
                 return t == vk::DescriptorType::eSampler;
             case ImageArgs::IMAGE:
-                return t == vk::DescriptorType::eSampledImage || t == vk::DescriptorType::eStorageImage || t == vk::DescriptorType::eInputAttachment ||
-                       t == vk::DescriptorType::eSampleWeightImageQCOM || t == vk::DescriptorType::eBlockMatchImageQCOM;
+                return t == vk::DescriptorType::eSampledImage || t == vk::DescriptorType::eStorageImage || t == vk::DescriptorType::eInputAttachment;
             case ImageArgs::COMBINED:
                 return t == vk::DescriptorType::eCombinedImageSampler;
             default:
@@ -1377,17 +1376,14 @@ private:
 
 Argument::Argument(): _impl(new Impl()) {}
 Argument::~Argument() { delete _impl; }
-void Argument::b(vk::ArrayProxy<BufferView> v) { return _impl->b(v); }
-void Argument::i(vk::ArrayProxy<ImageSampler> v) { return _impl->i(v); }
+void Argument::b(vk::ArrayProxy<const BufferView> v) { return _impl->b(v); }
+void Argument::i(vk::ArrayProxy<const ImageSampler> v) { return _impl->i(v); }
 void Argument::c(size_t offset, size_t size, const void * data) { return _impl->c(offset, size, data); }
 
 class ArgumentImpl : public Argument {
 public:
     ArgumentImpl() {}
     ~ArgumentImpl() {}
-
-protected:
-    friend class PipelineLayout;
 };
 
 class ArgumentPack::Impl {
@@ -1398,9 +1394,9 @@ public:
 
     void clear() { _arguments.clear(); }
 
-    void set(const std::string & name, vk::ArrayProxy<BufferView> v) { _arguments[name].b(v); }
+    void set(const std::string & name, vk::ArrayProxy<const BufferView> v) { _arguments[name].b(v); }
 
-    void set(const std::string & name, vk::ArrayProxy<ImageSampler> v) { _arguments[name].i(v); }
+    void set(const std::string & name, vk::ArrayProxy<const ImageSampler> v) { _arguments[name].i(v); }
 
     void set(const std::string & name, size_t offset, size_t size, const void * data) { _arguments[name].c(offset, size, data); }
 
@@ -1418,8 +1414,8 @@ private:
 ArgumentPack::ArgumentPack(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this); }
 ArgumentPack::~ArgumentPack() { delete _impl; }
 void ArgumentPack::clear() { return _impl->clear(); }
-void ArgumentPack::b(const std::string & name, vk::ArrayProxy<BufferView> v) { return _impl->set(name, v); }
-void ArgumentPack::i(const std::string & name, vk::ArrayProxy<ImageSampler> v) { return _impl->set(name, v); }
+void ArgumentPack::b(const std::string & name, vk::ArrayProxy<const BufferView> v) { return _impl->set(name, v); }
+void ArgumentPack::i(const std::string & name, vk::ArrayProxy<const ImageSampler> v) { return _impl->set(name, v); }
 void ArgumentPack::c(const std::string & name, size_t offset, size_t size, const void * data) { return _impl->set(name, offset, size, data); }
 auto ArgumentPack::get(const std::string & name) -> Argument * { return _impl->get(name); }
 auto ArgumentPack::get(const std::string & name) const -> const Argument * { return _impl->get(name); }
@@ -1511,7 +1507,7 @@ static void convertVertexInputs(PipelineReflection & refl, vk::ArrayProxy<SpvRef
     }
 }
 
-static PipelineReflection reflectShaders(const std::string & pipelineName, vk::ArrayProxy<const Shader *> shaders) {
+static PipelineReflection reflectShaders(const std::string & pipelineName, vk::ArrayProxy<const Shader * const> shaders) {
     RVI_ASSERT(!shaders.empty());
 
     // The first uint32_t is set index. The 2nd one is shader variable name.
@@ -1584,7 +1580,7 @@ static PipelineReflection reflectShaders(const std::string & pipelineName, vk::A
 
 class PipelineLayout::Impl {
 public:
-    Impl(PipelineLayout & owner, vk::ArrayProxy<const Shader *> shaders): _owner(owner) {
+    Impl(PipelineLayout & owner, vk::ArrayProxy<const Shader * const> shaders): _owner(owner) {
         // make sure shader array is not empty.
         RVI_VERIFY(shaders.size() > 0);
         for (auto s : shaders) RVI_VERIFY(s);
@@ -1788,7 +1784,7 @@ public:
     vk::Pipeline          handle {};
     vk::PipelineBindPoint bindPoint;
 
-    Impl(Pipeline & owner, vk::ArrayProxy<const Shader *> shaders) {
+    Impl(Pipeline & owner, vk::ArrayProxy<const Shader * const> shaders) {
         if (shaders.empty()) return; // empty pipeline is not an error.
         _gi = shaders.front()->gi();
         // TODO: reuse layout via a cache object?
@@ -1806,7 +1802,7 @@ private:
     Ref<PipelineLayout> _layout;
 };
 
-Pipeline::Pipeline(const std::string & name, vk::ArrayProxy<const Shader *> shaders): Root({name}) { _impl = new Impl(*this, shaders); }
+Pipeline::Pipeline(const std::string & name, vk::ArrayProxy<const Shader * const> shaders): Root({name}) { _impl = new Impl(*this, shaders); }
 Pipeline::~Pipeline() { delete _impl; }
 auto Pipeline::layout() const -> const PipelineLayout & { return _impl->layout(); }
 void Pipeline::cmdBind(vk::CommandBuffer cb, const ArgumentPack & ap) const { return _impl->cmdBind(cb, ap); }
