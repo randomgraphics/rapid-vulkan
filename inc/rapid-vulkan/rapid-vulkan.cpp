@@ -875,7 +875,7 @@ public:
         _cp.info.usage |= vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst;
 
         // update mipmap level count
-        uint32_t maxLevels = (uint32_t) std::floor(std::log2((double)std::max(_cp.info.extent.width, _cp.info.extent.height))) + 1;
+        uint32_t maxLevels = (uint32_t) std::floor(std::log2((double) std::max(_cp.info.extent.width, _cp.info.extent.height))) + 1;
         if (_cp.info.mipLevels > maxLevels) {
             RAPID_VULKAN_LOG_WARNING("mipmap level count %u is too large, clamped to %u", _cp.info.mipLevels, maxLevels);
             _cp.info.mipLevels = maxLevels;
