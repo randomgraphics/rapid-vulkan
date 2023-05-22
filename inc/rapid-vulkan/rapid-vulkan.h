@@ -621,16 +621,16 @@ public:
     struct SubmitParameters {
         /// @brief The command buffers to submit. The command buffer must be allocated out of this queue class.
         /// @todo Submit array of command buffers together.
-        const vk::CommandBuffer commands;
+        const vk::CommandBuffer commands {};
 
         /// The (optional) fence object to signal once the command buffers have completed execution.
         vk::Fence signalFence = {};
 
         /// @brief List of semaphores to wait for before executing the command buffers.
-        vk::ArrayProxy<const vk::Semaphore> waitSemaphores;
+        vk::ArrayProxy<const vk::Semaphore> waitSemaphores {};
 
         /// @brief List of semaphores to signal once the command buffers have completed execution.
-        vk::ArrayProxy<const vk::Semaphore> signalSemaphores;
+        vk::ArrayProxy<const vk::Semaphore> signalSemaphores {};
     };
 
     CommandQueue(const ConstructParameters &);
