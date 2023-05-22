@@ -2051,7 +2051,7 @@ Swapchain::ConstructParameters & Swapchain::ConstructParameters::setDevice(const
 
 class Swapchain::Impl {
 public:
-    Impl(Swapchain & o, const ConstructParameters & cp): _owner(o), _cp(cp) {
+    Impl(Swapchain &, const ConstructParameters & cp): _cp(cp) {
         RVI_REQUIRE(cp.gi);
 
         // retrieve present queue handle.
@@ -2152,9 +2152,13 @@ public:
         }
         _graphicsQueue->submit({cb, {}, {frame.renderFinished}, {frame.frameEndSemaphore}});
 
-        // prsent current frame.
-        auto presentInfo = vk::PresentInfoKHR().setSwapchains({_handle}).setImageIndices({frame.imageIndex}).setWaitSemaphores({frame.frameEndSemaphore});
-        auto result      = _presentQueue.presentKHR(&presentInfo);
+        // present current frame.h
+        auto presentInfo = vk::PresentInfoKHR()
+                               .setSwapchainCount(1)
+                               .setPSwapchains(&_handle)
+                               .setPImageIndices(&frame.imageIndex)
+                               .setPWaitSemaphores(&frame.frameEndSemaphore);
+        auto result = _presentQueue.presentKHR(&presentInfo);
         if (vk::Result::eSuccess == result) {
             // Store the frame end command buffer. it'll be used later to wait for the frame to be available again to further use.
             frame.frameAvailable = cb;
@@ -2179,7 +2183,6 @@ private:
     };
 
 private:
-    Swapchain &         _owner;
     ConstructParameters _cp;
     Ref<RenderPass>     _renderPass;
     int64_t             _frameIndex = 0;
