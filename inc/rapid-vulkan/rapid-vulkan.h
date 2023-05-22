@@ -59,6 +59,15 @@ SOFTWARE.
 #define RAPID_VULKAN_ASSERT(expression, ...) assert(expression)
 #endif
 
+/// \def RAPID_VULKAN_BACKTRACE
+/// Define custom function to retrieve current call stack and store in std::string.
+/// This macro is called when rapid-vulkan encounters critical error, to help
+/// quickly identify the source of the error. The default implementation does
+/// nothing but return empty string.
+#ifndef RAPID_VULKAN_BACKTRACE
+#define RAPID_VULKAN_BACKTRACE() std::string("You have to define RAPID_VULKAN_BACKTRACE to retrieve current callstack.")
+#endif
+
 #ifndef RAPID_VULKAN_LOG_ERROR
 #define RAPID_VULKAN_LOG_ERROR(...)    \
     do {                               \
@@ -162,6 +171,7 @@ SOFTWARE.
 #include <string>
 #include <unordered_map>
 #include <tuple>
+#include <optional>
 
 // ---------------------------------------------------------------------------------------------------------------------
 // RVI stands for Rapid Vulkan Implementation. Macros started with this prefix are reserved for internal use.
@@ -195,7 +205,7 @@ SOFTWARE.
 #define RVI_ASSERT(...) ((void) 0)
 #endif
 
-#define RVI_VERIFY(condition, ...)                   \
+#define RVI_REQUIRE(condition, ...)                  \
     do {                                             \
         if (!(condition)) { RVI_THROW(#condition); } \
     } while (false)
@@ -231,11 +241,12 @@ using namespace std::string_literals;
 // ---------------------------------------------------------------------------------------------------------------------
 /// A utility class used to pass commonly used Vulkan global information around.
 struct GlobalInfo {
-    const vk::AllocationCallbacks * allocator  = nullptr;
-    uint32_t                        apiVersion = 0;
-    vk::Instance                    instance   = nullptr;
-    vk::PhysicalDevice              physical   = nullptr;
-    vk::Device                      device     = nullptr;
+    const vk::AllocationCallbacks * allocator           = nullptr;
+    uint32_t                        apiVersion          = 0;
+    vk::Instance                    instance            = nullptr;
+    vk::PhysicalDevice              physical            = nullptr;
+    vk::Device                      device              = nullptr;
+    uint32_t                        graphicsQueueFamily = VK_QUEUE_FAMILY_IGNORED;
 #if RAPID_VULKAN_ENABLE_VMA
     VmaAllocator vmaAllocator = nullptr;
 #endif
@@ -495,7 +506,9 @@ public:
 
     bool valid() const { return _ptr != nullptr; }
 
-    void reset(T * t) {
+    /// @brief Reset the pointer to a new value.
+    /// Passing nullptr is same as calling clear().
+    void reset(T * t = nullptr) {
         if (_ptr == t) return;
         clear();
         _ptr = t;
@@ -605,13 +618,38 @@ public:
         uint32_t           index  = 0; ///< queue index within family
     };
 
+    struct SubmitParameters {
+        /// @brief The command buffers to submit. The command buffer must be allocated out of this queue class.
+        /// @todo Submit array of command buffers together.
+        const vk::CommandBuffer commands;
+
+        /// The (optional) fence object to signal once the command buffers have completed execution.
+        vk::Fence signalFence = {};
+
+        /// @brief List of semaphores to wait for before executing the command buffers.
+        vk::ArrayProxy<const vk::Semaphore> waitSemaphores;
+
+        /// @brief List of semaphores to signal once the command buffers have completed execution.
+        vk::ArrayProxy<const vk::Semaphore> signalSemaphores;
+    };
+
     CommandQueue(const ConstructParameters &);
     ~CommandQueue() override;
 
     auto desc() const -> const Desc &;
+
+    /// @brief Begin recording a command buffer.
+    /// @todo should return a custom CommandBuffer class.
     auto begin(const char * purpose, vk::CommandBufferLevel level = vk::CommandBufferLevel::ePrimary) -> vk::CommandBuffer;
-    void submit(vk::CommandBuffer);
-    void wait(vk::CommandBuffer = {});
+
+    /// @brief End recording a command buffer. Submit it to the queue for asynchronous processing.
+    void submit(const SubmitParameters &);
+
+    /// @brief Wait for the queue to finish processing submitted commands.
+    /// @param cb The command buffer to wait for. It must be allocated out of this queue via the begin() call.
+    ///           Passing in empty command buffer handle is allowed though. In this case, the function will wait for all
+    ///           submitted command buffers to finish.
+    void wait(vk::CommandBuffer cb = {});
 
     auto gi() const -> const GlobalInfo * { return desc().gi; }
     auto family() const -> uint32_t { return desc().family; }
@@ -671,9 +709,9 @@ struct Barrier {
     }
 
     /// @brief Add a buffer barrier
-    Barrier & b(vk::Buffer buffer, vk::DeviceSize offset = 0, vk::DeviceSize size = VK_WHOLE_SIZE,
-                vk::AccessFlags srcAccess = vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eMemoryRead,
-                vk::AccessFlags dstAccess = vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eMemoryRead) {
+    Barrier & b(vk::Buffer buffer, vk::AccessFlags srcAccess = vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eMemoryRead,
+                vk::AccessFlags dstAccess = vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eMemoryRead, vk::DeviceSize offset = 0,
+                vk::DeviceSize size = VK_WHOLE_SIZE) {
         return b(vk::BufferMemoryBarrier {srcAccess, dstAccess, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, buffer, offset, size});
     }
 
@@ -701,7 +739,7 @@ struct Barrier {
     }
 
     /// @brief Write barriers to command buffer
-    void write(vk::CommandBuffer cb) const {
+    void cmdWrite(vk::CommandBuffer cb) const {
         if (memories.empty() && buffers.empty() && images.empty()) return;
         cb.pipelineBarrier(srcStage, dstStage, dependencies, memories, buffers, images);
     }
@@ -937,6 +975,12 @@ public:
             return *this;
         }
 
+        ConstructParameters & setDepth(size_t w, size_t h, vk::Format f = vk::Format::eD24UnormS8Uint) {
+            set2D(w, h).setFormat(f);
+            info.usage = vk::ImageUsageFlagBits::eDepthStencilAttachment;
+            return *this;
+        }
+
         ConstructParameters & setCube(size_t w) {
             info.imageType     = vk::ImageType::e2D;
             info.extent.width  = (uint32_t) w;
@@ -962,8 +1006,8 @@ public:
             return *this;
         }
 
-        ConstructParameters & setTiling(vk::ImageTiling t) {
-            info.tiling = t;
+        ConstructParameters & setLinear() {
+            info.tiling = vk::ImageTiling::eLinear;
             return *this;
         }
 
@@ -974,6 +1018,36 @@ public:
 
         ConstructParameters & addUsage(vk::ImageUsageFlags flags) {
             info.usage |= flags;
+            return *this;
+        }
+
+        ConstructParameters & clearUsage() {
+            info.usage = (vk::ImageUsageFlagBits) 0;
+            return *this;
+        }
+
+        ConstructParameters & renderTarget() {
+            info.usage |= vk::ImageUsageFlagBits::eColorAttachment;
+            return *this;
+        }
+
+        ConstructParameters & depth() {
+            info.usage |= vk::ImageUsageFlagBits::eDepthStencilAttachment;
+            return *this;
+        }
+
+        ConstructParameters & input() {
+            info.usage |= vk::ImageUsageFlagBits::eInputAttachment;
+            return *this;
+        }
+
+        ConstructParameters & texture() {
+            info.usage |= vk::ImageUsageFlagBits::eSampled;
+            return *this;
+        }
+
+        ConstructParameters & storage() {
+            info.usage |= vk::ImageUsageFlagBits::eStorage;
             return *this;
         }
 
@@ -1090,6 +1164,12 @@ public:
         std::vector<SubresourceContent> subresources;
     };
 
+    /// @brief A utility function to determine image aspect flags from a format.
+    /// @param format The pixel format of the image.
+    /// @param hint   The hint of the aspect flags. The function will try to use this hinted aspect flag, as long as it is compatible the format.
+    ///               Set to vk::ImageAspectFlagBits::eNone to let the function determine the aspect flags.
+    static vk::ImageAspectFlags determineImageAspect(vk::Format format, vk::ImageAspectFlags hint = vk::ImageAspectFlagBits::eNone);
+
     Image(const ConstructParameters &);
 
     ~Image();
@@ -1107,6 +1187,12 @@ public:
     /// @brief Synchronously read content of the whole image.
     /// This method, if succeeded, will transfer the image into vk::ImageLayout::eTransferSrcOptimal layout.
     Content readContent(const ReadContentParameters &);
+
+    vk::Image handle() const { return desc().handle; }
+
+    operator vk::Image() const { return desc().handle; }
+
+    operator VkImage() const { return desc().handle; }
 
 private:
     class Impl;
@@ -1165,11 +1251,11 @@ public:
 
     struct ConstructParameters : public Root::ConstructParameters {
         const GlobalInfo *             gi = nullptr;
-        vk::ArrayProxy<const uint32_t> spirv;
+        vk::ArrayProxy<const uint32_t> spirv {};
         const char *                   entry = "main";
 
-        ConstructParameters & setName(const char * v) {
-            name = v;
+        ConstructParameters & setGi(const GlobalInfo * v) {
+            gi = v;
             return *this;
         }
 
@@ -1179,10 +1265,23 @@ public:
             return *this;
         }
 
-        ConstructParameters & setSpirv(size_t countInUInt32, const uint32_t * data) {
-            spirv = vk::ArrayProxy<const uint32_t>((uint32_t) countInUInt32, data);
+        template<typename T, size_t C>
+        ConstructParameters & setSpirv(const T (&data)[C]) {
+            spirv = vk::ArrayProxy<const uint32_t>(C * sizeof(T) / sizeof(uint32_t), (const uint32_t *) data);
             return *this;
         }
+
+        template<typename T>
+        ConstructParameters & setSpirv(size_t countInUnitOfT, const T * data) {
+            spirv = vk::ArrayProxy<const uint32_t>(countInUnitOfT * sizeof(T) / sizeof(uint32_t), (const uint32_t *) data);
+            return *this;
+        }
+
+        // template<typename T>
+        // ConstructParameters & setSpirv(vk::ArrayProxy<const T> blob) {
+        //     spirv = vk::ArrayProxy<const uint32_t>(blob.size() * sizeof(T) / sizeof(uint32_t), (const uint32_t*)blob.data());
+        //     return *this;
+        // }
     };
 
     Shader(const ConstructParameters &);
@@ -1204,14 +1303,104 @@ private:
     std::vector<uint32_t> _spirv;
 };
 
-// // ---------------------------------------------------------------------------------------------------------------------
-// /// A wrapper class for VkDescriptorPool
-// class DescriptorPool : public Root {
-//     struct ConstructParameters : public Root::ConstructParameters {
-//         //;
-//     };
-//     DescriptorPool(const ConstructParameters &);
-// };
+// ---------------------------------------------------------------------------------------------------------------------
+/// VkFramebuffer wrapper class
+class RenderPass : public Root {
+public:
+    struct SubpassParameters {
+        std::vector<vk::AttachmentReference>   colors;
+        std::optional<vk::AttachmentReference> depth;
+        std::vector<vk::AttachmentReference>   inputs;
+        vk::SubpassDescriptionFlags            flags = {};
+    };
+
+    struct ConstructParameters : public Root::ConstructParameters {
+        const GlobalInfo *                     gi    = nullptr;
+        vk::RenderPassCreateFlags              flags = {};
+        std::vector<vk::AttachmentDescription> attachments {};
+        std::vector<SubpassParameters>         subpasses {};
+        std::vector<vk::SubpassDependency>     dependencies {};
+
+        /// @brief Setup a simple single pass render pass.
+        ConstructParameters & simple(vk::ArrayProxy<const vk::Format> colors, vk::Format depth = vk::Format::eUndefined, bool clear = true, bool store = true);
+    };
+
+    RenderPass(const ConstructParameters &);
+
+    ~RenderPass();
+
+    void cmdBegin(vk::CommandBuffer, vk::RenderPassBeginInfo) const;
+
+    void cmdNext(vk::CommandBuffer) const;
+
+    void cmdEnd(vk::CommandBuffer) const;
+
+    vk::RenderPass handle() const { return _handle; }
+
+    operator vk::RenderPass() const { return _handle; }
+
+    operator VkRenderPass() const { return _handle; }
+
+protected:
+    void onNameChanged(const std::string &) override;
+
+private:
+    const GlobalInfo * _gi     = nullptr;
+    vk::RenderPass     _handle = {};
+#if RAPID_VULKAN_ENABLE_DEBUG_BUILD
+    ConstructParameters _cp; // keep construct parameters around for debug purpose only.
+#endif
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// VkFramebuffer wrapper class
+class Framebuffer : public Root {
+public:
+    struct ConstructParameters : public Root::ConstructParameters {
+        const GlobalInfo *         gi   = nullptr;
+        vk::RenderPass             pass = {};
+        std::vector<vk::ImageView> attachments {};
+        size_t                     width  = 1;
+        size_t                     height = 1;
+        size_t                     layers = 1;
+
+        ConstructParameters & setRenderPass(vk::RenderPass v) {
+            pass = v;
+            return *this;
+        }
+
+        ConstructParameters & addImage(Image & image);
+
+        ConstructParameters & addImageView(vk::ImageView view) {
+            attachments.emplace_back(view);
+            return *this;
+        }
+
+        ConstructParameters & setExtent(size_t w, size_t h, size_t l = 1) {
+            width  = w;
+            height = h;
+            layers = l;
+            return *this;
+        }
+    };
+
+    Framebuffer(const ConstructParameters &);
+
+    ~Framebuffer();
+
+    vk::Framebuffer handle() const { return _handle; }
+
+    operator vk::Framebuffer() const { return _handle; }
+
+    operator VkFramebuffer() const { return _handle; }
+
+protected:
+    void onNameChanged(const std::string &) override;
+
+private:
+    const GlobalInfo * _gi     = nullptr;
+    vk::Framebuffer    _handle = {};
+};
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// A utility class that represents the full layout of a pipeline object.
@@ -1320,8 +1509,7 @@ protected:
 class ArgumentPack : public Root {
 public:
     struct ConstructParameters : public Root::ConstructParameters {
-        // const GlobalInfo *         gi         = nullptr;
-        // const PipelineReflection * reflection = nullptr;
+        // reserved for future use.
     };
 
     ArgumentPack(const ConstructParameters &);
@@ -1401,39 +1589,176 @@ protected:
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// A specialized version of pipeline that is used for graphics rendering.
+/// Wrapper of graphics pipeline object
 class GraphicsPipeline : public Pipeline {
 public:
     struct ConstructParameters : public Root::ConstructParameters {
-        const Shader & vs = Shader::EMPTY;
-        const Shader & ps = Shader::EMPTY;
+        vk::RenderPass                                     pass {};
+        uint32_t                                           subpass {};
+        const Shader *                                     vs {};
+        const Shader *                                     fs {};
+        std::vector<vk::VertexInputAttributeDescription>   va {};
+        std::vector<vk::VertexInputBindingDescription>     vb {};
+        vk::PipelineInputAssemblyStateCreateInfo           ia {defaultIAStates()};
+        vk::PipelineTessellationStateCreateInfo            tess {};
+        std::vector<vk::Viewport>                          viewports {}; ///< viewports
+        std::vector<vk::Rect2D>                            scissors {};  ///< scissors
+        vk::PipelineRasterizationStateCreateInfo           rast {defaultRastStates()};
+        vk::PipelineMultisampleStateCreateInfo             msaa {};
+        vk::PipelineDepthStencilStateCreateInfo            depth {};
+        std::vector<vk::PipelineColorBlendAttachmentState> attachments {defaultAttachment()};
+        std::array<float, 4>                               blendConstants {};
+        std::vector<vk::DynamicState>                      dynamic {};
+        vk::Pipeline                                       baseHandle {};
+        uint32_t                                           baseIndex {};
+
+        ConstructParameters & setRenderPass(vk::RenderPass pass_, size_t sub = 0) {
+            pass    = pass_;
+            subpass = (uint32_t) sub;
+            return *this;
+        }
+
+        ConstructParameters & setVS(const Shader * s) {
+            vs = s;
+            return *this;
+        }
+
+        ConstructParameters & setFS(const Shader * s) {
+            fs = s;
+            return *this;
+        }
+
+        ConstructParameters & dynamicTopology() {
+            dynamic.push_back(vk::DynamicState::ePrimitiveTopology);
+            return *this;
+        }
+
+        ConstructParameters & dynamicViewport() {
+            dynamic.push_back(vk::DynamicState::eViewportWithCount);
+            viewports.clear();
+            return *this;
+        }
+
+        ConstructParameters & dynamicScissor() {
+            dynamic.push_back(vk::DynamicState::eScissorWithCount);
+            scissors.clear();
+            return *this;
+        }
+
+        static constexpr vk::PipelineInputAssemblyStateCreateInfo defaultIAStates() {
+            return vk::PipelineInputAssemblyStateCreateInfo().setTopology(vk::PrimitiveTopology::eTriangleList);
+        }
+
+        static constexpr vk::PipelineRasterizationStateCreateInfo defaultRastStates() {
+            vk::PipelineRasterizationStateCreateInfo r;
+            r.setLineWidth(1.0f);
+            return r;
+        }
+
+        static const vk::PipelineColorBlendAttachmentState defaultAttachment() {
+            return vk::PipelineColorBlendAttachmentState().setColorWriteMask(vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+                                                                             vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA);
+        }
+    };
+
+    struct IndexBuffer {
+        /// @brief Handle of the index buffer.
+        vk::Buffer buffer = VK_NULL_HANDLE;
+
+        /// @brief Byte offset of the first index. Ignored if buffer is empty.
+        vk::DeviceSize offset = 0;
+
+        /// @brief Index type;
+        vk::IndexType indexType = vk::IndexType::eUint16;
+
+        /// @brief Get size/stride of the index based on the type.
+        size_t indexStride() const {
+            switch (indexType) {
+            case vk::IndexType::eUint16:
+                return sizeof(uint16_t);
+            case vk::IndexType::eUint32:
+                return sizeof(uint32_t);
+            case vk::IndexType::eUint8EXT:
+                return 1;
+            default:
+                return 0;
+            }
+        }
     };
 
     struct DrawParameters {
-        vk::CommandBuffer cb {};
+        /// Vertex buffer list of the draw.
+        vk::ArrayProxy<const BufferView> vertexBuffers;
+
+        /// Index buffer of the draw. If empty, then the draw is considered non-indexed.
+        IndexBuffer indexBuffer;
+
+        /// Instance count. Default value is 1.
+        uint32_t instanceCount = 1;
+
+        /// Index of the first instance. Default is 0.
+        uint32_t firstInstance = 0;
+
+        union {
+            /// Index count for indexed draw.
+            uint32_t indexCount = 0;
+
+            /// Vertex count for non-indexed draw.
+            uint32_t vertexCount;
+        };
+
+        union {
+            /// Index of the first vertex for non-indexed draw.
+            uint32_t firstVertex = 0;
+
+            /// Index of the first index of the indexed draw.
+            uint32_t firstIndex;
+        };
+
+        /// Vertex offset of indexed draw. Ignored for non-indexed draw.
+        int32_t vertexOffset = 0;
+
+        DrawParameters & setNonIndexed(size_t vertexCount_, size_t firstVertex_ = 0) {
+            indexBuffer.buffer = VK_NULL_HANDLE;
+            vertexCount        = (uint32_t) vertexCount_;
+            firstVertex        = (uint32_t) firstVertex_;
+            return *this;
+        }
+
+        DrawParameters & setIndexed(const IndexBuffer & ib, size_t indexCount_, size_t firstIndex_ = 0, int32_t vertexOffset_ = 0) {
+            RAPID_VULKAN_ASSERT(ib.buffer, "Set indexed draw but with an empty index buffer?");
+            indexBuffer  = ib;
+            indexCount   = (uint32_t) indexCount_;
+            firstIndex   = (uint32_t) firstIndex_;
+            vertexOffset = vertexOffset_;
+            return *this;
+        }
+
+        DrawParameters & setInstance(size_t count, size_t first = 0) {
+            instanceCount = (uint32_t) count;
+            firstInstance = (uint32_t) first;
+            return *this;
+        }
     };
 
     GraphicsPipeline(const ConstructParameters &);
 
     void cmdDraw(vk::CommandBuffer, const DrawParameters &);
-
-private:
-    class Impl;
-    Impl * _impl = nullptr;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// A specialized version of pipeline that is used for compute.
+/// Wrapper class of compute pipeline object
 class ComputePipeline : public Pipeline {
 public:
     struct ConstructParameters : public Root::ConstructParameters {
-        const Shader & cs;
+        /// Pointer to the computer shader. Must be non-null.
+        const Shader * cs = nullptr;
     };
 
     struct DispatchParameters {
-        uint32_t width  = 1;
-        uint32_t height = 1;
-        uint32_t depth  = 1;
+        size_t width  = 1;
+        size_t height = 1;
+        size_t depth  = 1;
     };
 
     ComputePipeline(const ConstructParameters &);
@@ -1441,17 +1766,132 @@ public:
     void cmdDispatch(vk::CommandBuffer, const DispatchParameters &);
 };
 
-class Swapchain {
+class Device;
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// Wrapper class of swapchain object
+class Swapchain : public Root {
 public:
-    struct ConstructParameters {
-        GlobalInfo     gi {};
-        vk::Device     device {};
-        vk::SurfaceKHR surface {};
-        vk::Format     backBufferFormat = vk::Format::eB8G8R8A8Unorm;
-        uint32_t       backBufferCount  = 3;
+    struct ConstructParameters : public Root::ConstructParameters {
+        const GlobalInfo * gi                  = {};
+        vk::SurfaceKHR     surface             = {};
+        uint32_t           presentQueueFamily  = VK_QUEUE_FAMILY_IGNORED; ///< Family index of the present queue.
+        uint32_t           presentQueueIndex   = 0;                       ///< Index of the present queue.
+        uint32_t           graphicsQueueFamily = VK_QUEUE_FAMILY_IGNORED; ///< family index of graphics queue, if different from the present queue.
+        uint32_t           graphicsQueueIndex  = 0; ///< Index of the graphics queue. Ignored if graphicsQueueFamily is VK_QUEUE_FAMILY_IGNORED.
+        size_t             width               = 0; ///< width of the swapchain. 0 means surface/window width.
+        size_t             height              = 0; ///< height of the swapchain. 0 means using surface/window height.
+        size_t             maxFramesInFlight   = 1; ///< Number of frames in flight. Must be at least 1.
+        bool               vsync               = true;
+
+        /// Specify format of backbuffers. If set to undefined, then the first supported format will be used.
+        vk::Format backbufferFormat = vk::Format::eUndefined;
+
+        /// Format of the depth buffer. Set to undefined, if you don't need depth buffer.
+        vk::Format depthStencilFormat = vk::Format::eD24UnormS8Uint;
+
+        /// @brief Fill in construction parameters using values retrieved from the given device.
+        /// This method will fill in the following fields: gi, surface and present/graphics queue properties.
+        ConstructParameters & setDevice(const Device &);
+    };
+
+    /// @brief Specify the desired status of the back buffer image.
+    struct BackbufferStatus {
+        vk::ImageLayout        layout {};
+        vk::AccessFlags        access {};
+        vk::PipelineStageFlags stages {};
+    };
+
+    struct Backbuffer {
+        vk::Extent2D     extent {};
+        vk::Format       format {};
+        vk::Image        image {};
+        vk::ImageView    view {};
+        Ref<Framebuffer> fb {};
+        BackbufferStatus status {};
+    };
+
+    /// @brief Represents a GPU frame.
+    struct Frame {
+        /// @brief Index of the frame. The value will be incremented after each present.
+        int64_t index = 0;
+
+        // /// @brief Index of the frame that GPU has done all the rendering. All resources used to render this frame could be safely recycled or destroyed.
+        // int64_t safeFrameIndex = -1;
+
+        /// @brief Pointer to the backbuffer of the frame.
+        /// The pointer value will be invalidated after each present.
+        const Backbuffer * backbuffer;
+
+        /// @brief The semaphore that is signaled when the last present of the current backbuffer image is done.
+        /// The first rendering submission for current frame should wait for this semaphore.
+        vk::Semaphore imageAvailable;
+
+        /// @brief The semaphore that present() call uses to ensure presenting happens after all rendering is done.
+        /// !!! IMPORTANT !!! : It is caller's responsibility to ensure that this semaphore is signaled and only signaled by the last rendering
+        /// submission of the frame. Failing to signal this semaphore will cause present() to wait forever. On the other hand, signaling this
+        /// semaphore too early could cause present() showing partially rendered frame.
+        vk::Semaphore renderFinished;
+    };
+
+    /// @brief Parameters to begin the built-in render pass of the swapchain.
+    struct BeginRenderPassParameters {
+        /// @brief Specify the clear value for color buffer.
+        vk::ClearColorValue color = vk::ClearColorValue(std::array<float, 4> {0.0f, 0.0f, 0.0f, 1.0f});
+
+        /// @brief Specify the clear value for depth and stencil buffer.
+        vk::ClearDepthStencilValue depth = vk::ClearDepthStencilValue(1.0f, 0);
+
+        /// @brief Specify the current status of the back buffer image.
+        /// This is for the cmdBeginRenderPass() method insert proper barriers to transition the image to the desired layout for the render pass.
+        /// If the back buffer is already in vk::ImageLayout::eColorAttachmentOptimal layout, then no barrier will be inserted.
+        /// When built-in render pass ends, the back buffer image will be automatically transitioned into status suitable for present().
+        BackbufferStatus backbufferStatus = {vk::ImageLayout::ePresentSrcKHR, vk::AccessFlagBits::eMemoryRead, vk::PipelineStageFlagBits::eBottomOfPipe};
+
+        BeginRenderPassParameters & setColorF(float r, float g, float b, float a = 1.0f) {
+            color = vk::ClearColorValue(std::array<float, 4> {r, g, b, a});
+            return *this;
+        }
+
+        BeginRenderPassParameters & setDepth(float depth_, uint32_t stencil_ = 0) {
+            this->depth = vk::ClearDepthStencilValue(depth_, stencil_);
+            return *this;
+        }
+    };
+
+    /// @brief Specify parameters to call present().
+    struct PresentParameters {
+        /// @brief Specify the current status of the back buffer image when calling present().
+        /// The present() function will insert proper barrier to transit the current back buffer image into VK_IMAGE_LAYOUT_PRESENT_SRC_KHR layouy.
+        /// If the back buffer image is alreadh in VK_IMAGE_LAYOUT_PRESENT_SRC_KHR layout, then no barrier will be inserted.
+        BackbufferStatus backbufferStatus = {vk::ImageLayout::ePresentSrcKHR, vk::AccessFlagBits::eMemoryRead, vk::PipelineStageFlagBits::eBottomOfPipe};
     };
 
     Swapchain(const ConstructParameters &);
+
+    ~Swapchain();
+
+    const RenderPass & renderPass() const;
+
+    void cmdBeginBuiltInRenderPass(vk::CommandBuffer, const BeginRenderPassParameters &);
+
+    /// @brief End the built-in render pass.
+    /// After built-in render pass ends, the back buffer image will be automatically transitioned into status suitable for present(). You can check the
+    /// actual value of the status via currentFrame().backbuffer->status.
+    void cmdEndBuiltInRenderPass(vk::CommandBuffer);
+
+    /// @brief Get the current frame information.
+    /// The returned value will be invalidated after each present. So you have to call this function after each present to get the latest frame information.
+    /// Referencing values returned from previous frames is prohibited and will cause undefined behavior.
+    const Frame & currentFrame() const;
+
+    /// @brief Present the current frame. Also do the internal bookkeeping to switch to next frame.
+    /// The post-present status of the back buffer image is stored in currentFrame().backbuffer->status.
+    void present(const PresentParameters &);
+
+private:
+    class Impl;
+    Impl * _impl = nullptr;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1476,10 +1916,6 @@ struct StructureChain {
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Misc. classes for future use.
-
-class RenderPass {
-    //
-};
 
 class RenderLoop : public Root {
 public:
@@ -1550,11 +1986,52 @@ public:
         /// set to false to make the creation log less verbose.
         Verbosity printVkInfo = BRIEF;
 
+        ConstructParameters & setApiVersion(uint32_t v) {
+            apiVersion = v;
+            return *this;
+        }
+
+        ConstructParameters & setInstance(vk::Instance i) {
+            instance = i;
+            return *this;
+        }
+
+        ConstructParameters & setSurface(vk::SurfaceKHR s) {
+            surface = s;
+            return *this;
+        }
+
+        ConstructParameters & addDeviceExtension(const std::string & name, bool required = false) {
+            deviceExtensions[name] = required;
+            return *this;
+        }
+
         /// Add new feature to the feature2 list.
         template<typename T>
         T & addFeature(const T & feature) {
             features2.emplace_back(feature);
             return *(T *) features2.back().buffer.data();
+        }
+
+        /// Set the features3 pointer.
+        ConstructParameters & setFeatures3(void * p) {
+            features3 = p;
+            return *this;
+        }
+
+        ConstructParameters & setEnableVmaAllocator(bool b) {
+            enableVmaAllocator = b;
+            return *this;
+        }
+
+        ConstructParameters & setValidation(Validation v) {
+            validation = v;
+            return *this;
+        }
+
+        ConstructParameters & setPrintVkInfo(Verbosity v) {
+            printVkInfo = v;
+            return *this;
         }
     };
 
@@ -1562,7 +2039,11 @@ public:
 
     ~Device();
 
+    /// Get the vulkan global info structure.
     const GlobalInfo * gi() const { return &_gi; }
+
+    /// The surface that this device is created for. Could be null if the device is headless.
+    vk::SurfaceKHR surface() const { return _cp.surface; }
 
     /// The general purpose graphics queue that is able to do everything: graphics, compute and transfer. Should always be available.
     CommandQueue * graphics() const { return _graphics; }
@@ -1638,6 +2119,27 @@ public:
         /// Define custom function pointer to load Vulkan function pointers. Set to null to use the built-in one.
         /// Ignored when RAPID_VULKAN_ENABLE_LOADER is not 1.
         PFN_vkGetInstanceProcAddr getInstanceProcAddr = nullptr;
+
+        ConstructParameters & addExtensions(bool required, const char * const * exts, size_t count = 0) {
+            if (0 == count) {
+                for (const char * const * p = exts; *p; ++p) instanceExtensions[*p] = required;
+            } else {
+                for (size_t i = 0; i < count; ++i) instanceExtensions[exts[i]] = required;
+            }
+            return *this;
+        }
+
+        ConstructParameters & addExtensions(bool required, vk::ArrayProxy<const char * const> exts) {
+            for (const auto & e : exts)
+                if (e) instanceExtensions[e] = required;
+            return *this;
+        }
+
+        ConstructParameters & addExtensions(bool required, vk::ArrayProxy<const std::string> exts) {
+            for (const auto & e : exts)
+                if (!e.empty()) instanceExtensions[e] = required;
+            return *this;
+        }
     };
 
     Instance(ConstructParameters);

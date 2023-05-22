@@ -1,5 +1,5 @@
 #include "test-instance.h"
-#include "3rd-party/catch2/catch2.hpp"
+#include "../3rd-party/catch2/catch2.hpp"
 #include "shader/argument-test.comp.spv.h"
 #include "rdc.h"
 
@@ -7,8 +7,8 @@ TEST_CASE("cs-buffer-args") {
     using namespace rapid_vulkan;
     auto dev  = TestVulkanInstance::device.get();
     auto gi   = dev->gi();
-    auto noop = Shader({{"cs-buffer-args"}, gi, {sizeof(argument_test_comp) / sizeof(uint32_t), (const uint32_t *) argument_test_comp}});
-    auto p    = ComputePipeline({{"cs-buffer-args"}, noop});
+    auto noop = Shader(Shader::ConstructParameters {{"cs-buffer-args"}, gi}.setSpirv(argument_test_comp));
+    auto p    = ComputePipeline({{"cs-buffer-args"}, &noop});
     auto rdc  = RenderDocCapture();
 
     if (rdc) rdc.begin("cs-buffer-args");
@@ -27,7 +27,7 @@ TEST_CASE("cs-buffer-args") {
     if (auto c = q.begin("cs-buffer-args")) {
         p.cmdBind(c, ap);
         p.cmdDispatch(c, {1, 1, 1});
-        q.submit(c);
+        q.submit({c});
     }
     q.wait();
 
