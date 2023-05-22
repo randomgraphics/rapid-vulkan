@@ -7,11 +7,6 @@
   - pass cit
   
 # P1
-- Graphics Pipeline
-- Framebuffer
-- Swapchain
-- Surface
-- Render Pass
 - Sample:
   - rotating triangle
 - Pipeline Layout Cache
