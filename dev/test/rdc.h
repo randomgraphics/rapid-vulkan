@@ -1,6 +1,6 @@
 #pragma once
 
-#include "3rd-party/rdc/renderdoc_app.h"
+#include "../3rd-party/rdc/renderdoc_app.h"
 
 #ifdef _WIN32
 #define NOMINMAX

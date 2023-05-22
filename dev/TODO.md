@@ -1,19 +1,19 @@
 # P0 (required to make the repository public)
-- Pipeline Arguments
-- Graphics Pipeline
-- Render Pass
-- Version
-- Surface
-- Samples
-  - rotating triangle
-  
-# P1
+- Header Version
 - CI pipeline:
   - make sure header version is increased for every commit to rapid-vulkan.h
   - pass format check
   - pass build
   - pass cit
-- Enable VMA
+  
+# P1
+- Graphics Pipeline
+- Framebuffer
+- Swapchain
+- Surface
+- Render Pass
+- Sample:
+  - rotating triangle
 - Pipeline Layout Cache
 - Pipeline Cache
 - Android support

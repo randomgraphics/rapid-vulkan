@@ -1,5 +1,5 @@
 #include "test-instance.h"
-#include "3rd-party/catch2/catch2.hpp"
+#include "../3rd-party/catch2/catch2.hpp"
 
 TEST_CASE("buffer-dtor") {
     using namespace rapid_vulkan;

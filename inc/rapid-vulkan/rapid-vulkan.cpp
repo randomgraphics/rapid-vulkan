@@ -122,7 +122,7 @@ public:
         FINISHED,
     };
 
-    std::list<CommandBuffer *>::iterator pending;
+    std::list<CommandBuffer *>::iterator pending = {};
 
     CommandBuffer(const GlobalInfo * gi, uint32_t family, const std::string & name_, vk::CommandBufferLevel level): _gi(gi), _name(name_) {
         RVI_ASSERT(_gi);
@@ -140,7 +140,6 @@ public:
 
     virtual ~CommandBuffer() {
         _gi->safeDestroy(_handle, _pool);
-        _gi->safeDestroy(_fence);
         _gi->safeDestroy(_semaphore);
         _gi->safeDestroy(_pool);
     }
@@ -153,7 +152,7 @@ public:
 
     State state() const { return _state; }
 
-    bool submit(vk::Queue queue) {
+    bool submit(vk::Queue queue, const CommandQueue::SubmitParameters & sp) {
         // verify the command buffer state
         if (_state == RECORDING) {
             // end the command buffer
@@ -164,41 +163,55 @@ public:
             return false;
         }
 
-        // create fence and semaphore
-        RVI_ASSERT(!_fence && !_semaphore);
-        auto fence     = _gi->device.createFenceUnique({});
+        // setup signal fence
+        RVI_ASSERT(!_builtInSubmissionFence);
+        auto fence = sp.signalFence;
+        if (!fence) {
+            _builtInSubmissionFence = _gi->device.createFenceUnique({});
+            setVkObjectName(_gi->device, _builtInSubmissionFence.get(), _name);
+            fence = _builtInSubmissionFence.get();
+        }
+
+        // setup signal semaphore
+        RVI_ASSERT(!_semaphore);
         auto semaphore = _gi->device.createSemaphoreUnique({});
-        setVkObjectName(_gi->device, fence.get(), _name);
         setVkObjectName(_gi->device, semaphore.get(), _name);
+        std::vector<vk::Semaphore> signalSemaphores(sp.signalSemaphores.begin(), sp.signalSemaphores.end());
+        signalSemaphores.push_back(semaphore.get());
+
+        // setup wait semaphore flag array
+        std::vector<vk::PipelineStageFlags> flags(sp.waitSemaphores.size(), vk::PipelineStageFlagBits::eBottomOfPipe);
 
         // submit the command buffer
         vk::SubmitInfo si;
-        si.setSignalSemaphoreCount(1);
-        si.setPSignalSemaphores(&semaphore.get());
+        si.setWaitSemaphores(sp.waitSemaphores);
+        si.setSignalSemaphores(signalSemaphores);
         si.setCommandBufferCount(1);
         si.setPCommandBuffers(&_handle);
-        queue.submit({si}, fence.get());
+        si.setPWaitDstStageMask(flags.data());
+        queue.submit({si}, fence);
 
         // done
-        _state     = EXECUTING;
-        _fence     = fence.release();
-        _semaphore = semaphore.release();
+        _state          = EXECUTING;
+        _effectiveFence = fence; // store the fence handle (could be user provided or built-in)
+        _semaphore      = semaphore.release();
         return true;
     }
 
     // wait for the command buffer to finish executing on GPU.
     void finish() {
         if (EXECUTING == _state) {
-            RVI_ASSERT(_fence);
-            auto result = _gi->device.waitForFences({_fence}, true, UINT64_MAX);
+            RVI_ASSERT(_effectiveFence);
+            auto result = _gi->device.waitForFences({_effectiveFence}, true, UINT64_MAX);
             if (result != vk::Result::eSuccess) { RAPID_VULKAN_LOG_ERROR("[ERROR] Command buffer %s failed to wait for fence!", _name.c_str()); }
             _state = FINISHED;
         }
     }
 
     /// Only called on pending command buffers and unconditionally mark it as finished.
+    /// Should only be called on a pending or already finished command buffer.
     void setFinished() {
-        RVI_ASSERT(_state == EXECUTING);
+        RVI_ASSERT(_state == EXECUTING || _state == FINISHED);
         _state = FINISHED;
     }
 
@@ -207,10 +220,11 @@ private:
     std::string            _name;
     vk::CommandPool        _pool; // one pool for each command buffer for simplicity for now.
     vk::CommandBuffer      _handle {};
-    vk::CommandBufferLevel _level     = vk::CommandBufferLevel::ePrimary;
-    State                  _state     = RECORDING;
-    vk::Fence              _fence     = nullptr;
-    vk::Semaphore          _semaphore = nullptr;
+    vk::CommandBufferLevel _level = vk::CommandBufferLevel::ePrimary;
+    State                  _state = RECORDING;
+    vk::UniqueFence        _builtInSubmissionFence;
+    vk::Fence              _effectiveFence = nullptr;
+    vk::Semaphore          _semaphore      = nullptr;
 };
 
 class CommandQueue::Impl {
@@ -234,14 +248,14 @@ public:
         return h;
     }
 
-    void submit(vk::CommandBuffer cb) {
+    void submit(const SubmitParameters & sp) {
         auto lock = std::lock_guard {_mutex};
 
         // check the incoming pointer
-        auto p = promote(cb);
+        auto p = promote(sp.commands);
         if (!p) return; // TODO: maybe allow submitting a command buffer that is not created by this queue?
 
-        if (!p->submit(_desc.handle)) return;
+        if (!p->submit(_desc.handle, sp)) return;
 
         // Done. add the command buffer to the pending list.
         p->pending = _pendings.insert(_pendings.end(), p);
@@ -253,7 +267,7 @@ public:
             waitIdle();
             return;
         }
-        auto p = promote(cb);
+        auto p = promote(cb, true); // could be null if the command buffer is already finished.
         if (!p) return;
         finish(p);
     }
@@ -269,11 +283,11 @@ private:
     Desc             _desc;
 
 private:
-    CommandBuffer * promote(vk::CommandBuffer cb) const {
+    CommandBuffer * promote(vk::CommandBuffer cb, bool expectedNull = false) const {
         if (!cb) return nullptr;
         auto it = _all.find(cb);
         if (it == _all.end()) {
-            RAPID_VULKAN_LOG_ERROR("Invalid command buffer handle.");
+            if (!expectedNull) RAPID_VULKAN_LOG_ERROR("Invalid command buffer handle.");
             return nullptr;
         }
         return it->second.get();
@@ -286,10 +300,12 @@ private:
                 RAPID_VULKAN_LOG_ERROR("Can't finish command buffer %s: buffer was not in EXECUTING or FINISHED state.", p->name().c_str());
                 return;
             }
+            RAPID_VULKAN_ASSERT(std::find(_pendings.begin(), _pendings.end(), p) != _pendings.end());
         }
 
         // Mark this command buffer and all command buffers submitted before it as finished.
-        auto end = p ? p->pending++ : _pendings.end();
+        auto end = p ? p->pending : _pendings.end();
+        if (p) end++;
         for (auto iter = _pendings.begin(); iter != end; ++iter) {
             auto cb = *iter;
             cb->setFinished();
@@ -317,7 +333,7 @@ CommandQueue::CommandQueue(const ConstructParameters & params): Root(params), _i
 CommandQueue::~CommandQueue() { delete _impl; }
 auto CommandQueue::desc() const -> const Desc & { return _impl->desc(); }
 auto CommandQueue::begin(const char * purpose, vk::CommandBufferLevel level) -> vk::CommandBuffer { return _impl->begin(purpose, level); }
-auto CommandQueue::submit(vk::CommandBuffer cb) -> void { _impl->submit(cb); }
+auto CommandQueue::submit(const SubmitParameters & sp) -> void { _impl->submit(sp); }
 auto CommandQueue::wait(vk::CommandBuffer cb) -> void { _impl->wait(cb); }
 
 // *********************************************************************************************************************
@@ -448,7 +464,7 @@ public:
         auto queue = CommandQueue({{_owner.name()}, _gi, params.queueFamily, params.queueIndex});
         if (auto cb = queue.begin(_owner.name().c_str(), vk::CommandBufferLevel::ePrimary)) {
             staging.cmdCopy({cb, _owner.handle(), _desc.size, dstOffset, 0, size});
-            queue.submit(cb);
+            queue.submit({cb});
             queue.wait(cb);
         }
     }
@@ -467,7 +483,7 @@ public:
         auto queue   = CommandQueue({{_owner.name()}, _gi, params.queueFamily, params.queueIndex});
         if (auto cb = queue.begin(_owner.name().c_str(), vk::CommandBufferLevel::ePrimary)) {
             cmdCopy({cb, staging.handle(), size, 0, offset});
-            queue.submit(cb);
+            queue.submit({cb});
             queue.wait(cb);
         } else {
             return {};
@@ -503,7 +519,7 @@ public:
         }
         // TODO: VMA
         // if (allocation) {
-        //     PH_REQUIRE(global->vmaAllocator);
+        //     RVI_REQUIRE(global->vmaAllocator);
         //     RVI_VK_VERIFY(vmaMapMemory(global->vmaAllocator, allocation, (void **) &dst));
         //     dst += offsetInUnitOfT;
         // } else {
@@ -835,38 +851,11 @@ struct VkFormatDesc {
     }
 };
 
-static vk::ImageAspectFlags determineImageAspect(vk::ImageAspectFlags aspect, vk::Format format) {
-    switch (format) {
-    // depth only format
-    case vk::Format::eD16Unorm:
-    case vk::Format::eD32Sfloat:
-    case vk::Format::eX8D24UnormPack32:
-        return vk::ImageAspectFlagBits::eDepth;
-
-    // stencil only format
-    case vk::Format::eS8Uint:
-        return vk::ImageAspectFlagBits::eStencil;
-
-    // depth + stencil format
-    case vk::Format::eD16UnormS8Uint:
-    case vk::Format::eD24UnormS8Uint:
-    case vk::Format::eD32SfloatS8Uint:
-        if (vk::ImageAspectFlagBits::eDepth == aspect || vk::ImageAspectFlagBits::eStencil == aspect)
-            return aspect;
-        else
-            return vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil;
-
-    // TODO: multi-planer formats
-
-    // default format
-    default:
-        return vk::ImageAspectFlagBits::eColor;
-    }
-}
-
 class Image::Impl {
 public:
     Impl(Image & o, const ConstructParameters & cp): _owner(o), _gi(cp.gi), _cp(cp) {
+        RVI_REQUIRE(cp.gi);
+
         // check image format.
         auto fd = VkFormatDesc::get(_cp.info.format);
         if (0 == fd.sizeBytes || 0 == fd.blockW || 0 == fd.blockH) { RVI_THROW("unsupported image format %d", (int) _cp.info.format); }
@@ -941,7 +930,7 @@ public:
 
     vk::ImageView getView(GetViewParameters p) const {
         if (p.format == vk::Format::eUndefined) p.format = _desc.format;
-        p.range.aspectMask = determineImageAspect(p.range.aspectMask, p.format);
+        p.range.aspectMask = determineImageAspect(p.format, p.range.aspectMask);
         p.type             = determineViewType(p.type, p.range);
         if ((int) p.type < 0) return {};
         auto & view = _views[p];
@@ -990,7 +979,7 @@ public:
         staging.unmap();
 
         // determine subresource aspect
-        auto aspect = determineImageAspect({}, _desc.format);
+        auto aspect = determineImageAspect(_desc.format);
 
         // Setup buffer copy regions for the subresource
         auto copyRegion = vk::BufferImageCopy()
@@ -1007,9 +996,9 @@ public:
                 .s(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer)
                 .i(_handle, vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead, vk::ImageLayout::eUndefined,
                    vk::ImageLayout::eTransferDstOptimal, r)
-                .write(c);
+                .cmdWrite(c);
             c.copyBufferToImage(staging, _handle, vk::ImageLayout::eTransferDstOptimal, {copyRegion});
-            q.submit(c);
+            q.submit({c});
             q.wait(c);
         }
     }
@@ -1024,7 +1013,7 @@ public:
         // if (0 == levelCount || 0 == layerCount) return {};
 
         auto formatDesc = VkFormatDesc::get(_desc.format);
-        auto aspect     = determineImageAspect({}, _desc.format);
+        auto aspect     = determineImageAspect(_desc.format);
         auto mipExtents = buildMipExtentArray();
 
         Content                          content;
@@ -1059,9 +1048,9 @@ public:
                 .s(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer)
                 .i(_handle, vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead, vk::ImageLayout::eUndefined,
                    vk::ImageLayout::eTransferSrcOptimal, r)
-                .write(c);
+                .cmdWrite(c);
             c.copyImageToBuffer(_handle, vk::ImageLayout::eTransferSrcOptimal, staging, copyRegions);
-            q.submit(c);
+            q.submit({c});
             q.wait(c);
         }
 
@@ -1163,6 +1152,35 @@ private:
     }
 };
 
+vk::ImageAspectFlags Image::determineImageAspect(vk::Format format, vk::ImageAspectFlags aspect) {
+    switch (format) {
+    // depth only format
+    case vk::Format::eD16Unorm:
+    case vk::Format::eD32Sfloat:
+    case vk::Format::eX8D24UnormPack32:
+        return vk::ImageAspectFlagBits::eDepth;
+
+    // stencil only format
+    case vk::Format::eS8Uint:
+        return vk::ImageAspectFlagBits::eStencil;
+
+    // depth + stencil format
+    case vk::Format::eD16UnormS8Uint:
+    case vk::Format::eD24UnormS8Uint:
+    case vk::Format::eD32SfloatS8Uint:
+        if (vk::ImageAspectFlagBits::eDepth == aspect || vk::ImageAspectFlagBits::eStencil == aspect)
+            return aspect;
+        else
+            return vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil;
+
+    // TODO: multi-planer formats
+
+    // default format
+    default:
+        return vk::ImageAspectFlagBits::eColor;
+    }
+}
+
 Image::Image(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this, cp); }
 Image::~Image() { delete _impl; }
 auto Image::desc() const -> const Desc & { return _impl->desc(); }
@@ -1184,6 +1202,117 @@ Shader::Shader(const ConstructParameters & params): Root(params), _gi(params.gi)
 }
 
 Shader::~Shader() { _gi->safeDestroy(_handle); }
+
+// *********************************************************************************************************************
+// Render Pass
+// *********************************************************************************************************************
+
+RenderPass::ConstructParameters & RenderPass::ConstructParameters::simple(vk::ArrayProxy<const vk::Format> colors, vk::Format depth, bool clear, bool store) {
+    // initialize attachment array
+    for (auto c : colors) {
+        attachments.push_back(vk::AttachmentDescription()
+                                  .setFormat(c)
+                                  .setLoadOp(clear ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad)
+                                  .setStoreOp(store ? vk::AttachmentStoreOp::eStore : vk::AttachmentStoreOp::eDontCare)
+                                  .setInitialLayout(vk::ImageLayout::eColorAttachmentOptimal)
+                                  .setFinalLayout(vk::ImageLayout::eColorAttachmentOptimal));
+    }
+    if (vk::Format::eUndefined != depth) {
+        auto d = vk::AttachmentDescription();
+        d.setFormat(depth)
+            .setLoadOp(clear ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad)
+            .setStoreOp(store ? vk::AttachmentStoreOp::eStore : vk::AttachmentStoreOp::eDontCare)
+            .setStencilLoadOp(d.loadOp)
+            .setStencilStoreOp(d.storeOp)
+            .setInitialLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal)
+            .setFinalLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal);
+        attachments.push_back(d);
+    }
+
+    // create subpass array
+    subpasses.resize(1);
+    auto & subpass0 = subpasses[0];
+    for (uint32_t i = 0; i < colors.size(); ++i) subpass0.colors.push_back(vk::AttachmentReference(i, vk::ImageLayout::eColorAttachmentOptimal));
+    if (vk::Format::eUndefined != depth) {
+        subpass0.depth = vk::AttachmentReference((uint32_t) colors.size(), vk::ImageLayout::eDepthStencilAttachmentOptimal);
+    }
+
+    //// Create an external dependency to ensure previous rendering to color and depth buffers are done before this render pass begins.
+    // dependencies.push_back(vk::SubpassDependency(
+    //     VK_SUBPASS_EXTERNAL, 0, vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eLateFragmentTests,
+    //     vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests,
+    //     vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite,
+    //     vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentRead));
+
+    // done
+    return *this;
+}
+
+RenderPass::RenderPass(const ConstructParameters & cp): Root(cp), _gi(cp.gi) {
+    RVI_REQUIRE(cp.subpasses.size() > 0);
+    std::vector<vk::SubpassDescription> subpasses;
+    for (const auto & s : cp.subpasses) {
+        auto desc = vk::SubpassDescription({}, vk::PipelineBindPoint::eGraphics).setInputAttachments(s.inputs).setColorAttachments(s.colors);
+        if (s.depth.has_value()) desc.setPDepthStencilAttachment(&s.depth.value());
+        subpasses.push_back(desc);
+    }
+
+    vk::RenderPassCreateInfo ci(cp.flags);
+    ci.setAttachments(cp.attachments);
+    ci.setSubpasses(subpasses);
+    ci.setDependencies(cp.dependencies);
+    _handle = _gi->device.createRenderPass(ci, _gi->allocator);
+
+#if RAPID_VULKAN_ENABLE_DEBUG_BUILD
+    _cp = cp;
+    (void) _cp;
+#endif
+}
+
+RenderPass::~RenderPass() { _gi->safeDestroy(_handle); }
+
+void RenderPass::cmdBegin(vk::CommandBuffer cb, vk::RenderPassBeginInfo info) const {
+    info.setRenderPass(_handle);
+    cb.beginRenderPass(info, vk::SubpassContents::eInline);
+}
+
+void RenderPass::cmdNext(vk::CommandBuffer cb) const { cb.nextSubpass(vk::SubpassContents::eInline); }
+
+void RenderPass::cmdEnd(vk::CommandBuffer cb) const { cb.endRenderPass(); }
+
+void RenderPass::onNameChanged(const std::string &) {
+    if (_handle) setVkObjectName(_gi->device, _handle, name());
+}
+
+// *********************************************************************************************************************
+// Framebuffer
+// *********************************************************************************************************************
+
+Framebuffer::ConstructParameters & Framebuffer::ConstructParameters::addImage(Image & image) {
+    const auto & d = image.desc();
+    // Can't add 3D texture as framebuffer.
+    RVI_REQUIRE(d.extent.depth == 1);
+    // Can't add image with mipmaps as framebuffer. If you want to that, you'll need to manually create a view
+    // for one of the mipmap levels and add that view instead.
+    RVI_REQUIRE(d.mipLevels == 1);
+    // Verify the image's extent matches existing value when there are already attachments.
+    if (attachments.size() > 0) { RVI_REQUIRE(width == d.extent.width && height == d.extent.height && layers == d.arrayLayers); }
+    setExtent(d.extent.width, d.extent.height, d.arrayLayers);
+    attachments.emplace_back(image.getView({}));
+    return *this;
+}
+
+Framebuffer::Framebuffer(const ConstructParameters & cp): Root(cp), _gi(cp.gi) {
+    vk::FramebufferCreateInfo ci({}, cp.pass);
+    ci.setAttachments(cp.attachments).setWidth((uint32_t) cp.width).setHeight((uint32_t) cp.height).setLayers((uint32_t) 1);
+    _handle = _gi->device.createFramebuffer(ci, _gi->allocator);
+}
+
+Framebuffer::~Framebuffer() { _gi->safeDestroy(_handle); }
+
+void Framebuffer::onNameChanged(const std::string &) {
+    if (_handle) setVkObjectName(_gi->device, _handle, name());
+}
 
 // *********************************************************************************************************************
 // Argument and ArgumentPack
@@ -1428,10 +1557,10 @@ template<typename T, typename FUNC, typename... ARGS>
 static std::vector<T *> enumerateShaderVariables(SpvReflectShaderModule & module, FUNC func, ARGS... args) {
     uint32_t count  = 0;
     auto     result = func(&module, args..., &count, nullptr);
-    RVI_VERIFY(result == SPV_REFLECT_RESULT_SUCCESS);
+    RVI_REQUIRE(result == SPV_REFLECT_RESULT_SUCCESS);
     std::vector<T *> v(count);
     result = func(&module, args..., &count, v.data());
-    RVI_VERIFY(result == SPV_REFLECT_RESULT_SUCCESS);
+    RVI_REQUIRE(result == SPV_REFLECT_RESULT_SUCCESS);
     return v;
 }
 
@@ -1520,13 +1649,16 @@ static PipelineReflection reflectShaders(const std::string & pipelineName, vk::A
     std::vector<SpvReflectShaderModule> modules;
 
     for (const auto & shader : shaders) {
-        // Generate reflection data for a shader
+        // ignore null shader pointer
+        if (!shader) continue;
+
+        // Ignore shader w/o spirv code
         auto spirv = shader->spirv();
         if (spirv.empty()) continue;
 
         SpvReflectShaderModule module;
         SpvReflectResult       result = spvReflectCreateShaderModule(spirv.size() * sizeof(uint32_t), spirv.data(), &module);
-        RVI_VERIFY(result == SPV_REFLECT_RESULT_SUCCESS);
+        RVI_REQUIRE(result == SPV_REFLECT_RESULT_SUCCESS);
 
         // Extract descriptor sets from each shader, then merge together.
         auto sets = enumerateShaderVariables<SpvReflectDescriptorSet>(module, spvReflectEnumerateEntryPointDescriptorSets, shader->entry().c_str());
@@ -1581,9 +1713,8 @@ static PipelineReflection reflectShaders(const std::string & pipelineName, vk::A
 class PipelineLayout::Impl {
 public:
     Impl(PipelineLayout & owner, vk::ArrayProxy<const Shader * const> shaders): _owner(owner) {
-        // make sure shader array is not empty.
-        RVI_VERIFY(shaders.size() > 0);
-        for (auto s : shaders) RVI_VERIFY(s);
+        // make sure shader array is not empty and the first shader is not null.
+        RVI_REQUIRE(shaders.size() > 0 && shaders.front());
 
         _gi         = shaders.front()->gi();
         _reflection = reflectShaders(owner.name(), shaders);
@@ -1785,7 +1916,8 @@ public:
     vk::PipelineBindPoint bindPoint;
 
     Impl(Pipeline & owner, vk::ArrayProxy<const Shader * const> shaders) {
-        if (shaders.empty()) return; // empty pipeline is not an error.
+        // The first shader must be valid.
+        RVI_REQUIRE(shaders.size() > 0 && shaders.front(), "Failed to create pipeline layout: the first shader in the shader array must be valid.");
         _gi = shaders.front()->gi();
         // TODO: reuse layout via a cache object?
         _layout.reset(new PipelineLayout({{owner.name()}, shaders}));
@@ -1808,22 +1940,424 @@ auto Pipeline::layout() const -> const PipelineLayout & { return _impl->layout()
 void Pipeline::cmdBind(vk::CommandBuffer cb, const ArgumentPack & ap) const { return _impl->cmdBind(cb, ap); }
 
 // *********************************************************************************************************************
+// Graphics Pipeline
+// *********************************************************************************************************************
+
+GraphicsPipeline::GraphicsPipeline(const ConstructParameters & params): Pipeline(params.name, {params.vs, params.fs}) {
+    // create shader stage array
+    RVI_REQUIRE(params.vs, "Vertex shader is required for graphics pipeline.");
+    auto gi           = params.vs->gi();
+    auto shaderStages = std::vector<vk::PipelineShaderStageCreateInfo>();
+    shaderStages.push_back({{}, vk::ShaderStageFlagBits::eVertex, params.vs->handle(), params.vs->entry().c_str()});
+    if (params.fs) shaderStages.push_back({{}, vk::ShaderStageFlagBits::eFragment, params.fs->handle(), params.fs->entry().c_str()});
+
+    // setup vertex input stage
+    auto vertex = vk::PipelineVertexInputStateCreateInfo().setVertexAttributeDescriptions(params.va).setVertexBindingDescriptions(params.vb);
+
+    // setup dynamic states
+    auto dynamic  = vk::PipelineDynamicStateCreateInfo().setDynamicStates(params.dynamic);
+    bool dynaView = false, dynaScissor = false;
+    for (auto s : params.dynamic) {
+        if (vk::DynamicState::eViewportWithCount == s)
+            dynaView = true;
+        else if (vk::DynamicState::eScissorWithCount == s)
+            dynaScissor = true;
+    }
+
+    // setup viewport stage
+    auto viewport = vk::PipelineViewportStateCreateInfo();
+    if (!dynaView) {
+        RVI_REQUIRE(params.viewports.size() > 0);
+        viewport.setViewports(params.viewports);
+    }
+    if (!dynaScissor) {
+        RVI_REQUIRE(params.scissors.size() > 0);
+        viewport.setScissors(params.scissors);
+    }
+
+    // setup blend stage
+    auto blend           = vk::PipelineColorBlendStateCreateInfo {}.setAttachments(params.attachments);
+    blend.blendConstants = params.blendConstants;
+
+    // setup the create info
+    auto ci = vk::GraphicsPipelineCreateInfo({}, (uint32_t) shaderStages.size(), shaderStages.data(), &vertex, &params.ia, &params.tess, &viewport,
+                                             &params.rast, &params.msaa, &params.depth, &blend, &dynamic, layout().handle(), params.pass, params.subpass,
+                                             params.baseHandle, params.baseIndex);
+
+    // create the shader.
+    _impl->handle    = gi->device.createGraphicsPipeline(nullptr, ci, gi->allocator).value;
+    _impl->bindPoint = vk::PipelineBindPoint::eGraphics;
+}
+
+void GraphicsPipeline::cmdDraw(vk::CommandBuffer cb, const DrawParameters & dp) {
+    cb.bindPipeline(vk::PipelineBindPoint::eGraphics, _impl->handle);
+
+    // bind vertex buffers
+    if (dp.vertexBuffers.size() > 0) {
+        RVI_REQUIRE(dp.vertexBuffers.size() <= 16); // TODO: use a stack_array class to remove this limitation.
+        vk::Buffer     buffers[16];
+        vk::DeviceSize offsets[16];
+        for (size_t i = 0; i < dp.vertexBuffers.size(); ++i) {
+            const auto & view = dp.vertexBuffers.data()[i];
+            RVI_REQUIRE(!view.buffer, "Empty vertex buffer is not allowed.");
+            buffers[i] = view.buffer;
+            offsets[i] = view.offset;
+            // TODO: validate vertex buffer size on debug build.
+        }
+        cb.bindVertexBuffers(0, (uint32_t) dp.vertexBuffers.size(), buffers, offsets);
+    }
+
+    if (dp.indexBuffer.buffer) {
+        // indexed draw
+        cb.bindIndexBuffer(dp.indexBuffer.buffer, dp.indexBuffer.offset, dp.indexBuffer.indexType);
+        cb.drawIndexed(dp.indexCount, dp.instanceCount, dp.firstIndex, dp.vertexOffset, dp.firstInstance);
+    } else {
+        // non-indexed draw
+        cb.draw(dp.vertexCount, dp.instanceCount, dp.firstVertex, dp.firstInstance);
+    }
+}
+
+// *********************************************************************************************************************
 // Compute Pipeline
 // *********************************************************************************************************************
 
-ComputePipeline::ComputePipeline(const ConstructParameters & params): Pipeline(params.name, {&params.cs}) {
+ComputePipeline::ComputePipeline(const ConstructParameters & params): Pipeline(params.name, {params.cs}) {
     vk::ComputePipelineCreateInfo ci;
-    ci.setStage({{}, vk::ShaderStageFlagBits::eCompute, params.cs.handle(), params.cs.entry().c_str()});
+    ci.setStage({{}, vk::ShaderStageFlagBits::eCompute, params.cs->handle(), params.cs->entry().c_str()});
     ci.setLayout(layout().handle());
-    auto gi          = params.cs.gi();
+    auto gi          = params.cs->gi();
     _impl->handle    = gi->device.createComputePipeline(nullptr, ci, gi->allocator).value;
     _impl->bindPoint = vk::PipelineBindPoint::eCompute;
 }
 
 void ComputePipeline::cmdDispatch(vk::CommandBuffer cb, const DispatchParameters & dp) {
     cb.bindPipeline(vk::PipelineBindPoint::eCompute, _impl->handle);
-    cb.dispatch(dp.width, dp.height, dp.depth);
+    cb.dispatch((uint32_t) dp.width, (uint32_t) dp.height, (uint32_t) dp.depth);
 }
+
+// *********************************************************************************************************************
+// Swapchain
+// *********************************************************************************************************************
+
+Swapchain::ConstructParameters & Swapchain::ConstructParameters::setDevice(const Device & d) {
+    gi                  = d.gi();
+    surface             = d.surface();
+    presentQueueFamily  = d.present()->family();
+    presentQueueIndex   = d.present()->index();
+    graphicsQueueFamily = d.graphics()->family();
+    graphicsQueueIndex  = d.graphics()->index();
+    return *this;
+}
+
+class Swapchain::Impl {
+public:
+    Impl(Swapchain & o, const ConstructParameters & cp): _owner(o), _cp(cp) {
+        RVI_REQUIRE(cp.gi);
+
+        // retrieve present queue handle.
+        RVI_REQUIRE(cp.presentQueueFamily != VK_QUEUE_FAMILY_IGNORED);
+        _presentQueue = cp.gi->device.getQueue(cp.presentQueueFamily, cp.presentQueueIndex);
+        RVI_REQUIRE(_presentQueue);
+
+        // Construct a CommandQueue instance for graphics queue.
+        if (_cp.graphicsQueueFamily == VK_QUEUE_FAMILY_IGNORED) {
+            _cp.graphicsQueueFamily = cp.presentQueueFamily;
+            _cp.graphicsQueueIndex  = cp.presentQueueIndex;
+        }
+        _graphicsQueue.reset(
+            new CommandQueue(CommandQueue::ConstructParameters {{"swapchain graphics queue"}, cp.gi, _cp.graphicsQueueFamily, _cp.graphicsQueueIndex}));
+
+        // check if the back buffer format is supported.
+        auto supportedFormats = cp.gi->physical.getSurfaceFormatsKHR(cp.surface);
+        if (_cp.backbufferFormat == vk::Format::eUndefined) {
+            // use the first supported format.
+            RVI_REQUIRE(supportedFormats.size() > 0);
+            _cp.backbufferFormat = supportedFormats[0].format;
+        } else {
+            // check if the specified format is supported.
+            bool supported = false;
+            for (auto f : supportedFormats) {
+                if (f.format == _cp.backbufferFormat) {
+                    supported = true;
+                    break;
+                }
+            }
+            RVI_REQUIRE(supported, "The specified back buffer format is not supported.");
+        }
+
+        // create the built-in render pass
+        auto params = RenderPass::ConstructParameters {{"swapchain dummy render pass"}, cp.gi}.simple({_cp.backbufferFormat}, _cp.depthStencilFormat);
+        // We want the color buffer be in presentable layout before and after the render pass. So it can seamlessly connected with the present() call.
+        params.attachments[0].setInitialLayout(DESIRED_PRESENT_STATUS.layout).setFinalLayout(DESIRED_PRESENT_STATUS.layout);
+        _renderPass.reset(new RenderPass(params));
+
+        recreateSwapchain();
+
+        // begin the first frame.
+        beginFrame();
+    }
+
+    ~Impl() {
+        clearSwapchain();
+        _renderPass.reset();
+        _graphicsQueue.reset();
+        _presentQueue = nullptr;
+    }
+
+    const RenderPass & renderPass() const { return *_renderPass; }
+
+    void cmdBeginBuiltInRenderPass(vk::CommandBuffer cb, const BeginRenderPassParameters & params) {
+        auto bb = currentFrame().backbuffer;
+
+        // transition back buffer layout if necessary.
+        if (params.backbufferStatus.layout != DESIRED_PRESENT_STATUS.layout) {
+            Barrier()
+                .i(bb->image, params.backbufferStatus.access, DESIRED_PRESENT_STATUS.access, params.backbufferStatus.layout, DESIRED_PRESENT_STATUS.layout,
+                   vk::ImageAspectFlagBits::eColor)
+                .s(params.backbufferStatus.stages, DESIRED_PRESENT_STATUS.stages)
+                .cmdWrite(cb);
+        }
+
+        // set dynamic viewport and scissor
+        cb.setViewportWithCount(vk::Viewport(0, 0, (float) bb->extent.width, (float) bb->extent.height, 0, 1));
+        cb.setScissorWithCount(vk::Rect2D({0, 0}, bb->extent));
+
+        std::array cv = {vk::ClearValue().setColor(params.color), vk::ClearValue().setDepthStencil(params.depth)};
+        _renderPass->cmdBegin(cb, vk::RenderPassBeginInfo {{}, bb->fb->handle(), vk::Rect2D({0, 0}, bb->extent)}.setClearValues(cv));
+    }
+
+    void cmdEndBuiltInRenderPass(vk::CommandBuffer cb) {
+        _renderPass->cmdEnd(cb);
+        auto bb    = (Backbuffer *) currentFrame().backbuffer;
+        bb->status = {vk::ImageLayout::ePresentSrcKHR, vk::AccessFlagBits::eMemoryRead, vk::PipelineStageFlagBits::eBottomOfPipe};
+    }
+
+    const Frame & currentFrame() const { return _frames[_frameIndex % std::size(_frames)]; }
+
+    void present(const PresentParameters & pp) {
+        auto & frame = (FrameImpl &) currentFrame();
+        auto   bb    = (Backbuffer *) frame.backbuffer;
+
+        // end the frame, optionally transition the backbuffer image to present layout.
+        auto cb = _graphicsQueue->begin("frame end");
+        if (pp.backbufferStatus.layout != DESIRED_PRESENT_STATUS.layout) {
+            Barrier()
+                .i(bb->image, pp.backbufferStatus.access, DESIRED_PRESENT_STATUS.access, pp.backbufferStatus.layout, DESIRED_PRESENT_STATUS.layout,
+                   vk::ImageAspectFlagBits::eColor)
+                .s(pp.backbufferStatus.stages, DESIRED_PRESENT_STATUS.stages)
+                .cmdWrite(cb);
+            bb->status = DESIRED_PRESENT_STATUS;
+        } else {
+            bb->status = pp.backbufferStatus;
+        }
+        _graphicsQueue->submit({cb, {}, {frame.renderFinished}, {frame.frameEndSemaphore}});
+
+        // prsent current frame.
+        auto presentInfo = vk::PresentInfoKHR().setSwapchains({_handle}).setImageIndices({frame.imageIndex}).setWaitSemaphores({frame.frameEndSemaphore});
+        auto result      = _presentQueue.presentKHR(&presentInfo);
+        if (vk::Result::eSuccess == result) {
+            // Store the frame end command buffer. it'll be used later to wait for the frame to be available again to further use.
+            frame.frameAvailable = cb;
+        } else if (result == vk::Result::eSuboptimalKHR || result == vk::Result::eErrorOutOfDateKHR) {
+            // this means window/surface size is changed, we need to recreate the swapchain.
+            _graphicsQueue->wait();
+            recreateSwapchain();
+        } else {
+            RVI_THROW("Failed to present swapchain image. result = %s", vk::to_string((vk::Result) result).c_str());
+        }
+
+        // then start a new frame.
+        ++_frameIndex;
+        beginFrame();
+    }
+
+private:
+    struct FrameImpl : public Frame {
+        uint32_t          imageIndex {};
+        vk::Semaphore     frameEndSemaphore {};
+        vk::CommandBuffer frameAvailable {};
+    };
+
+private:
+    Swapchain &         _owner;
+    ConstructParameters _cp;
+    Ref<RenderPass>     _renderPass;
+    int64_t             _frameIndex = 0;
+    vk::Queue           _presentQueue;
+    Ref<CommandQueue>   _graphicsQueue;
+
+    // the following are data members that will be cleared and recreated when swapchain is recreated.
+    std::vector<FrameImpl>  _frames;
+    vk::SwapchainKHR        _handle;
+    std::vector<Backbuffer> _backbuffers;
+    Ref<Image>              _depthBuffer;
+
+    inline static constexpr BackbufferStatus DESIRED_PRESENT_STATUS = PresentParameters().backbufferStatus;
+
+private:
+    void clearSwapchain() {
+        for (auto & bb : _backbuffers) {
+            bb.fb.clear();
+            _cp.gi->safeDestroy(bb.view);
+        }
+        _backbuffers.clear();
+        _depthBuffer.clear();
+        _cp.gi->safeDestroy(_handle);
+        for (auto & f : _frames) {
+            _cp.gi->safeDestroy(f.imageAvailable);
+            _cp.gi->safeDestroy(f.renderFinished);
+            _cp.gi->safeDestroy(f.frameEndSemaphore);
+        }
+        _frames.clear();
+    }
+
+    void recreateSwapchain() {
+        clearSwapchain();
+        auto gi = _cp.gi;
+
+        // determine the swapchain size
+        auto surfaceCaps = gi->physical.getSurfaceCapabilitiesKHR(_cp.surface);
+        auto w           = (uint32_t) _cp.width;
+        auto h           = (uint32_t) _cp.height;
+        if (0 == w) w = (uint32_t) surfaceCaps.currentExtent.width;
+        if (0 == h) h = (uint32_t) surfaceCaps.currentExtent.height;
+        RAPID_VULKAN_LOG_INFO("Swapchain resolution = %ux%u", w, h);
+
+        // if present and graphics queue are different, we need to add both of them to the queue list.
+        std::vector<uint32_t> queueIndices;
+        if (_cp.graphicsQueueFamily != _cp.presentQueueFamily) {
+            queueIndices.push_back(_cp.graphicsQueueFamily);
+            queueIndices.push_back(_cp.presentQueueFamily);
+        }
+
+        // Determine image count. Added 1 to minimal account to allow at least one GPU frame in flight.
+        uint32_t backbufferCount = std::max(surfaceCaps.minImageCount + 1,
+                                            std::min<uint32_t>((uint32_t) _cp.maxFramesInFlight + surfaceCaps.minImageCount, surfaceCaps.maxImageCount));
+
+        // Select an supported alpha composite flag
+        vk::CompositeAlphaFlagBitsKHR compositeAlpha;
+        if (vk::CompositeAlphaFlagBitsKHR::eOpaque & surfaceCaps.supportedCompositeAlpha)
+            compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque;
+        else if (vk::CompositeAlphaFlagBitsKHR::ePreMultiplied & surfaceCaps.supportedCompositeAlpha)
+            compositeAlpha = vk::CompositeAlphaFlagBitsKHR::ePreMultiplied;
+        else if (vk::CompositeAlphaFlagBitsKHR::ePostMultiplied & surfaceCaps.supportedCompositeAlpha)
+            compositeAlpha = vk::CompositeAlphaFlagBitsKHR::ePostMultiplied;
+        else if (vk::CompositeAlphaFlagBitsKHR::eInherit & surfaceCaps.supportedCompositeAlpha)
+            compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eInherit;
+        else
+            RVI_THROW("Can't find a good alpha composite flag.");
+
+        // create the swapchain
+        auto swapchainCreateInfo =
+            vk::SwapchainCreateInfoKHR()
+                .setSurface(_cp.surface)
+                .setMinImageCount(backbufferCount)
+                .setImageFormat(_cp.backbufferFormat)
+                .setImageExtent({w, h})
+                .setImageArrayLayers(1)
+                .setImageUsage(vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst)
+                .setImageSharingMode(queueIndices.empty() ? vk::SharingMode::eExclusive : vk::SharingMode::eConcurrent)
+                .setQueueFamilyIndices(queueIndices)
+                .setCompositeAlpha(compositeAlpha)
+                .setPresentMode(_cp.vsync ? vk::PresentModeKHR::eFifo : vk::PresentModeKHR::eImmediate)
+                .setClipped(true)
+                .setPreTransform(vk::SurfaceTransformFlagBitsKHR::eIdentity); // TODO: pass in surfaceCaps.currentTransform here and handle rotation directly in
+                                                                              // rendering code.
+        _handle = gi->device.createSwapchainKHR(swapchainCreateInfo, gi->allocator);
+
+        // acquire swapchain images
+        auto              images = gi->device.getSwapchainImagesKHR(_handle);
+        std::stringstream ss;
+        ss << "Swapchain created with " << images.size() << " images: ";
+        for (const auto & i : images) { ss << " " << std::hex << i; }
+        RAPID_VULKAN_LOG_INFO("%s", ss.str().c_str());
+
+        // create a graphics command buffer to transfer swapchain images to the right layout.
+        auto c = _graphicsQueue->begin("transfer swapchain images to right layout");
+
+        // create depth buffer is requested.
+        if (_cp.depthStencilFormat != vk::Format::eUndefined) {
+            _depthBuffer.reset(new Image(Image::ConstructParameters {{"swapchain depth buffer"}, gi}.setDepth(w, h, _cp.depthStencilFormat)));
+            Barrier()
+                .i(_depthBuffer->handle(), vk::AccessFlagBits::eNone, vk::AccessFlagBits::eNone, vk::ImageLayout::eUndefined,
+                   vk::ImageLayout::eDepthStencilAttachmentOptimal, vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil)
+                .cmdWrite(c);
+        }
+
+        // initialize back buffer array.
+        _backbuffers.resize(images.size());
+        for (size_t i = 0; i < images.size(); ++i) {
+            auto & bb = _backbuffers[i];
+            bb.extent = vk::Extent2D {w, h};
+            bb.format = swapchainCreateInfo.imageFormat;
+            bb.image  = images[i];
+            bb.view   = gi->device.createImageView(vk::ImageViewCreateInfo({}, bb.image, vk::ImageViewType::e2D, _cp.backbufferFormat)
+                                                       .setSubresourceRange({vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}),
+                                                   gi->allocator);
+            setVkObjectName(gi->device, bb.image, format("back buffer image %zu", i));
+            setVkObjectName(gi->device, bb.view, format("back buffer view %zu", i));
+            // TODO: setup default layout.
+
+            // create frame buffer
+            auto fbcp = Framebuffer::ConstructParameters {{format("swapchain framebuffer %zu", i)}, gi}.addImageView(bb.view).setExtent(w, h).setRenderPass(
+                *_renderPass);
+            if (_depthBuffer) fbcp.addImageView(_depthBuffer->getView({}));
+            bb.fb.reset(new Framebuffer(fbcp));
+
+            // transfer backbuffers to right layout.
+            Barrier()
+                .i(bb.image, vk::AccessFlagBits::eNone, DESIRED_PRESENT_STATUS.access, vk::ImageLayout::eUndefined, DESIRED_PRESENT_STATUS.layout,
+                   vk::ImageAspectFlagBits::eColor)
+                .s(vk::PipelineStageFlagBits::eAllCommands, DESIRED_PRESENT_STATUS.stages)
+                .cmdWrite(c);
+        }
+
+        // execute the command buffer to update image layout
+        _graphicsQueue->submit({c});
+        _graphicsQueue->wait();
+
+        // initialize frame array.
+        RVI_ASSERT(_backbuffers.size() > surfaceCaps.minImageCount);
+        _frames.resize(std::max<size_t>(1u, _backbuffers.size() - surfaceCaps.minImageCount));
+        for (size_t i = 0; i < _frames.size(); ++i) {
+            auto & f            = _frames[i];
+            f.imageAvailable    = gi->device.createSemaphore({}, gi->allocator);
+            f.renderFinished    = gi->device.createSemaphore({}, gi->allocator);
+            f.frameEndSemaphore = gi->device.createSemaphore({}, gi->allocator);
+            // f.frameAvailable = gi->device.createFence({vk::FenceCreateFlagBits::eSignaled}, gi->allocator);
+            setVkObjectName(gi->device, f.imageAvailable, format("image available semaphore %zu", i));
+            setVkObjectName(gi->device, f.renderFinished, format("render finished semaphore %zu", i));
+            setVkObjectName(gi->device, f.frameEndSemaphore, format("layout changed semaphore %zu", i));
+            // setVkObjectName(gi->device, f.frameAvailable, format("frame available fence %zu", i));
+        }
+    }
+
+    void beginFrame() {
+        auto & frame = _frames[_frameIndex % std::size(_frames)];
+        frame.index  = _frameIndex;
+
+        // wait for the frame to be available.
+        if (frame.frameAvailable) {
+            _graphicsQueue->wait(frame.frameAvailable);
+            frame.frameAvailable = nullptr; // Clear the command buffer. So we only wait for it once.
+        }
+
+        // Acquire the next available swapchain image
+        frame.imageIndex = _cp.gi->device.acquireNextImageKHR(_handle, uint64_t(-1), frame.imageAvailable).value;
+        RAPID_VULKAN_ASSERT(frame.imageIndex < _backbuffers.size());
+        frame.backbuffer = &_backbuffers[frame.imageIndex];
+    }
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
+//
+Swapchain::Swapchain(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this, cp); }
+Swapchain::~Swapchain() { delete _impl; }
+auto Swapchain::renderPass() const -> const RenderPass & { return _impl->renderPass(); }
+void Swapchain::cmdBeginBuiltInRenderPass(vk::CommandBuffer cb, const BeginRenderPassParameters & bp) { return _impl->cmdBeginBuiltInRenderPass(cb, bp); }
+void Swapchain::cmdEndBuiltInRenderPass(vk::CommandBuffer cb) { return _impl->cmdEndBuiltInRenderPass(cb); }
+auto Swapchain::currentFrame() const -> const Swapchain::Frame & { return _impl->currentFrame(); }
+void Swapchain::present(const PresentParameters & pp) { return _impl->present(pp); }
 
 // *********************************************************************************************************************
 // Device
@@ -2187,7 +2721,7 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
     _gi.apiVersion = _cp.apiVersion;
 
     // check instance pointer
-    RVI_VERIFY(cp.instance);
+    RVI_REQUIRE(cp.instance);
     _gi.instance = cp.instance;
 
     // setup debug callback
@@ -2285,7 +2819,10 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
         _queues[i] = q;
 
         // classify all queues
-        if (!_graphics && f.queueFlags & vk::QueueFlagBits::eGraphics) _graphics = q;
+        if (!_graphics && f.queueFlags & vk::QueueFlagBits::eGraphics) {
+            _graphics               = q;
+            _gi.graphicsQueueFamily = q->family();
+        }
 
         if (!_compute && !(f.queueFlags & vk::QueueFlagBits::eGraphics) && (f.queueFlags & vk::QueueFlagBits::eCompute)) _compute = q;
 
