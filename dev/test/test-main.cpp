@@ -1,7 +1,7 @@
 #include "test-instance.h"
 
 #define CATCH_CONFIG_RUNNER // use custom main function
-#include "../3rd-party/catch2/catch2.hpp"
+#include "../3rd-party/catch2/catch.hpp"
 
 struct EventListener : Catch::TestEventListenerBase {
     using TestEventListenerBase::TestEventListenerBase;

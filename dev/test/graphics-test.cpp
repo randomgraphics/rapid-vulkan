@@ -1,4 +1,4 @@
-#include "../3rd-party/catch2/catch2.hpp"
+#include "../3rd-party/catch2/catch.hpp"
 #include "test-instance.h"
 #include "shader/clear-screen.vert.spv.h"
 #include "shader/clear-screen.frag.spv.h"

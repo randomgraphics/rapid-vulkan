@@ -3,7 +3,7 @@
 from ctypes import util
 import sys, subprocess, os, pathlib, argparse, shutil, glob
 
-import utils
+import importlib; utils = importlib.import_module("rapid-vulkan-utils")
 
 # Run cmake command. the args is list of arguments.
 def cmake(build_dir, cmdline):
@@ -31,6 +31,7 @@ def git(cmdline):
 def update_submodules():
     submodules = [
         # list all submodules here to automatically fetch them as part of the build process.
+        "dev/3rd-party/glfw",
     ]
     for s in submodules:
         dir = sdk_root_dir / s
@@ -44,7 +45,7 @@ def update_submodules():
 def cmake_config(args, build_dir, build_type):
     update_submodules()
     os.makedirs(build_dir, exist_ok=True)
-    config = f"-S {sdk_root_dir} -B {build_dir} -DCMAKE_BUILD_TYPE={build_type} -DCMAKE_C_COMPILER=clang-14 -DCMAKE_CXX_COMPILER=clang++-14"
+    config = f"-S {sdk_root_dir} -B {build_dir} -DCMAKE_BUILD_TYPE={build_type}"
     if args.android_build:
         # Support only arm64 for now
         sdk = pathlib.Path(os.getenv('ANDROID_SDK_ROOT'))
@@ -69,8 +70,9 @@ def cmake_config(args, build_dir, build_type):
             -DANDROID_ABI=arm64-v8a \
             -DCMAKE_ANDROID_ARCH_ABI=arm64-v8a \
             "
-    elif ('nt' != os.name) and (not args.use_makefile) :
-        config += " -GNinja"
+    elif 'nt' != os.name:
+        config += " -DCMAKE_C_COMPILER=clang-14 -DCMAKE_CXX_COMPILER=clang++-14"
+        if not args.use_makefile: config += " -GNinja"
     cmake(build_dir, config)
 
 # ==========

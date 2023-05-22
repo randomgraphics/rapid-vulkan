@@ -1,4 +1,5 @@
 #/bin/bash
+set -e # exit on error
 
 echo "This script is to install native build dependencies on Ubuntu 20.04/22.04 LTS for non-docker based build."
 echo
