@@ -1,0 +1,14 @@
+version: 2.1
+
+jobs:
+  lint:
+    docker:
+      - image: randomgraphics/rapid-vulkan:latest
+    steps:
+      - checkout
+      - run: pwd && ls && /root/project/dev/bin/cit.py -l
+
+workflows:
+  build-and-test:
+    jobs:
+      - lint

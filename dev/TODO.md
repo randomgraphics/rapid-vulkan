@@ -1,5 +1,4 @@
 # P0 (required to make the repository public)
-- Header Version
 - CI pipeline:
   - make sure header version is increased for every commit to rapid-vulkan.h
   - pass format check
