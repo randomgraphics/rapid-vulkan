@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-import sys, subprocess, os, re
+import sys, subprocess, os, re, argparse
 import importlib; utils = importlib.import_module("rapid-vulkan-utils")
 
 def get_header_revision(content):
@@ -7,28 +7,33 @@ def get_header_revision(content):
     return int(m.group(1)) if m else 0
 
 def check_header_revision():
+    print("Checking public header revision...", end="")
     sdk_root_dir = utils.get_root_folder()
     git_remote = subprocess.check_output(["git", "remote"], cwd=sdk_root_dir).decode(sys.stdout.encoding).strip()
     header_path = "inc/rapid-vulkan/rapid-vulkan.h"
     header_diff = subprocess.check_output(["git", "diff", "-U0", "--no-color", git_remote + "/main", "--", header_path], cwd=sdk_root_dir).decode(sys.stdout.encoding).strip()
-    if 0 == len(header_diff): return # bail out if the header is not changed.
+    if 0 == len(header_diff):
+        print("OK.")
+        return
 
     # get header revision of the local file
     with open(sdk_root_dir / header_path, "r") as f: local_revision = get_header_revision(f.read())
-    print(f"Local header revision: {local_revision}")
+    # print(f"Local header revision: {local_revision}")
 
     # get header revision of the remote file
     remote_header = subprocess.check_output(["git", "show", git_remote + "/main:" + str(header_path)], cwd=sdk_root_dir).decode(sys.stdout.encoding).strip()
     remote_revision = get_header_revision(remote_header)
-    print(f"Remote header revision: {remote_revision}")
+    # print(f"Remote header revision: {remote_revision}")
 
     # check if the header revision is increased
     if local_revision <= remote_revision:
         utils.rip("The header revision is not increased. Please increase the header revision.")
     else:
-        print("Header revision is increased. All good!")
+        print("OK")
 
 def run_style_check():
+    print("Checking code styles...", end="")
+
     # get changes from git.
     sdk_root_dir = utils.get_root_folder()
     git_remote = subprocess.check_output(["git", "remote"], cwd=sdk_root_dir).decode(sys.stdout.encoding).strip()
@@ -48,8 +53,12 @@ def run_style_check():
         utils.rip(f"The following changes are violating coding style standard:\n{format_diff}")
 
     # Done
-    print("Style check done. All good!")
+    print("OK.")
 
+# main
+ap = argparse.ArgumentParser()
+ap.add_argument("-l", action="store_true", help="Run code lint only. Skip test.")
+args = ap.parse_args()
 check_header_revision()
 run_style_check()
-utils.run_the_latest_binary("dev/test/{variant}/rapid-vulkan-test", sys.argv[1:])
+if not args.l: utils.run_the_latest_binary("dev/test/{variant}/rapid-vulkan-test", sys.argv[1:])
