@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 
 import sys, pathlib, subprocess
-import utils
+import importlib; utils = importlib.import_module("rapid-vulkan-utils")
 
 # get the root directory of the code base
 this_script = pathlib.Path(__file__)
@@ -15,7 +15,6 @@ all_files = subprocess.check_output(["git", "ls-files", "*.h", "*.hpp", "*.inl",
 def is_our_source(x):
      if x.find("3rdparty") >= 0: return False
      if x.find("3rd-party") >= 0: return False
-     if x.find("catch.hpp") >= 0: return False
      return True
 our_sources = [x for x in all_files if is_our_source(x)]
 

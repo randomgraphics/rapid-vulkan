@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 import sys
-import utils
+import importlib; utils = importlib.import_module("rapid-vulkan-utils")
 if len(sys.argv) < 2:
     print("Usage: run-sample.py <sample-name> [args]")
     sys.exit(-1)
