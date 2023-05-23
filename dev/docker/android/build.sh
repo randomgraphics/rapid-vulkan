@@ -1,10 +1,10 @@
 #/bin/bash
 dir="$(cd $(dirname "${BASH_SOURCE[0]}");pwd)"
-base=`cat $dir/vulkan-base-image/tag.txt`
+base=`cat $dir/../desktop/tag.txt`
 image=`cat $dir/tag.txt`
 
 echo
-echo Build rapid-vulkan docker image...
+echo Build rapid-vulkan:android docker image...
 echo  HTTP_PROXY  = ${HTTP_PROXY}
 echo  HTTPS_PROXY = ${HTTPS_PROXY}
 echo  http_proxy  = ${http_proxy}

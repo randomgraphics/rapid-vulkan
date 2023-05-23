@@ -31,10 +31,31 @@ jobs:
             build.py p
             build.py r
 
+  build-android:
+    docker:
+      - image: randomgraphics/rapid-vulkan:android-latest
+    steps:
+      - run:
+          name: prep git
+          command: |
+            git config --global --add safe.directory /tmp/_circleci_local_build_repo
+            git config --global --add safe.directory /root/project
+      - checkout
+      - run:
+          name: build
+          command: |
+            source dev/env/env.rc
+            build.py -a d
+            build.py -a p
+            build.py -a r
+
 workflows:
   build-and-test:
     jobs:
       - lint
       - build-linux:
+          requires:
+            - lint
+      - build-android:
           requires:
             - lint
