@@ -67,8 +67,8 @@ def cmake_config(args, build_dir, build_type):
             -DANDROID_NATIVE_API_LEVEL=29 \
             -DCMAKE_SYSTEM_VERSION=29 \
             -DANDROID_PLATFORM=android-29 \
-            -DANDROID_ABI=arm64-v8a \
-            -DCMAKE_ANDROID_ARCH_ABI=arm64-v8a \
+            -DANDROID_ABI={android_abi} \
+            -DCMAKE_ANDROID_ARCH_ABI={android_abi} \
             "
     elif 'nt' != os.name:
         config += " -DCMAKE_C_COMPILER=clang-14 -DCMAKE_CXX_COMPILER=clang++-14"
@@ -96,8 +96,10 @@ args = ap.parse_args()
 sdk_root_dir = utils.get_root_folder()
 # print(f"Repository root folder = {sdk_root_dir}")
 
+android_abi = "arm64-v8a" if args.android_build else None
+
 # get cmake build variant and build folder
-build_type, build_dir = utils.get_cmake_build_type(args.variant, args.build_dir, args.android_build)
+build_type, build_dir = utils.get_cmake_build_type(args.variant, args.build_dir, android_abi)
 
 if build_type is None:
     if os.name == "nt":
