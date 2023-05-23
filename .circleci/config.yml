@@ -59,4 +59,3 @@ workflows:
       - build-android:
           requires:
             - lint
-ocker
