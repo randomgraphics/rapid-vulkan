@@ -1,13 +1,13 @@
 #!/bin/bash
 set -e
 dir="$(cd $(dirname "${BASH_SOURCE[0]}");pwd)"
-sdkroot="$(cd $(dirname "${BASH_SOURCE[0]}")/../..;pwd)"
+sdkroot="$(cd $(dirname "${BASH_SOURCE[0]}")/../../..;pwd)"
 
 # parse command line arguments
 append_to_env_params=0
 run_as="-u $UID:$GID"
 gpu="--gpus all"
-entry_point="docker-entrypoint.sh"
+entry_point="entrypoint.sh"
 interactive="-it"
 docker_login="registry.gitlab.com"
 image=`cat $dir/tag.txt`
