@@ -2389,6 +2389,8 @@ VkBool32 Device::debugCallback(vk::DebugReportFlagsEXT flags, vk::DebugReportObj
         } else if (_cp.validation == BREAK_ON_VK_ERROR) {
 #ifdef _WIN32
             ::DebugBreak();
+#elif __ANDROID__
+            __builtin_trap();
 #else
             asm("int $3");
 #endif

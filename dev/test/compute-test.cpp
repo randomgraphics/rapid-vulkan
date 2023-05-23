@@ -18,7 +18,7 @@ TEST_CASE("cs-buffer-args") {
     b1.setContent(Buffer::SetContentParameters {}.setData(vk::ArrayProxy<const uint32_t> {0xabcd1234}));
     auto b2 = Buffer({{"buf2"}, TestVulkanInstance::device->gi(), 4, vk::BufferUsageFlagBits::eStorageBuffer});
     b2.setContent(Buffer::SetContentParameters {}.setData(vk::ArrayProxy<const uint32_t> {0xbadbeef}));
-    auto ap = ArgumentPack({"cs-buffer-args"});
+    auto ap = ArgumentPack(ArgumentPack::ConstructParameters{{"cs-buffer-args"}});
     ap.b("InputBuffer", {{b1}});
     ap.b("OutputBuffer", {{b2}});
 

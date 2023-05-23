@@ -112,7 +112,11 @@ SOFTWARE.
 #undef VK_NO_PROTOTYPES
 #endif
 
+#ifdef __ANDROID__
+#include "3rd-party/android/vulkan/vulkan.hpp"
+#else
 #include <vulkan/vulkan.hpp>
+#endif
 
 #ifdef VOLK_H_
 // Now restore it.
