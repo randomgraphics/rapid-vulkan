@@ -3,7 +3,7 @@ rapid-vulkan is a lightweight wrappers and utilities for rapid creation of Vulka
 
 The library depends on the C++ version of the Vulkan header (vulkan.hpp) coming with Vulkan SDK, and one additional 3rd-party library: **spirv-reflect**, which is already included in the repository.
 
-It is currently developed and tested on Windows platform. Linux support is on its way.
+It is currently developed and tested on both Windows and Ubuntu.
 
 # Integration
 The library is aiming for easy integration with any Vulkan project. Everything you need is included in [inc](inc)folder.
