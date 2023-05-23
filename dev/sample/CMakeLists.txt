@@ -4,7 +4,7 @@ Include(CheckIncludeFileCXX)
 
 function(add_sample name)
     add_executable(${name} ${name}.cpp)
-    target_link_libraries(${name} rapid-vulkan-static glfw)
+    target_link_libraries(${name} rapid-vulkan-static ${RAPID_VULKAN_SYSTEM_LIBRARIES})
 endfunction()
 
 function(add_sample_no_link_to_rv name)
@@ -25,4 +25,7 @@ if (HAS_VOLK_H)
     add_sample_no_link_to_rv(use-with-volk-loader)
 endif()
 add_sample(noop-compute)
-add_sample(simple-triangle)
+
+if (NOT ANDROID)
+    add_sample(simple-triangle)
+endif()

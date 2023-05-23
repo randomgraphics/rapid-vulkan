@@ -2153,11 +2153,8 @@ public:
         _graphicsQueue->submit({cb, {}, {frame.renderFinished}, {frame.frameEndSemaphore}});
 
         // present current frame.h
-        auto presentInfo = vk::PresentInfoKHR()
-                               .setSwapchainCount(1)
-                               .setPSwapchains(&_handle)
-                               .setPImageIndices(&frame.imageIndex)
-                               .setPWaitSemaphores(&frame.frameEndSemaphore);
+        auto presentInfo =
+            vk::PresentInfoKHR().setSwapchainCount(1).setPSwapchains(&_handle).setPImageIndices(&frame.imageIndex).setPWaitSemaphores(&frame.frameEndSemaphore);
         auto result = _presentQueue.presentKHR(&presentInfo);
         if (vk::Result::eSuccess == result) {
             // Store the frame end command buffer. it'll be used later to wait for the frame to be available again to further use.
@@ -2389,6 +2386,8 @@ VkBool32 Device::debugCallback(vk::DebugReportFlagsEXT flags, vk::DebugReportObj
         } else if (_cp.validation == BREAK_ON_VK_ERROR) {
 #ifdef _WIN32
             ::DebugBreak();
+#elif __ANDROID__
+            __builtin_trap();
 #else
             asm("int $3");
 #endif

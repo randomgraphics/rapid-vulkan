@@ -6,4 +6,4 @@ add_executable(rapid-vulkan-test
     image-test.cpp
     test-main.cpp
 )
-target_link_libraries(rapid-vulkan-test PUBLIC rapid-vulkan-static)
+target_link_libraries(rapid-vulkan-test PUBLIC rapid-vulkan-static ${RAPID_VULKAN_SYSTEM_LIBRARIES})

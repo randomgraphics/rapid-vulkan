@@ -3,24 +3,30 @@ find_package(Vulkan REQUIRED)
 # setup common build flags
 include_directories(../inc ${Vulkan_INCLUDE_DIRS})
 
-# build glfw
-function(build_glfw)
-    # Enclose build process inside a function. So we can freely change build
-    # options w/o affecting the rest of the project
-    remove_definitions()
-    option(GLFW_BUILD_EXAMPLES "" OFF)
-    option(GLFW_BUILD_TESTS "" OFF)
-    option(GLFW_BUILD_DOCS "" OFF)
-    option(GLFW_INSTALL "" OFF)
-    add_subdirectory(3rd-party/glfw)
-endfunction()
-build_glfw()
+# setup list of system specific dependencies
+if (ANDROID)
+    set(RAPID_VULKAN_SYSTEM_LIBRARIES log)
+else()
+    # build glfw
+    function(build_glfw)
+        # Enclose build process inside a function. So we can freely change build
+        # options w/o affecting the rest of the project
+        remove_definitions()
+        option(GLFW_BUILD_EXAMPLES "" OFF)
+        option(GLFW_BUILD_TESTS "" OFF)
+        option(GLFW_BUILD_DOCS "" OFF)
+        option(GLFW_INSTALL "" OFF)
+        add_subdirectory(3rd-party/glfw)
+    endfunction()
+    build_glfw()
+    set(RAPID_VULKAN_SYSTEM_LIBRARIES glfw)
+endif()
 
 # Setup common build flags. Do this after glfw build
 if (MSVC)
     add_compile_options(/MP /W4 /WX)
 else()
-    add_compile_options(-Wall -Wextra -Werror)
+    add_compile_options(-Wall -Wextra -Werror -Wfatal-errors)
 endif()
 if (UNIX)
     link_libraries(dl)
