@@ -176,6 +176,7 @@ SOFTWARE.
 #include <unordered_map>
 #include <tuple>
 #include <optional>
+#include <algorithm>
 
 // ---------------------------------------------------------------------------------------------------------------------
 // RVI stands for Rapid Vulkan Implementation. Macros started with this prefix are reserved for internal use.
@@ -306,13 +307,6 @@ format(const char * format, ...) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-//
-template<typename T>
-inline constexpr T clamp(T value, const T & vmin, const T & vmax) {
-    return vmin > value ? vmin : vmax < value ? vmax : value;
-}
-
-// ---------------------------------------------------------------------------------------------------------------------
 // Clamp a range of [offset, offset + length) into range of [0, capacity)
 /// \return The offset change.
 template<typename T>
@@ -320,8 +314,8 @@ inline T clampRange(T & offset, T & length, T capacity) {
     auto begin = offset; // remember the original starting point.
     if (length > capacity) length = capacity;
     T end  = offset + length;
-    offset = clamp<T>(offset, 0, capacity);
-    end    = clamp<T>(end, offset, capacity);
+    offset = std::clamp<T>(offset, 0, capacity);
+    end    = std::clamp<T>(end, offset, capacity);
     RVI_ASSERT(end >= offset);
     length = end - offset;
     return offset - begin;
