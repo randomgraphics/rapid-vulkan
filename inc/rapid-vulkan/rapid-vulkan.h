@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identify the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 3
+#define RAPID_VULKAN_HEADER_REVISION 4
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -52,11 +52,10 @@ SOFTWARE.
 #define RAPID_VULKAN_ENABLE_VMA 1
 #endif
 
-/// \def RAPID_VULKAN_ASSERT
-/// The runtime assert macro for debug build only. This macro has no effect when
-/// RAPID_VULKAN_ENABLE_DEBUG_BUILD is 0.
-#ifndef RAPID_VULKAN_ASSERT
-#define RAPID_VULKAN_ASSERT(expression, ...) assert(expression)
+/// \def RAPID_VULKAN_THROW
+/// The macro to throw runtime exception.
+#ifndef RAPID_VULKAN_THROW
+#define RAPID_VULKAN_THROW(...) throw std::runtime_error(__VA_ARGS__)
 #endif
 
 /// \def RAPID_VULKAN_BACKTRACE
@@ -68,6 +67,8 @@ SOFTWARE.
 #define RAPID_VULKAN_BACKTRACE() std::string("You have to define RAPID_VULKAN_BACKTRACE to retrieve current callstack.")
 #endif
 
+/// \def RAPID_VULKAN_LOG_ERROR
+/// The macro to log error message. The default implementation prints to stderr.
 #ifndef RAPID_VULKAN_LOG_ERROR
 #define RAPID_VULKAN_LOG_ERROR(...)    \
     do {                               \
@@ -77,6 +78,8 @@ SOFTWARE.
     } while (false)
 #endif
 
+/// \def RAPID_VULKAN_LOG_WARNING
+/// The macro to log warning message. The default implementation prints to stderr.
 #ifndef RAPID_VULKAN_LOG_WARNING
 #define RAPID_VULKAN_LOG_WARNING(...)  \
     do {                               \
@@ -86,6 +89,8 @@ SOFTWARE.
     } while (false)
 #endif
 
+/// \def RAPID_VULKAN_LOG_INFO
+/// The macro to log informational message. The default implementation prints to stdout.
 #ifndef RAPID_VULKAN_LOG_INFO
 #define RAPID_VULKAN_LOG_INFO(...)    \
     do {                              \
@@ -94,16 +99,25 @@ SOFTWARE.
     } while (false)
 #endif
 
-#ifndef RAPID_VULKAN_THROW
-#define RAPID_VULKAN_THROW(...) throw std::runtime_error(__VA_ARGS__)
-#endif
-
-#if RAPID_VULKAN_ENABLE_LOADER
-#define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
+/// \def RAPID_VULKAN_ASSERT
+/// The runtime assert macro for debug build only. This macro has no effect when
+/// RAPID_VULKAN_ENABLE_DEBUG_BUILD is 0.
+#ifndef RAPID_VULKAN_ASSERT
+#define RAPID_VULKAN_ASSERT(expression, ...)                                                     \
+    if (!(expression)) {                                                                         \
+        auto errorMessage__ = RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__);                       \
+        RAPID_VULKAN_LOG_ERROR("Condition " #expression " not met. %s", errorMessage__.c_str()); \
+        assert(false);                                                                           \
+    } else                                                                                       \
+        void(0)
 #endif
 
 // ---------------------------------------------------------------------------------------------------------------------
 // include vulkan.hpp
+
+#if RAPID_VULKAN_ENABLE_LOADER
+#define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
+#endif
 
 #ifdef VOLK_H_
 // volk.h defines VK_NO_PROTOTYPES to avoid symbol conflicting with vulkan.h. But it
@@ -177,6 +191,7 @@ SOFTWARE.
 #include <tuple>
 #include <optional>
 #include <algorithm>
+#include <exception>
 
 // ---------------------------------------------------------------------------------------------------------------------
 // RVI stands for Rapid Vulkan Implementation. Macros started with this prefix are reserved for internal use.
@@ -259,7 +274,6 @@ struct GlobalInfo {
     template<typename T, typename... ARGS>
     void safeDestroy(T & handle, ARGS... args) const {
         if (!handle) return;
-        RVI_ASSERT(device);
         if constexpr (std::is_same_v<T, vk::CommandPool>) {
             device.resetCommandPool(handle, vk::CommandPoolResetFlagBits::eReleaseResources);
             device.destroy(handle, allocator);
@@ -305,6 +319,10 @@ format(const char * format, ...) {
     // Return the formatted string.
     return buffer;
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// Overload of format() method for empty parameter list.
+inline std::string format() { return ""s; }
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Clamp a range of [offset, offset + length) into range of [0, capacity)
