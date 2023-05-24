@@ -1,17 +1,8 @@
-# P0 (required to make the repository public)
-- CI pipeline:
-  - make sure header version is increased for every commit to rapid-vulkan.h
-  - pass format check
-  - pass build
-  - pass cit
-  
-# P1
+# P0
+- Push constant support in pipeline and argument pack
 - Sample:
-  - rotating triangle
-- Pipeline Layout Cache
-- Pipeline Cache
-- Android support
-
+  - rotating triangle with uniform value updated once every frame.
+= Pipeline and layout cache
 
 # Resource/Descriptor Design Choices
 

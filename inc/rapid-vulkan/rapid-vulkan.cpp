@@ -1787,9 +1787,7 @@ public:
 
     vk::PipelineLayout handle() const { return _handle; }
 
-    bool cmdBind(vk::CommandBuffer cb, vk::PipelineBindPoint bp, const ArgumentPack & ap) {
-        return bindDescriptors(cb, bp, ap) && bindPushConstants(cb, bp, ap);
-    }
+    bool cmdBind(vk::CommandBuffer cb, vk::PipelineBindPoint bp, const ArgumentPack & ap) { return bindDescriptors(cb, bp, ap) && bindPushConstants(cb, ap); }
 
     void onNameChanged() {
         if (_handle) setVkObjectName(_gi->device, _handle, _owner.name());
@@ -1893,9 +1891,25 @@ private:
         return true;
     }
 
-    bool bindPushConstants(vk::CommandBuffer cb, vk::PipelineBindPoint, const ArgumentPack & ap) {
-        (void) cb;
-        (void) ap;
+    bool bindPushConstants(vk::CommandBuffer cb, const ArgumentPack & ap) {
+        for (const auto & kv : _reflection.constants) {
+            const auto & n = kv.first;
+            const auto & c = kv.second;
+            const auto * a = ((const ArgumentImpl *) ap.get(n))->_impl;
+            if (!a) {
+                // No warnings ehre. Push constant value is persistent within one
+                // command buffer submit. So it is not required to update all the values on every pipeline binding.
+                continue;
+            }
+            auto v = std::get_if<Argument::Impl::Constants>(&a->value());
+            if (!v) {
+                RAPID_VULKAN_LOG_ERROR(
+                    "Failed to bind argument pack (%s) to pipeline layout (%s): expects push constant on variable (%s), but (%s) is provided",
+                    ap.name().c_str(), _owner.name().c_str(), n.c_str(), a->type());
+                continue;
+            }
+            cb.pushConstants(_handle, c.stageFlags, c.offset, std::min<uint32_t>(c.size, (uint32_t) v->size()), v->data());
+        }
         return true;
     }
 };

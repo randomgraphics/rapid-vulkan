@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identify the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 2
+#define RAPID_VULKAN_HEADER_REVISION 3
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -1531,6 +1531,12 @@ public:
 
     /// @brief Set value of push constant. If the argument has not been set before, a new argument will be created.
     void c(const std::string & name, size_t offset, size_t size, const void * data);
+
+    /// @brief Set value of push constant. If the argument has not been set before, a new argument will be created.
+    template<typename T>
+    void c(const std::string & name, size_t offset, vk::ArrayProxy<T> data) {
+        return c(name, offset, data.size() * sizeof(T), data.data());
+    }
 
     /// @brief Get argument by name.
     /// The returned argument instance can be used to set value of that argument w/o paying the cost of string hashing.

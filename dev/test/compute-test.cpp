@@ -15,12 +15,13 @@ TEST_CASE("cs-buffer-args") {
 
     // create buffers and argument pack
     auto b1 = Buffer({{"buf1"}, TestVulkanInstance::device->gi(), 4, vk::BufferUsageFlagBits::eStorageBuffer});
-    b1.setContent(Buffer::SetContentParameters {}.setData(vk::ArrayProxy<const uint32_t> {0xabcd1234}));
+    b1.setContent(Buffer::SetContentParameters {}.setData(vk::ArrayProxy<const float> {1.0f}));
     auto b2 = Buffer({{"buf2"}, TestVulkanInstance::device->gi(), 4, vk::BufferUsageFlagBits::eStorageBuffer});
     b2.setContent(Buffer::SetContentParameters {}.setData(vk::ArrayProxy<const uint32_t> {0xbadbeef}));
     auto ap = ArgumentPack(ArgumentPack::ConstructParameters {{"cs-buffer-args"}});
     ap.b("InputBuffer", {{b1}});
     ap.b("OutputBuffer", {{b2}});
+    ap.c("PushConstants", 0, vk::ArrayProxy<const float> {1.0f});
 
     // run the compute shader to copy data from b1 to b2
     auto q = CommandQueue({{"cs-buffer-args"}, gi, dev->graphics()->family(), dev->graphics()->index()});
@@ -36,5 +37,5 @@ TEST_CASE("cs-buffer-args") {
     // read contents of b2
     auto c2 = b2.readContent({});
     REQUIRE(c2.size() == 4);
-    REQUIRE(*(const uint32_t *) c2.data() == 0xabcd1234);
+    REQUIRE(*(const float *) c2.data() == 2.0f);
 }
