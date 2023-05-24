@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 
-import sys, pathlib, subprocess, argparse, os, utils
+import sys, pathlib, subprocess, argparse, os
+import importlib; utils = importlib.import_module("rapid-vulkan-utils")
 
 def bin2h(input, output):
     with open(input, "rb") as f:

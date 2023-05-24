@@ -58,7 +58,8 @@ def run_style_check():
 # main
 ap = argparse.ArgumentParser()
 ap.add_argument("-l", action="store_true", help="Run code lint only. Skip test.")
+ap.add_argument("test_args", nargs="*")
 args = ap.parse_args()
 check_header_revision()
 run_style_check()
-if not args.l: utils.run_the_latest_binary("dev/test/{variant}/rapid-vulkan-test", sys.argv[1:])
+if not args.l: utils.run_the_latest_binary("dev/test/{variant}/rapid-vulkan-test", args.test_args)
