@@ -376,7 +376,7 @@ public:
         if (_gi->vmaAllocator) {
             VmaAllocationCreateInfo aci {};
             aci.requiredFlags = (VkMemoryPropertyFlags) cp.memory;
-            RVI_VK_VERIFY(vmaCreateBuffer(_gi->vmaAllocator, (const VkBufferCreateInfo *) &ci, &aci, (VkBuffer *) &_handle, &_allocation, nullptr));
+            RVI_VK_REQUIRE(vmaCreateBuffer(_gi->vmaAllocator, (const VkBufferCreateInfo *) &ci, &aci, (VkBuffer *) &_handle, &_allocation, nullptr));
         } else
 #endif
         {
@@ -520,7 +520,7 @@ public:
         // TODO: VMA
         // if (allocation) {
         //     RVI_REQUIRE(global->vmaAllocator);
-        //     RVI_VK_VERIFY(vmaMapMemory(global->vmaAllocator, allocation, (void **) &dst));
+        //     RVI_VK_REQUIRE(vmaMapMemory(global->vmaAllocator, allocation, (void **) &dst));
         //     dst += offsetInUnitOfT;
         // } else {
         auto p = _gi->device.mapMemory(_memory, o, s);
@@ -877,7 +877,7 @@ public:
         if (_gi->vmaAllocator) {
             VmaAllocationCreateInfo aci {};
             aci.requiredFlags = (VkMemoryPropertyFlags) _cp.memory;
-            RVI_VK_VERIFY(vmaCreateImage(_gi->vmaAllocator, (const VkImageCreateInfo *) &_cp.info, &aci, (VkImage *) &_handle, &_allocation, nullptr));
+            RVI_VK_REQUIRE(vmaCreateImage(_gi->vmaAllocator, (const VkImageCreateInfo *) &_cp.info, &aci, (VkImage *) &_handle, &_allocation, nullptr));
         } else
 #endif
         {
@@ -905,7 +905,7 @@ public:
         // vci.format           = ci.format;
         // vci.components       = {VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_B, VK_COMPONENT_SWIZZLE_A};
         // vci.subresourceRange = {aspect, 0, ci.mipLevels, 0, ci.arrayLayers};
-        // RVI_VK_VERIFY(vkCreateImageView(g.device, &vci, g.allocator, &view));
+        // RVI_VK_REQUIRE(vkCreateImageView(g.device, &vci, g.allocator, &view));
         // setVkObjectName(g.device, view, name);
     }
 
@@ -2815,7 +2815,7 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
     //             RAPID_VULKAN_LOG_INFO("Enable VMA allocator with buffer device address.");
     //             ai.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
     //         }
-    //         RVI_VK_VERIFY(vmaCreateAllocator(&ai, &_gi.vmaAllocator));
+    //         RVI_VK_REQUIRE(vmaCreateAllocator(&ai, &_gi.vmaAllocator));
     //     }
 
     // print device information
