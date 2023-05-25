@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identify the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 4
+#define RAPID_VULKAN_HEADER_REVISION 5
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -225,14 +225,20 @@ SOFTWARE.
 #define RVI_ASSERT(...) ((void) 0)
 #endif
 
-#define RVI_REQUIRE(condition, ...)                  \
-    do {                                             \
-        if (!(condition)) { RVI_THROW(#condition); } \
+#define RVI_REQUIRE(condition, ...)                                                    \
+    do {                                                                               \
+        if (!(condition)) {                                                            \
+            auto errorMessage__ = RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__);         \
+            RVI_THROW("Condition " #condition " not met. %s", errorMessage__.c_str()); \
+        }                                                                              \
     } while (false)
 
-#define RVI_VK_VERIFY(condition, ...)                                        \
-    do {                                                                     \
-        if (VK_SUCCESS != (VkResult) (condition)) { RVI_THROW(#condition); } \
+#define RVI_VK_REQUIRE(condition, ...)                                                     \
+    do {                                                                                   \
+        if (VK_SUCCESS != (VkResult) (condition)) {                                        \
+            auto errorMessage__ = RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__);             \
+            RVI_THROW("Vulkan fuction " #condition " failed. %s", errorMessage__.c_str()); \
+        }                                                                                  \
     } while (false)
 
 // Check C++ standard
