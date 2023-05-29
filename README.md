@@ -5,6 +5,28 @@ The library is compiled against C++17 standard. It depends on the C++ version of
 
 It is currently developed and tested on both Windows 11 and Ubuntu 22.04.
 
+# Example
+The following is an example of loading and executing a Vulkan compute shader using rapid-vulkan:
+
+```c++
+#define RAPID_VULKAN_IMPLEMENTATION
+#include <rapid-vulkan/rapid-vulkan.h>
+int main() {
+  using namespace rapid_vulkan;
+  auto instance = Instance({});
+  auto device   = Device(instance.dcp()};
+  auto spv      = loadSPRIV(...); // load spirv shader binary into std::vector container.
+  auto cs       = Shader(Shader::ConstructParameters{{"my shader"}, device->gi}.setSpriv(spv));
+  auto pipeline = ComputePipeline({{"my pipline"}, &cs});
+  auto queue    = device->compute();
+  auto commands = q.begin("my command buffer");
+  pipeline.cmdDispatch(commands, {1, 1, 1});
+  queue.submit({commands});
+  queue.wait();
+  return 0;
+}
+```
+
 # Usage
 The library aims for easy integration with any Vulkan project. Everything you need is included in [inc](inc) folder.
 
