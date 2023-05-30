@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identify the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 5
+#define RAPID_VULKAN_HEADER_REVISION 6
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -622,6 +622,8 @@ private:
 //     vk::CommandBuffer      _handle {};
 //     vk::CommandBufferLevel _level = vk::CommandBufferLevel::ePrimary;
 // };
+
+class Device;
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// A wrapper class for VkQueue
@@ -1281,12 +1283,6 @@ public:
             return *this;
         }
 
-        ConstructParameters & setGlobalInfo(const GlobalInfo * v) {
-            RVI_ASSERT(v);
-            gi = v;
-            return *this;
-        }
-
         template<typename T, size_t C>
         ConstructParameters & setSpirv(const T (&data)[C]) {
             spirv = vk::ArrayProxy<const uint32_t>(C * sizeof(T) / sizeof(uint32_t), (const uint32_t *) data);
@@ -1793,8 +1789,6 @@ public:
 
     void cmdDispatch(vk::CommandBuffer, const DispatchParameters &);
 };
-
-class Device;
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// Wrapper class of swapchain object
