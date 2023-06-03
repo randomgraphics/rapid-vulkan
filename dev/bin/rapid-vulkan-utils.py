@@ -79,7 +79,7 @@ def compare_file_timestamp(path, latest, chosen):
 def get_root_folder():
     return pathlib.Path(__file__).resolve().parent.parent.parent.absolute()
 
-def get_cmake_build_type(variant, build_dir, for_android = None):
+def get_cmake_build_type(variant, build_dir, for_android = None, use_gcc = None):
     # determine build type
     build_type = str(variant).lower()
     if "d" == build_type or "debug" == build_type:
@@ -105,8 +105,10 @@ def get_cmake_build_type(variant, build_dir, for_android = None):
         build_dir = build_dir / ("arm64-v8a" + suffix)
     elif os.name == "nt":
         build_dir = build_dir / ("mswin" + suffix)
+    elif use_gcc:
+        build_dir = build_dir / ("posix.gcc" + suffix)
     else:
-        build_dir = build_dir / ("posix" + suffix)
+        build_dir = build_dir / ("posix.clang" + suffix)
 
     #done
     return [build_type, build_dir]
@@ -122,9 +124,12 @@ def search_for_the_latest_binary_ex(path_template):
     else:
         platform = "posix"
         candidates = [
-            [".d", path_template.format(variant = "")],
-            [".p", path_template.format(variant = "")],
-            [".r", path_template.format(variant = "")],
+            [".gcc.d", path_template.format(variant = "")],
+            [".gcc.p", path_template.format(variant = "")],
+            [".gcc.r", path_template.format(variant = "")],
+            [".clang.d", path_template.format(variant = "")],
+            [".clang.p", path_template.format(variant = "")],
+            [".clang.r", path_template.format(variant = "")],
         ]
 
     # Loop through all candidates

@@ -78,8 +78,8 @@ def cmake_config(args, build_dir, build_type):
             -DCMAKE_ANDROID_ARCH_ABI={android_abi} \
             "
     elif 'nt' != os.name:
-        config += " -DCMAKE_C_COMPILER=clang-14 -DCMAKE_CXX_COMPILER=clang++-14"
-        if not args.use_makefile: config += " -GNinja"
+        if not args.use_gcc: config += " -DCMAKE_C_COMPILER=clang-14 -DCMAKE_CXX_COMPILER=clang++-14"
+        config += " -GNinja"
     cmake(build_dir, config)
 
 # ==========
@@ -92,7 +92,7 @@ ap.add_argument("-a", dest="android_build", action="store_true", help="Build for
 ap.add_argument("-b", dest="build_dir", default="build", help="Build output folder.")
 ap.add_argument("-c", dest="config_only", action="store_true", help="Run CMake config only. Skip cmake build.")
 ap.add_argument("-C", dest="skip_config", action="store_true", help="Skip CMake config. Run build process only.")
-ap.add_argument("-m", dest="use_makefile", action="store_true", help="Use OS's default makefile instead of Ninja")
+ap.add_argument("-g", dest="use_gcc", action="store_true", help="Use GCC instead of Clang as the compiler.")
 ap.add_argument("variant", help="Specify build variant. Acceptable values are: d(ebug)/p(rofile)/r(elease)/c(lean). "
                                          "Note that all parameters alert this one will be considered \"extra\" and passed to CMake directly.")
 ap.add_argument("extra", nargs=argparse.REMAINDER, help="Extra arguments passing to cmake.")
@@ -103,10 +103,9 @@ args = ap.parse_args()
 sdk_root_dir = utils.get_root_folder()
 # print(f"Repository root folder = {sdk_root_dir}")
 
-android_abi = "arm64-v8a" if args.android_build else None
-
 # get cmake build variant and build folder
-build_type, build_dir = utils.get_cmake_build_type(args.variant, args.build_dir, android_abi)
+android_abi = "arm64-v8a" if args.android_build else None
+build_type, build_dir = utils.get_cmake_build_type(args.variant, args.build_dir, android_abi, args.use_gcc)
 
 if build_type is None:
     if os.name == "nt":

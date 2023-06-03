@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identify the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 6
+#define RAPID_VULKAN_HEADER_REVISION 7
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -148,8 +148,8 @@ SOFTWARE.
 #pragma GCC diagnostic push
 #ifdef __clang__
 #pragma GCC diagnostic ignored "-Wnullability-completeness"
-#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #endif
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 #pragma GCC diagnostic ignored "-Wunused-variable"
 #pragma GCC diagnostic ignored "-Wtype-limits"
@@ -366,8 +366,15 @@ inline void setVkObjectName(vk::Device device, T handle, const char * name) {
     if (!::vkSetDebugUtilsObjectNameEXT) return;
 #endif
     if (!device || !handle || !name) return;
-    auto u64  = *(const uint64_t *) &handle; // TODO: this is not safe when compiling for 32-bit platform.
-    auto info = vk::DebugUtilsObjectNameInfoEXT().setObjectType(handle.objectType).setObjectHandle(u64).setPObjectName(name);
+
+    union HandleAlias {
+        uint64_t u64 {};
+        void *   object;
+    };
+
+    HandleAlias alias;
+    alias.object = handle;
+    auto info    = vk::DebugUtilsObjectNameInfoEXT().setObjectType(handle.objectType).setObjectHandle(alias.u64).setPObjectName(name);
     device.setDebugUtilsObjectNameEXT(info);
 }
 

@@ -13,7 +13,25 @@ jobs:
       - checkout
       - run: dev/bin/cit.py -l
 
-  build-linux:
+  build-linux-gcc:
+    docker:
+      - image: randomgraphics/rapid-vulkan:latest
+    steps:
+      - run:
+          name: prep git
+          command: |
+            git config --global --add safe.directory /tmp/_circleci_local_build_repo
+            git config --global --add safe.directory /root/project
+      - checkout
+      - run:
+          name: build
+          command: |
+            source dev/env/env.rc
+            build.py -g d
+            build.py -g p
+            build.py -g r
+
+  build-linux-clang:
     docker:
       - image: randomgraphics/rapid-vulkan:latest
     steps:
@@ -53,7 +71,10 @@ workflows:
   build-and-test:
     jobs:
       - lint
-      - build-linux:
+      - build-linux-gcc:
+          requires:
+            - lint
+      - build-linux-clang:
           requires:
             - lint
       - build-android:
