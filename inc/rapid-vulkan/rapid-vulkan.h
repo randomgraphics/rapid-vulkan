@@ -374,7 +374,7 @@ inline void setVkObjectName(vk::Device device, T handle, const char * name) {
 
     HandleAlias alias;
     alias.object = handle;
-    auto info = vk::DebugUtilsObjectNameInfoEXT().setObjectType(handle.objectType).setObjectHandle(alias.u64).setPObjectName(name);
+    auto info    = vk::DebugUtilsObjectNameInfoEXT().setObjectType(handle.objectType).setObjectHandle(alias.u64).setPObjectName(name);
     device.setDebugUtilsObjectNameEXT(info);
 }
 
