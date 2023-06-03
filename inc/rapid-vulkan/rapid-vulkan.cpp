@@ -35,13 +35,15 @@ SOFTWARE.
 #pragma GCC diagnostic push
 #ifdef __clang__
 #pragma GCC diagnostic ignored "-Wnullability-completeness"
-#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #endif
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 #pragma GCC diagnostic ignored "-Wunused-variable"
 #pragma GCC diagnostic ignored "-Wtype-limits"
 #pragma GCC diagnostic ignored "-Wformat"
 #pragma GCC diagnostic ignored "-Wundef"
+#pragma GCC diagnostic ignored "-Wparentheses"
+#pragma GCC diagnostic ignored "-Wimplicit-fallthrough"
 #endif
 #include "3rd-party/vma-3.0.1/vk_mem_alloc.h"
 #ifdef _MSC_VER
@@ -840,7 +842,7 @@ struct VkFormatDesc {
 #endif
         };
         auto i = (size_t) format;
-        if (0 <= i && i < std::size(table)) {
+        if (i < std::size(table)) {
             return table[i];
         } else {
             auto iter = extra.find((VkFormat) format);
