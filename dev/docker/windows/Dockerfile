@@ -28,3 +28,13 @@ RUN setx /M PATH "%PATH%;C:\Program Files\CMake\bin"
 RUN curl.exe -SL -o python-installer.exe https://www.python.org/ftp/python/3.11.2/python-3.11.2-amd64.exe
 RUN python-installer.exe /quiet InstallAllUsers=1 CompileAll=1 AppendPath=1 Include_test=0
 RUN del /q python-installer.exe
+RUN python.exe -m pip install --upgrade pip
+RUN python.exe -m pip install --upgrade termcolor
+
+# Install Vulkan SDK
+RUN curl.exe -SL -o vulkan-sdk.exe https://sdk.lunarg.com/sdk/download/1.3.250.0/windows/VulkanSDK-1.3.250.0-Installer.exe
+RUN vulkan-sdk.exe --root=c:\vulkan-sdk --accept-licenses --default-answer --confirm-command install com.lunarg.vulkan com.lunarg.vulkan.volk com.lunarg.vulkan.vma
+RUN del /q vulkan-sdk.exe
+
+# Misc.
+RUN powershell -Command Set-ExecutionPolicy RemoteSigned
