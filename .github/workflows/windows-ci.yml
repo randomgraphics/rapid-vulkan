@@ -1,0 +1,22 @@
+name: Windows CI Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    container:
+      image: randomgraphics/rapid-vulkan:windows-latest
+    steps:
+      - uses: actions/checkout@v3
+      - run: echo "💡 The ${{ github.repository }} repository has been cloned to the runner."
+      - run: echo "🖥️ The workflow is now ready to test your code on the runner."
+      - name: List files in the repository
+        run: |
+          dir ${{ github.workspace }}
+          dir c:\
+      - run: echo "🍏 This job's status is ${{ job.status }}."
