@@ -15,5 +15,7 @@ docker pull $tag
 $command = "docker run --rm -v ${repo}:C:/rapid-vulkan -w c:/rapid-vulkan $tag powershell.exe -Command ""& {
     . dev\env\env.ps1
     b -b build.ci d
+    b -b build.ci p
+    b -b build.ci r
 }"""
 Invoke-Expression $command
