@@ -1,5 +1,8 @@
 version: 2.1
 
+orbs:
+  win: circleci/windows@5.0
+
 jobs:
   # lint:
   #   docker:
@@ -69,11 +72,12 @@ jobs:
 
   build-windows:
     executor: win/server-2022
-    docker:
-      - image: randomgraphics/rapid-vulkan:windows-latest
     steps:
       - checkout
-      - run: echo "hello world"
+      - run:
+          name: build
+          shell: powershell.exe
+          command: dev/docker/windows/ci.ps1
 
 workflows:
   build-and-test:
