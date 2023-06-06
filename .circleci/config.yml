@@ -67,6 +67,13 @@ jobs:
             build.py -a p
             build.py -a r
 
+  build-windows:
+    docker:
+      - image: randomgraphics/rapid-vulkan:windows-latest
+    steps:
+      - checkout
+      - echo "hello world"
+
 workflows:
   build-and-test:
     jobs:
@@ -78,5 +85,8 @@ workflows:
           requires:
             - lint
       - build-android:
+          requires:
+            - lint
+      - build-windows:
           requires:
             - lint

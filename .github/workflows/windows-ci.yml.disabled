@@ -1,3 +1,5 @@
+# This workflow is disabled, because it requires pulling a full windows container image from docker hub every time it runs
+
 name: Windows CI Pipeline
 
 on:
