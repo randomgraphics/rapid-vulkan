@@ -68,6 +68,7 @@ jobs:
             build.py -a r
 
   build-windows:
+    executor: win/server-2022
     docker:
       - image: randomgraphics/rapid-vulkan:windows-latest
     steps:
