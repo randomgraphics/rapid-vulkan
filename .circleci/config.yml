@@ -72,7 +72,7 @@ jobs:
       - image: randomgraphics/rapid-vulkan:windows-latest
     steps:
       - checkout
-      - echo "hello world"
+      - run: echo "hello world"
 
 workflows:
   build-and-test:
