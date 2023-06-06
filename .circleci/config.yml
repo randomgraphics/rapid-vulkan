@@ -4,95 +4,94 @@ orbs:
   win: circleci/windows@5.0
 
 jobs:
-  # lint:
-  #   docker:
-  #     - image: randomgraphics/rapid-vulkan:latest
-  #   steps:
-  #     - run:
-  #         name: prep git
-  #         command: |
-  #           git config --global --add safe.directory /tmp/_circleci_local_build_repo
-  #           git config --global --add safe.directory /root/project
-  #     - checkout
-  #     - run: dev/bin/cit.py -l
-
-  # build-linux-gcc:
-  #   docker:
-  #     - image: randomgraphics/rapid-vulkan:latest
-  #   steps:
-  #     - run:
-  #         name: prep git
-  #         command: |
-  #           git config --global --add safe.directory /tmp/_circleci_local_build_repo
-  #           git config --global --add safe.directory /root/project
-  #     - checkout
-  #     - run:
-  #         name: build
-  #         command: |
-  #           source dev/env/env.rc
-  #           build.py -g d
-  #           build.py -g p
-  #           build.py -g r
-
-  # build-linux-clang:
-  #   docker:
-  #     - image: randomgraphics/rapid-vulkan:latest
-  #   steps:
-  #     - run:
-  #         name: prep git
-  #         command: |
-  #           git config --global --add safe.directory /tmp/_circleci_local_build_repo
-  #           git config --global --add safe.directory /root/project
-  #     - checkout
-  #     - run:
-  #         name: build
-  #         command: |
-  #           source dev/env/env.rc
-  #           build.py d
-  #           build.py p
-  #           build.py r
-
-  # build-android:
-  #   docker:
-  #     - image: randomgraphics/rapid-vulkan:android-latest
-  #   steps:
-  #     - run:
-  #         name: prep git
-  #         command: |
-  #           git config --global --add safe.directory /tmp/_circleci_local_build_repo
-  #           git config --global --add safe.directory /root/project
-  #     - checkout
-  #     - run:
-  #         name: build
-  #         command: |
-  #           source dev/env/env.rc
-  #           build.py -a d
-  #           build.py -a p
-  #           build.py -a r
-
-  build-windows:
-    executor: win/server-2022
+  lint:
+    docker:
+      - image: randomgraphics/rapid-vulkan:latest
     steps:
+      - run:
+          name: prep git
+          command: |
+            git config --global --add safe.directory /tmp/_circleci_local_build_repo
+            git config --global --add safe.directory /root/project
+      - checkout
+      - run: dev/bin/cit.py -l
+
+  build-linux-gcc:
+    docker:
+      - image: randomgraphics/rapid-vulkan:latest
+    steps:
+      - run:
+          name: prep git
+          command: |
+            git config --global --add safe.directory /tmp/_circleci_local_build_repo
+            git config --global --add safe.directory /root/project
       - checkout
       - run:
           name: build
-          shell: powershell.exe
-          command: dev/docker/windows/ci.ps1
+          command: |
+            source dev/env/env.rc
+            build.py -g d
+            build.py -g p
+            build.py -g r
+
+  build-linux-clang:
+    docker:
+      - image: randomgraphics/rapid-vulkan:latest
+    steps:
+      - run:
+          name: prep git
+          command: |
+            git config --global --add safe.directory /tmp/_circleci_local_build_repo
+            git config --global --add safe.directory /root/project
+      - checkout
+      - run:
+          name: build
+          command: |
+            source dev/env/env.rc
+            build.py d
+            build.py p
+            build.py r
+
+  build-android:
+    docker:
+      - image: randomgraphics/rapid-vulkan:android-latest
+    steps:
+      - run:
+          name: prep git
+          command: |
+            git config --global --add safe.directory /tmp/_circleci_local_build_repo
+            git config --global --add safe.directory /root/project
+      - checkout
+      - run:
+          name: build
+          command: |
+            source dev/env/env.rc
+            build.py -a d
+            build.py -a p
+            build.py -a r
+
+  # build-windows:
+  #   executor: win/server-2022
+  #   steps:
+  #     - checkout
+  #     - run:
+  #         name: build
+  #         shell: powershell.exe
+  #         command: dev/docker/windows/ci.ps1
 
 workflows:
   build-and-test:
     jobs:
-      - build-windows
-      # - lint
-      # - build-linux-gcc:
-      #     requires:
-      #       - lint
-      # - build-linux-clang:
-      #     requires:
-      #       - lint
-      # - build-android:
-      #     requires:
-      #       - lint
+      - lint
+      - build-linux-gcc:
+          requires:
+            - lint
+      - build-linux-clang:
+          requires:
+            - lint
+      - build-android:
+          requires:
+            - lint
       # - build-windows:
       #     requires:
       #       - lint
