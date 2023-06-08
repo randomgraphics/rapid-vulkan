@@ -3108,6 +3108,15 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
         instanceExtensions[VK_EXT_DEBUG_REPORT_EXTENSION_NAME] = false;
         instanceExtensions[VK_EXT_DEBUG_UTILS_EXTENSION_NAME]  = false;
     }
+#ifdef _glfw3_h_
+    {
+        // Automatically enable window surface extension if GLFW is available. This is to make it easier to use
+        // rapid-vulkan with GLFW.
+        uint32_t count;
+        auto     exts = glfwGetRequiredInstanceExtensions(&count);
+        for (uint32_t i = 0; i < count; ++i) { instanceExtensions[exts[i]] = false; }
+    }
+#endif
     for (const auto & e : cp.instanceExtensions) { instanceExtensions[e.first.c_str()] = e.second; }
 
     // make sure all required layers and extensions are actually supported

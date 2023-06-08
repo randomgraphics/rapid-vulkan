@@ -52,6 +52,21 @@ SOFTWARE.
 #define RAPID_VULKAN_ENABLE_VMA 1
 #endif
 
+/// \def RAPID_VULKAN_ENABLE_GLFW3
+/// Set to 1 to enable GLFW3 interation helpers. Disabled by default.
+#ifndef RAPID_VULKAN_ENABLE_GLFW3
+#define RAPID_VULKAN_ENABLE_GLFW3 0
+#endif
+
+/// \def RAPID_VULKAN_GLFW3_HEADER
+/// \brief When RAPID_VULKAN_ENABLE_GLFW3 is enabled, this macro defines the path and name of GLFW3 header file to include.
+/// By default, it is set to <GLFW/glfw3.h>. You can override it by defining it before including rapid-vulkan.h.
+#if RAPID_VULKAN_ENABLE_GLFW3
+#ifndef RAPID_VULKAN_GLFW3_HEADER
+#define RAPID_VULKAN_GLFW3_HEADER <GLFW/glfw3.h>
+#endif
+#endif
+
 /// \def RAPID_VULKAN_THROW
 /// The macro to throw runtime exception.
 #ifndef RAPID_VULKAN_THROW
@@ -64,7 +79,7 @@ SOFTWARE.
 /// quickly identify the source of the error. The default implementation does
 /// nothing but return empty string.
 #ifndef RAPID_VULKAN_BACKTRACE
-#define RAPID_VULKAN_BACKTRACE() std::string("You have to define RAPID_VULKAN_BACKTRACE to retrieve current callstack.")
+#define RAPID_VULKAN_BACKTRACE() std::string("You have to define RAPID_VULKAN_BACKTRACE to retrieve current call stack.")
 #endif
 
 /// \def RAPID_VULKAN_LOG_ERROR
@@ -176,6 +191,16 @@ SOFTWARE.
 #endif // RAPID_VULKAN_ENABLE_VMA
 
 // ---------------------------------------------------------------------------------------------------------------------
+// include GLFW header if asked to do so
+#if RAPID_VULKAN_ENABLE_GLFW3
+#ifdef _glfw3_h_
+// todo issue warnings if GLFW3 header is already included.
+#else
+#include RAPID_VULKAN_GLFW3_HEADER
+#endif
+#endif
+
+// ---------------------------------------------------------------------------------------------------------------------
 // include other standard/system headers
 
 #include <cassert>
@@ -187,6 +212,7 @@ SOFTWARE.
 #include <vector>
 #include <map>
 #include <string>
+#include <sstream>
 #include <unordered_map>
 #include <tuple>
 #include <optional>
@@ -429,6 +455,17 @@ vk::PhysicalDevice selectTheMostPowerfulPhysicalDevice(vk::ArrayProxy<const vk::
 // ---------------------------------------------------------------------------------------------------------------------
 //
 std::vector<vk::ExtensionProperties> enumerateDeviceExtensions(vk::PhysicalDevice dev);
+
+
+#if RAPID_VULKAN_ENABLE_GLFW3
+// ---------------------------------------------------------------------------------------------------------------------
+/// @brief Helper functions to create a Vulkan surface from GLFW window.
+inline vk::UniqueSurfaceKHR createGLFWSurface(vk::Instance instance, GLFWwindow * window) {
+    VkSurfaceKHR surface;
+    if (::glfwCreateWindowSurface(instance, window, nullptr, &surface) != VK_SUCCESS) { RVI_THROW("failed to create window surface!"); }
+    return vk::UniqueSurfaceKHR(surface, {instance});
+}
+#endif
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// The root class of most of the other public classes in this library.
