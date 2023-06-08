@@ -457,7 +457,6 @@ vk::PhysicalDevice selectTheMostPowerfulPhysicalDevice(vk::ArrayProxy<const vk::
 //
 std::vector<vk::ExtensionProperties> enumerateDeviceExtensions(vk::PhysicalDevice dev);
 
-
 #if RAPID_VULKAN_ENABLE_GLFW3
 // ---------------------------------------------------------------------------------------------------------------------
 /// @brief Helper functions to create a Vulkan surface from GLFW window.
@@ -2134,7 +2133,7 @@ public:
 private:
     ConstructParameters         _cp;
     GlobalInfo                  _gi {};
-    std::vector<CommandQueue *> _queues;  // one for each queue family
+    std::vector<CommandQueue *> _queues; // one for each queue family
     CommandQueue *              _graphics = nullptr;
     CommandQueue *              _compute  = nullptr;
     CommandQueue *              _transfer = nullptr;
@@ -2222,7 +2221,7 @@ public:
 
     /// Return a device construct parameter that works with this instance.
     Device::ConstructParameters dcp() const {
-        auto cp_ = cp();
+        auto                        cp_ = cp();
         Device::ConstructParameters r;
         r.apiVersion = cp_.apiVersion;
         r.instance   = handle();
@@ -2239,7 +2238,7 @@ private:
 #endif
     vk::DynamicLoader _loader;
 #endif
-    vk::DebugReportCallbackEXT  _debugReport {};
+    vk::DebugReportCallbackEXT _debugReport {};
 };
 
 } // namespace RAPID_VULKAN_NAMESPACE

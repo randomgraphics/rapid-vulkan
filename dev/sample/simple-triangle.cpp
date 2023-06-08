@@ -16,7 +16,7 @@ int main() {
     auto h        = uint32_t(720);
     auto glfw     = GLFWInit();
     auto window   = glfwCreateWindow(w, h, "simple-triangle", nullptr, nullptr);
-    auto instance = Instance(Instance::ConstructParameters{}.setValidation(Instance::BREAK_ON_VK_ERROR));
+    auto instance = Instance(Instance::ConstructParameters {}.setValidation(Instance::BREAK_ON_VK_ERROR));
     auto surface  = createGLFWSurface(instance, window);
     auto device   = Device(instance.dcp().setSurface(surface.get()));
     auto gi       = device.gi();

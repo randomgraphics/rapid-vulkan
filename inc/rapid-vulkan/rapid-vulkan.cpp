@@ -1977,18 +1977,18 @@ GraphicsPipeline::GraphicsPipeline(const ConstructParameters & params): Pipeline
 
     // setup dynamic states
     std::vector<vk::DynamicState> dynamicStates;
-    for(const auto & [s, v] : params.dynamic) {
+    for (const auto & [s, v] : params.dynamic) {
         dynamicStates.push_back(s);
-        switch(s) {
+        switch (s) {
         case vk::DynamicState::eViewport:
-            viewport.setViewportCount((uint32_t)v);
+            viewport.setViewportCount((uint32_t) v);
             viewport.setPViewports(nullptr);
             break;
         case vk::DynamicState::eViewportWithCount:
             viewport.setViewports({});
             break;
         case vk::DynamicState::eScissor:
-            viewport.setScissorCount((uint32_t)v);
+            viewport.setScissorCount((uint32_t) v);
             viewport.setPScissors(nullptr);
             break;
         case vk::DynamicState::eScissorWithCount:
@@ -2146,11 +2146,11 @@ public:
 
         // set dynamic viewport and scissor
         vk::Viewport vp(0, 0, (float) bb->extent.width, (float) bb->extent.height, 0, 1);
-        //cb.setViewportWithCount(1, &vp);
+        // cb.setViewportWithCount(1, &vp);
         cb.setViewport(0, 1, &vp);
 
         vk::Rect2D scissor({0, 0}, bb->extent);
-        //cb.setScissorWithCount(1, &scissor);
+        // cb.setScissorWithCount(1, &scissor);
         cb.setScissor(0, 1, &scissor);
 
         std::array cv = {vk::ClearValue().setColor(params.color), vk::ClearValue().setDepthStencil(params.depth)};
@@ -2729,7 +2729,7 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
 
     // some extensions are always enabled by default
     askedDeviceExtensions[VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME] = true;
-    askedDeviceExtensions[VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME] = true;
+    askedDeviceExtensions[VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME]    = true;
 
     // #if PH_ANDROID == 0
     //     if (isRenderDocPresent()) {                                                       // only add this when renderdoc is available
@@ -3021,21 +3021,21 @@ struct PhysicalDeviceInfo {
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
-    static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT objectType, uint64_t object, size_t location,
-                                                  int32_t messageCode, const char * prefix, const char * message, void * userData) {
+static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT objectType, uint64_t object, size_t location,
+                                              int32_t messageCode, const char * prefix, const char * message, void * userData) {
     auto reportVkError = [&]() {
         // if (objectType == vk::DebugReportObjectTypeEXT::eDevice && _lost) {
         //     // Ignore validation errors on lost device, to avoid spamming log with useless messages.
         //     return VK_FALSE;
         // }
-        (void)objectType;
-        (void)object;
-        (void)location;
-        (void)messageCode;
-        (void)prefix;
+        (void) objectType;
+        (void) object;
+        (void) location;
+        (void) messageCode;
+        (void) prefix;
 
-        Instance * instance = reinterpret_cast<Instance *>(userData);
-        const auto & cp     = instance->cp();
+        Instance *   instance = reinterpret_cast<Instance *>(userData);
+        const auto & cp       = instance->cp();
 
         auto ss = std::stringstream();
         ss << "[Vulkan] " << prefix << " : " << message;
