@@ -16,8 +16,10 @@
     } while (false)
 #endif
 
-// Enable GLFW3 support
+// Enable GLFW3 support if not on Andorid or iOS.
+#ifndef __ANDROID__
 #define RAPID_VULKAN_ENABLE_GLFW3 1
 #define RAPID_VULKAN_GLFW3_HEADER <glfw/include/GLFW/glfw3.h>
+#endif
 
 #include <rapid-vulkan/rapid-vulkan.h>
