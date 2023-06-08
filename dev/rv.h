@@ -18,6 +18,6 @@
 
 // Enable GLFW3 support
 #define RAPID_VULKAN_ENABLE_GLFW3 1
-#define RAPID_VULKAN_GLFW3_HEADER "3rd-party/glfw/include/GLFW/glfw3.h"
+#define RAPID_VULKAN_GLFW3_HEADER <glfw/include/GLFW/glfw3.h>
 
 #include <rapid-vulkan/rapid-vulkan.h>

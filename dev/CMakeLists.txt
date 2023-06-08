@@ -36,6 +36,7 @@ endif()
 # Build rapid-vulkan into a static library
 add_library(rapid-vulkan-static STATIC rv.cpp)
 target_compile_features(rapid-vulkan-static PUBLIC cxx_std_17)
+target_include_directories(rapid-vulkan-static PUBLIC 3rd-party)
 target_compile_definitions(rapid-vulkan-static PUBLIC  $<$<CONFIG:Debug>:RAPID_VULKAN_ENABLE_DEBUG_BUILD=1>)
 
 add_subdirectory(sample)

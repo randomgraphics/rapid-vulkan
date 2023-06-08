@@ -211,6 +211,7 @@ SOFTWARE.
 #include <atomic>
 #include <vector>
 #include <map>
+#include <set>
 #include <string>
 #include <sstream>
 #include <unordered_map>
@@ -1676,7 +1677,7 @@ public:
         vk::PipelineDepthStencilStateCreateInfo            depth {};
         std::vector<vk::PipelineColorBlendAttachmentState> attachments {defaultAttachment()};
         std::array<float, 4>                               blendConstants {};
-        std::vector<vk::DynamicState>                      dynamic {};
+        std::map<vk::DynamicState, uint64_t>               dynamic {};
         vk::Pipeline                                       baseHandle {};
         uint32_t                                           baseIndex {};
 
@@ -1697,19 +1698,31 @@ public:
         }
 
         ConstructParameters & dynamicTopology() {
-            dynamic.push_back(vk::DynamicState::ePrimitiveTopology);
+            dynamic[vk::DynamicState::ePrimitiveTopology] = 0;
             return *this;
         }
 
-        ConstructParameters & dynamicViewport() {
-            dynamic.push_back(vk::DynamicState::eViewportWithCount);
-            viewports.clear();
+        /// @brief Enable dyanmic viewport. Also specify the number of viewports.
+        /// @param count Specify how many viewports will be used. Set to 0 to enable VK_DYNAMIC_STATE_VIEWPORT_WITH_COUNT_EXT.
+        ConstructParameters & dynamicViewport(size_t count = 1) {
+            if (0 == count) {
+                dynamic.erase(vk::DynamicState::eViewport);
+                dynamic[vk::DynamicState::eViewportWithCountEXT] = 0;
+            } else {
+                dynamic.erase(vk::DynamicState::eViewportWithCountEXT);
+                dynamic[vk::DynamicState::eViewport] = count;
+            }
             return *this;
         }
 
-        ConstructParameters & dynamicScissor() {
-            dynamic.push_back(vk::DynamicState::eScissorWithCount);
-            scissors.clear();
+        ConstructParameters & dynamicScissor(size_t count = 1) {
+            if (0 == count) {
+                dynamic.erase(vk::DynamicState::eScissor);
+                dynamic[vk::DynamicState::eScissorWithCountEXT] = 0;
+            } else {
+                dynamic.erase(vk::DynamicState::eScissorWithCountEXT);
+                dynamic[vk::DynamicState::eScissor] = count;
+            }
             return *this;
         }
 

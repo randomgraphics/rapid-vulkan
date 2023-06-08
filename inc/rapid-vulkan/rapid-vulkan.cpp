@@ -1970,26 +1970,36 @@ GraphicsPipeline::GraphicsPipeline(const ConstructParameters & params): Pipeline
     // setup vertex input stage
     auto vertex = vk::PipelineVertexInputStateCreateInfo().setVertexAttributeDescriptions(params.va).setVertexBindingDescriptions(params.vb);
 
-    // setup dynamic states
-    auto dynamic  = vk::PipelineDynamicStateCreateInfo().setDynamicStates(params.dynamic);
-    bool dynaView = false, dynaScissor = false;
-    for (auto s : params.dynamic) {
-        if (vk::DynamicState::eViewportWithCount == s)
-            dynaView = true;
-        else if (vk::DynamicState::eScissorWithCount == s)
-            dynaScissor = true;
-    }
-
-    // setup viewport stage
+    // setup viewport and scissor states.
     auto viewport = vk::PipelineViewportStateCreateInfo();
-    if (!dynaView) {
-        RVI_REQUIRE(params.viewports.size() > 0);
-        viewport.setViewports(params.viewports);
+    viewport.setViewports(params.viewports);
+    viewport.setScissors(params.scissors);
+
+    // setup dynamic states
+    std::vector<vk::DynamicState> dynamicStates;
+    for(const auto & [s, v] : params.dynamic) {
+        dynamicStates.push_back(s);
+        switch(s) {
+        case vk::DynamicState::eViewport:
+            viewport.setViewportCount((uint32_t)v);
+            viewport.setPViewports(nullptr);
+            break;
+        case vk::DynamicState::eViewportWithCount:
+            viewport.setViewports({});
+            break;
+        case vk::DynamicState::eScissor:
+            viewport.setScissorCount((uint32_t)v);
+            viewport.setPScissors(nullptr);
+            break;
+        case vk::DynamicState::eScissorWithCount:
+            viewport.setScissors({});
+            break;
+        default:
+            // do nothing
+            break;
+        }
     }
-    if (!dynaScissor) {
-        RVI_REQUIRE(params.scissors.size() > 0);
-        viewport.setScissors(params.scissors);
-    }
+    vk::PipelineDynamicStateCreateInfo dynamicCI({}, dynamicStates);
 
     // setup blend stage
     auto blend           = vk::PipelineColorBlendStateCreateInfo {}.setAttachments(params.attachments);
@@ -1997,7 +2007,7 @@ GraphicsPipeline::GraphicsPipeline(const ConstructParameters & params): Pipeline
 
     // setup the create info
     auto ci = vk::GraphicsPipelineCreateInfo({}, (uint32_t) shaderStages.size(), shaderStages.data(), &vertex, &params.ia, &params.tess, &viewport,
-                                             &params.rast, &params.msaa, &params.depth, &blend, &dynamic, layout().handle(), params.pass, params.subpass,
+                                             &params.rast, &params.msaa, &params.depth, &blend, &dynamicCI, layout().handle(), params.pass, params.subpass,
                                              params.baseHandle, params.baseIndex);
 
     // create the shader.
