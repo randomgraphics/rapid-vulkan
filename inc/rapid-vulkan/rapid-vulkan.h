@@ -152,6 +152,12 @@ SOFTWARE.
 #define VK_NO_PROTOTYPES
 #endif
 
+// check for minimal required vulkan.hpp version.
+#if VK_HEADER_VERSION < 211
+#error "rapid-vulkan library requires Vulkan SDK version 1.3.211 or later."
+#endif
+
+
 // ---------------------------------------------------------------------------------------------------------------------
 // include VMA header if not already included.
 #if RAPID_VULKAN_ENABLE_VMA
@@ -1236,7 +1242,7 @@ public:
     /// @param format The pixel format of the image.
     /// @param hint   The hint of the aspect flags. The function will try to use this hinted aspect flag, as long as it is compatible the format.
     ///               Set to vk::ImageAspectFlagBits::eNone to let the function determine the aspect flags.
-    static vk::ImageAspectFlags determineImageAspect(vk::Format format, vk::ImageAspectFlags hint = vk::ImageAspectFlagBits::eNone);
+    static vk::ImageAspectFlags determineImageAspect(vk::Format format, vk::ImageAspectFlags hint = vk::ImageAspectFlagBits::eNoneKHR);
 
     Image(const ConstructParameters &);
 
