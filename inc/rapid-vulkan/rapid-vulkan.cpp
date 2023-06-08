@@ -2169,8 +2169,12 @@ public:
         _graphicsQueue->submit({cb, {}, {frame.renderFinished}, {frame.frameEndSemaphore}});
 
         // present current frame.h
-        auto presentInfo =
-            vk::PresentInfoKHR().setSwapchainCount(1).setPSwapchains(&_handle).setPImageIndices(&frame.imageIndex).setPWaitSemaphores(&frame.frameEndSemaphore);
+        auto presentInfo = vk::PresentInfoKHR()
+                               .setSwapchainCount(1)
+                               .setPSwapchains(&_handle)
+                               .setPImageIndices(&frame.imageIndex)
+                               .setWaitSemaphoreCount(1)
+                               .setPWaitSemaphores(&frame.frameEndSemaphore);
         auto result = _presentQueue.presentKHR(&presentInfo);
         if (vk::Result::eSuccess == result) {
             // Store the frame end command buffer. it'll be used later to wait for the frame to be available again to further use.
@@ -2343,7 +2347,7 @@ private:
             // f.frameAvailable = gi->device.createFence({vk::FenceCreateFlagBits::eSignaled}, gi->allocator);
             setVkObjectName(gi->device, f.imageAvailable, format("image available semaphore %zu", i));
             setVkObjectName(gi->device, f.renderFinished, format("render finished semaphore %zu", i));
-            setVkObjectName(gi->device, f.frameEndSemaphore, format("layout changed semaphore %zu", i));
+            setVkObjectName(gi->device, f.frameEndSemaphore, format("frame end semaphore %zu", i));
             // setVkObjectName(gi->device, f.frameAvailable, format("frame available fence %zu", i));
         }
     }

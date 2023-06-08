@@ -3,10 +3,10 @@
 #include "shader/simple-triangle.vert.spv.h"
 #include "shader/simple-triangle.frag.spv.h"
 
-vk::SurfaceKHR createSurface(vk::Instance instance, GLFWwindow * window) {
+vk::UniqueSurfaceKHR createSurface(vk::Instance instance, GLFWwindow * window) {
     VkSurfaceKHR surface;
     if (glfwCreateWindowSurface(instance, window, nullptr, &surface) != VK_SUCCESS) { throw std::runtime_error("failed to create window surface!"); }
-    return surface;
+    return vk::UniqueSurfaceKHR(surface, {instance});
 }
 
 std::vector<std::string> getWindowExtensions() {
@@ -31,7 +31,7 @@ int main() {
     auto window   = glfwCreateWindow(w, h, "simple-triangle", nullptr, nullptr);
     auto instance = Instance(Instance::ConstructParameters {}.addExtensions(true, getWindowExtensions()));
     auto surface  = createSurface(instance, window);
-    auto device   = Device(instance.dcp().setSurface(surface).setValidation(Device::BREAK_ON_VK_ERROR));
+    auto device   = Device(instance.dcp().setSurface(surface.get()).setValidation(Device::BREAK_ON_VK_ERROR));
     auto gi       = device.gi();
     auto vs       = Shader(Shader::ConstructParameters {{"simple-triangle-vs"}}.setGi(gi).setSpirv(simple_triangle_vert));
     auto fs       = Shader(Shader::ConstructParameters {{"simple-triangle-fs"}, gi}.setSpirv(simple_triangle_frag));
