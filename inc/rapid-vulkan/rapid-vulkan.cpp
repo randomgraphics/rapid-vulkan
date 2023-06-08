@@ -2145,8 +2145,13 @@ public:
         }
 
         // set dynamic viewport and scissor
-        cb.setViewportWithCount(vk::Viewport(0, 0, (float) bb->extent.width, (float) bb->extent.height, 0, 1));
-        cb.setScissorWithCount(vk::Rect2D({0, 0}, bb->extent));
+        vk::Viewport vp(0, 0, (float) bb->extent.width, (float) bb->extent.height, 0, 1);
+        cb.setViewportWithCount(vp);
+        cb.setViewport(0, 1, &vp);
+
+        vk::Rect2D scissor({0, 0}, bb->extent);
+        cb.setScissorWithCount(scissor);
+        cb.setScissor(0, 1, &scissor);
 
         std::array cv = {vk::ClearValue().setColor(params.color), vk::ClearValue().setDepthStencil(params.depth)};
         _renderPass->cmdBegin(cb, vk::RenderPassBeginInfo {{}, bb->fb->handle(), vk::Rect2D({0, 0}, bb->extent)}.setClearValues(cv));
