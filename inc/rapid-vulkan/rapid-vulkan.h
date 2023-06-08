@@ -2014,15 +2014,6 @@ public:
     RVI_NO_COPY(Device);
     RVI_NO_MOVE(Device);
 
-    /// Define level of validation on Vulkan error.
-    enum Validation {
-        VALIDATION_DISABLED = 0,
-        LOG_ON_VK_ERROR,
-        // LOG_ON_VK_ERROR_WITH_CALL_STACK,
-        THROW_ON_VK_ERROR,
-        BREAK_ON_VK_ERROR,
-    };
-
     enum Verbosity {
         SILENCE = 0,
         BRIEF,
@@ -2057,10 +2048,6 @@ public:
 
         /// Set to true to create VMA allocator and store in the GlobalInfo::vmaAllocator field.
         bool enableVmaAllocator = true;
-
-        /// Set to true to enable validation layer.
-        /// \todo move to Device class.
-        Validation validation = RAPID_VULKAN_ENABLE_DEBUG_BUILD ? LOG_ON_VK_ERROR : VALIDATION_DISABLED;
 
         /// set to false to make the creation log less verbose.
         Verbosity printVkInfo = BRIEF;
@@ -2100,11 +2087,6 @@ public:
 
         ConstructParameters & setEnableVmaAllocator(bool b) {
             enableVmaAllocator = b;
-            return *this;
-        }
-
-        ConstructParameters & setValidation(Validation v) {
-            validation = v;
             return *this;
         }
 
@@ -2152,28 +2134,26 @@ public:
 private:
     ConstructParameters         _cp;
     GlobalInfo                  _gi {};
-    vk::DebugReportCallbackEXT  _debugReport {};
-    bool                        _lost {}; // if the device has lost.
     std::vector<CommandQueue *> _queues;  // one for each queue family
     CommandQueue *              _graphics = nullptr;
     CommandQueue *              _compute  = nullptr;
     CommandQueue *              _transfer = nullptr;
     CommandQueue *              _present  = nullptr;
-
-private:
-    VkBool32 debugCallback(vk::DebugReportFlagsEXT, vk::DebugReportObjectTypeEXT, uint64_t, size_t, int32_t, const char *, const char *);
-
-    static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT objectType, uint64_t object, size_t location,
-                                                  int32_t messageCode, const char * prefix, const char * message, void * userData) {
-        auto self = (Device *) userData;
-        return self->debugCallback((vk::DebugReportFlagsEXT) flags, (vk::DebugReportObjectTypeEXT) objectType, object, location, messageCode, prefix, message);
-    }
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// A wrapper class for VkInstance
 class Instance {
 public:
+    /// Define level of validation on Vulkan error.
+    enum Validation {
+        VALIDATION_DISABLED = 0,
+        LOG_ON_VK_ERROR,
+        // LOG_ON_VK_ERROR_WITH_CALL_STACK,
+        THROW_ON_VK_ERROR,
+        BREAK_ON_VK_ERROR,
+    };
+
     struct ConstructParameters {
         /// @brief Optional parameter to specify which version of the API you want to use to create the instance.
         /// Leaving it as zero means using the highest available version.
@@ -2189,8 +2169,8 @@ public:
         /// structure chain passed to VkInstanceCreateInfo::pNext
         std::vector<StructureChain> instanceCreateInfo {};
 
-        /// Set to true to enable validation layers and extensions.
-        bool validation = RAPID_VULKAN_ENABLE_DEBUG_BUILD;
+        /// Set validation behavior.
+        Validation validation = RAPID_VULKAN_ENABLE_DEBUG_BUILD ? LOG_ON_VK_ERROR : VALIDATION_DISABLED;
 
         /// Creation log output verbosity
         Device::Verbosity printVkInfo = Device::BRIEF;
@@ -2198,6 +2178,11 @@ public:
         /// Define custom function pointer to load Vulkan function pointers. Set to null to use the built-in one.
         /// Ignored when RAPID_VULKAN_ENABLE_LOADER is not 1.
         PFN_vkGetInstanceProcAddr getInstanceProcAddr = nullptr;
+
+        ConstructParameters & setValidation(Validation v) {
+            validation = v;
+            return *this;
+        }
 
         ConstructParameters & addExtensions(bool required, const char * const * exts, size_t count = 0) {
             if (0 == count) {
@@ -2241,7 +2226,6 @@ public:
         Device::ConstructParameters r;
         r.apiVersion = cp_.apiVersion;
         r.instance   = handle();
-        if (!cp_.validation) r.validation = Device::VALIDATION_DISABLED;
         return r;
     }
 
@@ -2255,6 +2239,7 @@ private:
 #endif
     vk::DynamicLoader _loader;
 #endif
+    vk::DebugReportCallbackEXT  _debugReport {};
 };
 
 } // namespace RAPID_VULKAN_NAMESPACE
