@@ -2146,11 +2146,11 @@ public:
 
         // set dynamic viewport and scissor
         vk::Viewport vp(0, 0, (float) bb->extent.width, (float) bb->extent.height, 0, 1);
-        // cb.setViewportWithCount(1, &vp);
+        // cb.setViewportWithCount(1, &vp); // FIXME: this line crashes on Ubunut. Reason unknown.
         cb.setViewport(0, 1, &vp);
 
         vk::Rect2D scissor({0, 0}, bb->extent);
-        // cb.setScissorWithCount(1, &scissor);
+        // cb.setScissorWithCount(1, &scissor); // FIXME: this line crashes on Ubunut. Reason unknown.
         cb.setScissor(0, 1, &scissor);
 
         std::array cv = {vk::ClearValue().setColor(params.color), vk::ClearValue().setDepthStencil(params.depth)};
