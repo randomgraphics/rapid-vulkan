@@ -2237,9 +2237,11 @@ public:
 
     /// Return a device construct parameter that works with this instance.
     Device::ConstructParameters dcp() const {
+        auto cp_ = cp();
         Device::ConstructParameters r;
-        r.apiVersion = cp().apiVersion;
+        r.apiVersion = cp_.apiVersion;
         r.instance   = handle();
+        if (!cp_.validation) r.validation = Device::VALIDATION_DISABLED;
         return r;
     }
 

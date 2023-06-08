@@ -2146,11 +2146,11 @@ public:
 
         // set dynamic viewport and scissor
         vk::Viewport vp(0, 0, (float) bb->extent.width, (float) bb->extent.height, 0, 1);
-        cb.setViewportWithCount(vp);
+        cb.setViewportWithCount(1, &vp);
         cb.setViewport(0, 1, &vp);
 
         vk::Rect2D scissor({0, 0}, bb->extent);
-        cb.setScissorWithCount(scissor);
+        cb.setScissorWithCount(1, &scissor);
         cb.setScissor(0, 1, &scissor);
 
         std::array cv = {vk::ClearValue().setColor(params.color), vk::ClearValue().setDepthStencil(params.depth)};
@@ -2786,8 +2786,12 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
     PhysicalDeviceFeatureList   deviceFeatures(cp.features1, cp.features2, cp.features3);
     std::map<std::string, bool> askedDeviceExtensions = cp.deviceExtensions;
 
-    // more extension
+    vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT extendedDynamicStateFeatures(true);
+    deviceFeatures.addFeature(extendedDynamicStateFeatures);
+
+    // some extensions are always enabled by default
     askedDeviceExtensions[VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME] = true;
+    askedDeviceExtensions[VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME] = true;
 
     // #if PH_ANDROID == 0
     //     if (isRenderDocPresent()) {                                                       // only add this when renderdoc is available
