@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identify the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 7
+#define RAPID_VULKAN_HEADER_REVISION 8
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -156,7 +156,6 @@ SOFTWARE.
 #if VK_HEADER_VERSION < 211
 #error "rapid-vulkan library requires Vulkan SDK version 1.3.211 or later."
 #endif
-
 
 // ---------------------------------------------------------------------------------------------------------------------
 // include VMA header if not already included.
