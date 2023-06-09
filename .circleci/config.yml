@@ -16,7 +16,7 @@ jobs:
       - checkout
       - run: dev/bin/cit.py -l
 
-  build-linux-gcc:
+  build-linux-gcc-with-cit:
     docker:
       - image: randomgraphics/rapid-vulkan:latest
     steps:
@@ -33,6 +33,9 @@ jobs:
             build.py -g d
             build.py -g p
             build.py -g r
+            build/posix.gcc.d/dev/test/rapid-vulkan-test
+            build/posix.gcc.p/dev/test/rapid-vulkan-test
+            build/posix.gcc.r/dev/test/rapid-vulkan-test
 
   build-linux-clang:
     docker:
@@ -83,7 +86,7 @@ workflows:
   build-and-test:
     jobs:
       - lint
-      - build-linux-gcc:
+      - build-linux-gcc-with-cit:
           requires:
             - lint
       - build-linux-clang:
