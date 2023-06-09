@@ -161,7 +161,7 @@ public:
             _handle.end();
             _state = ENDED;
         } else if (_state != ENDED) {
-            RAPID_VULKAN_LOG_ERROR("[ERROR] Command buffer %s is not in RECORDING or ENDED state!", _name.c_str());
+            RVI_LOGE("[ERROR] Command buffer %s is not in RECORDING or ENDED state!", _name.c_str());
             return false;
         }
 
@@ -205,7 +205,7 @@ public:
         if (EXECUTING == _state) {
             RVI_ASSERT(_effectiveFence);
             auto result = _gi->device.waitForFences({_effectiveFence}, true, UINT64_MAX);
-            if (result != vk::Result::eSuccess) { RAPID_VULKAN_LOG_ERROR("[ERROR] Command buffer %s failed to wait for fence!", _name.c_str()); }
+            if (result != vk::Result::eSuccess) { RVI_LOGE("[ERROR] Command buffer %s failed to wait for fence!", _name.c_str()); }
             _state = FINISHED;
         }
     }
@@ -289,7 +289,7 @@ private:
         if (!cb) return nullptr;
         auto it = _all.find(cb);
         if (it == _all.end()) {
-            if (!expectedNull) RAPID_VULKAN_LOG_ERROR("Invalid command buffer handle.");
+            if (!expectedNull) RVI_LOGE("Invalid command buffer handle.");
             return nullptr;
         }
         return it->second.get();
@@ -299,7 +299,7 @@ private:
         if (p) {
             p->finish();
             if (CommandBuffer::FINISHED != p->state()) {
-                RAPID_VULKAN_LOG_ERROR("Can't finish command buffer %s: buffer was not in EXECUTING or FINISHED state.", p->name().c_str());
+                RVI_LOGE("Can't finish command buffer %s: buffer was not in EXECUTING or FINISHED state.", p->name().c_str());
                 return;
             }
             RAPID_VULKAN_ASSERT(std::find(_pendings.begin(), _pendings.end(), p) != _pendings.end());
@@ -324,7 +324,7 @@ private:
     void waitIdle() {
         try {
             _desc.handle.waitIdle();
-        } catch (vk::SystemError & error) { RAPID_VULKAN_LOG_ERROR("%s", error.what()); }
+        } catch (vk::SystemError & error) { RVI_LOGE("%s", error.what()); }
 
         // then mark all command buffers as finished.
         finish(nullptr);
@@ -419,15 +419,15 @@ public:
 
     void cmdCopy(const CopyParameters & params) {
         if (!params.cb) {
-            RAPID_VULKAN_LOG_ERROR("Can't copy buffer: command buffer is null.");
+            RVI_LOGE("Can't copy buffer: command buffer is null.");
             return;
         }
         if (!params.dst) {
-            RAPID_VULKAN_LOG_ERROR("Can't copy buffer: destination buffer is null.");
+            RVI_LOGE("Can't copy buffer: destination buffer is null.");
             return;
         }
         if (0 == params.dstCapacity) {
-            RAPID_VULKAN_LOG_ERROR("Can't copy buffer: destination capacity is 0.");
+            RVI_LOGE("Can't copy buffer: destination capacity is 0.");
             return;
         }
 
@@ -451,7 +451,7 @@ public:
         auto srcOffset = clampRange(dstOffset, size, _desc.size);
         if (0 == size) return;
         if (!params.data) {
-            RAPID_VULKAN_LOG_ERROR("Can't set buffer content: data pointer is null.");
+            RVI_LOGE("Can't set buffer content: data pointer is null.");
             return;
         }
         auto source = (const uint8_t *) params.data + srcOffset;
@@ -501,22 +501,22 @@ public:
     auto map(const MapParameters & params) -> MappedResult {
         auto lock = std::lock_guard {_mutex};
         if (_mapped) {
-            RAPID_VULKAN_LOG_ERROR("buffer %s is already mapped.", _owner.name().c_str());
+            RVI_LOGE("buffer %s is already mapped.", _owner.name().c_str());
             return {};
         }
         if (imported()) {
-            RAPID_VULKAN_LOG_ERROR("Can't map imported buffer %s, since we don't have it memory handle.", _owner.name().c_str());
+            RVI_LOGE("Can't map imported buffer %s, since we don't have it memory handle.", _owner.name().c_str());
             return {};
         }
         if (!_desc.mappable()) {
-            RAPID_VULKAN_LOG_ERROR("buffer %s is not mappable.", _owner.name().c_str());
+            RVI_LOGE("buffer %s is not mappable.", _owner.name().c_str());
             return {};
         }
         auto o = params.offset;
         auto s = params.size;
         clampRange(o, s, _desc.size);
         if (0 == s) {
-            RAPID_VULKAN_LOG_ERROR("mapped range is invalid or empty.");
+            RVI_LOGE("mapped range is invalid or empty.");
             return {};
         }
         // TODO: VMA
@@ -527,7 +527,7 @@ public:
         // } else {
         auto p = _gi->device.mapMemory(_memory, o, s);
         if (!p) {
-            RAPID_VULKAN_LOG_ERROR("Failed to map buffer %s.", _owner.name().c_str());
+            RVI_LOGE("Failed to map buffer %s.", _owner.name().c_str());
             return {};
         }
         _mapped = true;
@@ -847,7 +847,7 @@ struct VkFormatDesc {
         } else {
             auto iter = extra.find((VkFormat) format);
             if (iter != extra.end()) return iter->second;
-            RAPID_VULKAN_LOG_ERROR("Unknown format: %d", (int) format);
+            RVI_LOGE("Unknown format: %d", (int) format);
             return {0, 0, 0};
         }
     }
@@ -868,7 +868,7 @@ public:
         // update mipmap level count
         uint32_t maxLevels = (uint32_t) std::floor(std::log2((double) std::max(_cp.info.extent.width, _cp.info.extent.height))) + 1;
         if (_cp.info.mipLevels > maxLevels) {
-            RAPID_VULKAN_LOG_WARNING("mipmap level count %u is too large, clamped to %u", _cp.info.mipLevels, maxLevels);
+            RVI_LOGW("mipmap level count %u is too large, clamped to %u", _cp.info.mipLevels, maxLevels);
             _cp.info.mipLevels = maxLevels;
         } else if (0 == _cp.info.mipLevels) {
             _cp.info.mipLevels = maxLevels;
@@ -945,7 +945,7 @@ public:
         auto formatDesc = VkFormatDesc::get(_desc.format);
         if ((params.area.x % formatDesc.blockW) != 0 || (params.area.y % formatDesc.blockH) != 0 || (params.area.w % formatDesc.blockW) != 0 ||
             (params.area.h % formatDesc.blockH) != 0) {
-            RAPID_VULKAN_LOG_ERROR("Image::setContent: area is not aligned to block size");
+            RVI_LOGE("Image::setContent: area is not aligned to block size");
             return;
         }
 
@@ -956,7 +956,7 @@ public:
         auto rowPitch = params.pitch;
         if (0 == rowPitch) { rowPitch = width * formatDesc.sizeBytes; }
         if (rowPitch < width * formatDesc.sizeBytes) {
-            RAPID_VULKAN_LOG_ERROR("Image::setContent: row pitch is too small");
+            RVI_LOGE("Image::setContent: row pitch is too small");
             return;
         }
 
@@ -1415,7 +1415,7 @@ public:
             if (0 == i) {
                 args.type = t;
             } else if (args.type != t) {
-                RAPID_VULKAN_LOG_ERROR("All images are expected of same type. But image %zu has a different type than the first image.", i);
+                RVI_LOGE("All images are expected of same type. But image %zu has a different type than the first image.", i);
                 args.type = ImageArgs::INVALID;
             }
         }
@@ -1592,9 +1592,9 @@ static void mergeDescriptorSet(MergedDescriptorSet & merged, const SpvReflectSha
             RVI_ASSERT(0 == strcmp(getDescriptorName(d.binding), name));
             // check for possible conflict
             if (d.binding->binding != i->binding)
-                RAPID_VULKAN_LOG_ERROR("Shader variable %s has conflicting bindings: %d != %d", name, d.binding->binding, i->binding);
+                RVI_LOGE("Shader variable %s has conflicting bindings: %d != %d", name, d.binding->binding, i->binding);
             else if (d.binding->descriptor_type != i->descriptor_type)
-                RAPID_VULKAN_LOG_ERROR("Shader variable %s has conflicting types: %d != %d", name, d.binding->descriptor_type, i->descriptor_type);
+                RVI_LOGE("Shader variable %s has conflicting types: %d != %d", name, d.binding->descriptor_type, i->descriptor_type);
         } else {
             d.binding = i;
         }
@@ -1810,7 +1810,7 @@ private:
                 availableSets--;
                 return s[0];
             } else {
-                RAPID_VULKAN_LOG_ERROR("descriptor pool is out of space.");
+                RVI_LOGE("descriptor pool is out of space.");
                 return {};
             }
         }
@@ -1856,22 +1856,21 @@ private:
                     }
                 }
                 if (!a) {
-                    RAPID_VULKAN_LOG_ERROR("Failed to bind argument pack (%s) to pipeline layout (%s): set %u slot %u (%s) not found in the argument pack.",
-                                           ap.name().c_str(), _owner.name().c_str(), si, i, v[0].c_str());
+                    RVI_LOGE("Failed to bind argument pack (%s) to pipeline layout (%s): set %u slot %u (%s) not found in the argument pack.",
+                             ap.name().c_str(), _owner.name().c_str(), si, i, v[0].c_str());
                     return false;
                 }
 
                 // verify that the argument type is compatible with the descriptor type
                 if (!a->typeCompatibleWith(b.descriptorType)) {
-                    RAPID_VULKAN_LOG_ERROR(
-                        "Failed to bind argument pack (%s) to pipeline layout (%s): set %u slot %u (%s) is of type %s, but the argument is of type %s.",
-                        ap.name().c_str(), _owner.name().c_str(), si, i, v[0].c_str(), vk::to_string(b.descriptorType).c_str(), a->type());
+                    RVI_LOGE("Failed to bind argument pack (%s) to pipeline layout (%s): set %u slot %u (%s) is of type %s, but the argument is of type %s.",
+                             ap.name().c_str(), _owner.name().c_str(), si, i, v[0].c_str(), vk::to_string(b.descriptorType).c_str(), a->type());
                     return false;
                 }
 
                 // verify that there're enough descriptors in the argument.
                 if (a->count() < b.descriptorCount) {
-                    RAPID_VULKAN_LOG_ERROR(
+                    RVI_LOGE(
                         "Failed to bind argument pack (%s) to pipeline layout (%s): set %u slot %u (%s) requires %u descriptors, but the argument has only %zu.",
                         ap.name().c_str(), _owner.name().c_str(), si, i, v[0].c_str(), b.descriptorCount, a->count());
                     return false;
@@ -1905,9 +1904,8 @@ private:
             }
             auto v = std::get_if<Argument::Impl::Constants>(&a->value());
             if (!v) {
-                RAPID_VULKAN_LOG_ERROR(
-                    "Failed to bind argument pack (%s) to pipeline layout (%s): expects push constant on variable (%s), but (%s) is provided",
-                    ap.name().c_str(), _owner.name().c_str(), n.c_str(), a->type());
+                RVI_LOGE("Failed to bind argument pack (%s) to pipeline layout (%s): expects push constant on variable (%s), but (%s) is provided",
+                         ap.name().c_str(), _owner.name().c_str(), n.c_str(), a->type());
                 continue;
             }
             cb.pushConstants(_handle, c.stageFlags, c.offset, std::min<uint32_t>(c.size, (uint32_t) v->size()), v->data());
@@ -2256,7 +2254,7 @@ private:
         auto h           = (uint32_t) _cp.height;
         if (0 == w) w = (uint32_t) surfaceCaps.currentExtent.width;
         if (0 == h) h = (uint32_t) surfaceCaps.currentExtent.height;
-        RAPID_VULKAN_LOG_INFO("Swapchain resolution = %ux%u", w, h);
+        RVI_LOGI("Swapchain resolution = %ux%u", w, h);
 
         // if present and graphics queue are different, we need to add both of them to the queue list.
         std::vector<uint32_t> queueIndices;
@@ -2305,7 +2303,7 @@ private:
         std::stringstream ss;
         ss << "Swapchain created with " << images.size() << " images: ";
         for (const auto & i : images) { ss << " " << std::hex << i; }
-        RAPID_VULKAN_LOG_INFO("%s", ss.str().c_str());
+        RVI_LOGI("%s", ss.str().c_str());
 
         // create a graphics command buffer to transfer swapchain images to the right layout.
         auto c = _graphicsQueue->begin("transfer swapchain images to right layout");
@@ -2494,7 +2492,7 @@ static void printPhysicalDeviceInfo(const std::vector<vk::PhysicalDevice> & avai
         // clang-format on
     }
     ss << std::endl;
-    RAPID_VULKAN_LOG_INFO("%s", ss.str().c_str());
+    RVI_LOGI("%s", ss.str().c_str());
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -2579,7 +2577,7 @@ static void printDeviceFeatures(vk::PhysicalDevice physical, const PhysicalDevic
 #undef PRINT_FEATURE
     if (none) ss << std::endl << "  [None]" << std::endl;
     ss << std::endl;
-    RAPID_VULKAN_LOG_INFO("%s", ss.str().c_str());
+    RVI_LOGI("%s", ss.str().c_str());
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -2608,7 +2606,7 @@ static void printDeviceExtensions(vk::PhysicalDevice physical, const std::vector
     }
     if (none) ss << std::endl << "  [None]" << std::endl;
     ss << std::endl;
-    RAPID_VULKAN_LOG_INFO("%s", ss.str().c_str());
+    RVI_LOGI("%s", ss.str().c_str());
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -2671,7 +2669,7 @@ static void printAvailableQueues(vk::PhysicalDevice physical, const std::vector<
     }
     ss << std::endl;
 
-    RAPID_VULKAN_LOG_INFO("%s", ss.str().c_str());
+    RVI_LOGI("%s", ss.str().c_str());
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -2691,7 +2689,7 @@ static std::vector<const char *> validateExtensions(const std::vector<vk::Extens
         if (a.second) {
             RVI_THROW("Extension %s is not supported by current device.", a.first.c_str());
         } else {
-            RAPID_VULKAN_LOG_WARNING("Optional feature %s is not supported by the current device.", a.first.c_str());
+            RVI_LOGW("Optional feature %s is not supported by the current device.", a.first.c_str());
         }
     }
     return supported;
@@ -2775,7 +2773,7 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
     //         ai.pRecordSettings = &vmaRecordSettings;
     // #endif
     //         if (askedDeviceExtensions.find(VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME) != askedDeviceExtensions.end()) {
-    //             RAPID_VULKAN_LOG_INFO("Enable VMA allocator with buffer device address.");
+    //             RVI_LOGI("Enable VMA allocator with buffer device address.");
     //             ai.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
     //         }
     //         RVI_VK_REQUIRE(vmaCreateAllocator(&ai, &_gi.vmaAllocator));
@@ -2815,7 +2813,7 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
         }
     }
 
-    RAPID_VULKAN_LOG_INFO("Vulkan device initialized.");
+    RVI_LOGI("Vulkan device initialized.");
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -2827,10 +2825,10 @@ Device::~Device() {
     if (_gi.vmaAllocator) vmaDestroyAllocator(_gi.vmaAllocator), _gi.vmaAllocator = nullptr;
 #endif
     if (_gi.device) {
-        RAPID_VULKAN_LOG_INFO("[Device] destroying device...");
+        RVI_LOGI("[Device] destroying device...");
         _gi.device.destroy(_gi.allocator);
         _gi.device = nullptr;
-        RAPID_VULKAN_LOG_INFO("[Device] device destroyed");
+        RVI_LOGI("[Device] device destroyed");
     }
 }
 
@@ -2924,7 +2922,7 @@ struct InstanceInfo {
                 if (l.second) {
                     RVI_THROW("Required VK layer %s is not supported.", l.first);
                 } else {
-                    RAPID_VULKAN_LOG_WARNING("Optional VK layer %s is not supported.", l.first);
+                    RVI_LOGW("Optional VK layer %s is not supported.", l.first);
                 }
                 continue;
             }
@@ -2943,7 +2941,7 @@ struct InstanceInfo {
             if (asked.second) {
                 RVI_THROW("Required VK extension %s is not supported.", asked.first);
             } else {
-                RAPID_VULKAN_LOG_WARNING("Optional VK extension %s is not supported.", asked.first);
+                RVI_LOGW("Optional VK extension %s is not supported.", asked.first);
             }
         }
 
@@ -3041,7 +3039,7 @@ static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDeb
         ss << "[Vulkan] " << prefix << " : " << message;
         // if (v >= LOG_ON_VK_ERROR_WITH_CALL_STACK) { ss << std::endl << backtrace(false); }
         auto str = ss.str();
-        RAPID_VULKAN_LOG_ERROR("%s", str.data());
+        RVI_LOGE("%s", str.data());
         if (cp.validation == Instance::THROW_ON_VK_ERROR) {
             RVI_THROW("%s", str.data());
         } else if (cp.validation == Instance::BREAK_ON_VK_ERROR) {
@@ -3063,15 +3061,15 @@ static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDeb
     // if (flags & vk::DebugReportFlagBitsEXT::eWarning) reportVkError();
 
     // if (flags & VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT) {
-    //     RAPID_VULKAN_LOG_WARNING("[Vulkan] %s : %s", prefix, message);
+    //     RVI_LOGW("[Vulkan] %s : %s", prefix, message);
     // }
 
     // if (flags & VK_DEBUG_REPORT_INFORMATION_BIT_EXT) {
-    //     RAPID_VULKAN_LOG_INFO("[Vulkan] %s : %s", prefix, message);
+    //     RVI_LOGI("[Vulkan] %s : %s", prefix, message);
     // }
 
     // if (flags & VK_DEBUG_REPORT_DEBUG_BIT_EXT) {
-    //     RAPID_VULKAN_LOG_INFO("[Vulkan] %s : %s", prefix, message);
+    //     RVI_LOGI("[Vulkan] %s : %s", prefix, message);
     // }
 
     return VK_FALSE;
@@ -3097,8 +3095,8 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
     if (0 == _cp.apiVersion)
         _cp.apiVersion = instanceInfo.version;
     else if (_cp.apiVersion > instanceInfo.version) {
-        RAPID_VULKAN_LOG_WARNING("Requested version %d is higher than the supported version %d. The instance will be created with %d instead.", _cp.apiVersion,
-                                 instanceInfo.version, instanceInfo.version);
+        RVI_LOGW("Requested version %d is higher than the supported version %d. The instance will be created with %d instead.", _cp.apiVersion,
+                 instanceInfo.version, instanceInfo.version);
         _cp.apiVersion = instanceInfo.version;
     }
 
@@ -3113,21 +3111,24 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
     std::map<const char *, bool> instanceExtensions {
         {VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME, true},
         {VK_KHR_SURFACE_EXTENSION_NAME, true},
+#ifdef _WIN32
+        {"VK_KHR_win32_surface", false},
+#elif defined(__ANDROID__)
+        {"VK_KHR_android_surface", false},
+#elif defined(__linux__)
+        {"VK_KHR_xcb_surface", false},
+        {"VK_KHR_xlib_surface", false},
+        {"VK_KHR_wayland_surface", false},
+#else // macOS
+        {"VK_MVK_macos_surface", false},
+        {"VK_EXT_metal_surface", false},
+#endif
     };
     if (cp.validation) {
         // Enable in-shader debug printf, if supported.
         instanceExtensions[VK_EXT_DEBUG_REPORT_EXTENSION_NAME] = false;
         instanceExtensions[VK_EXT_DEBUG_UTILS_EXTENSION_NAME]  = false;
     }
-#ifdef _glfw3_h_
-    {
-        // Automatically enable window surface extension if GLFW is available. This is to make it easier to use
-        // rapid-vulkan with GLFW.
-        uint32_t count;
-        auto     exts = glfwGetRequiredInstanceExtensions(&count);
-        for (uint32_t i = 0; i < count; ++i) { instanceExtensions[exts[i]] = false; }
-    }
-#endif
     for (const auto & e : cp.instanceExtensions) { instanceExtensions[e.first.c_str()] = e.second; }
 
     // make sure all required layers and extensions are actually supported
@@ -3147,13 +3148,13 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
         for (auto & l : supported.instanceExtensions) { instanceCreationPrompt << " " << l; }
     }
     instanceCreationPrompt << std::endl;
-    RAPID_VULKAN_LOG_INFO("%s", instanceCreationPrompt.str().c_str());
+    RVI_LOGI("%s", instanceCreationPrompt.str().c_str());
 
     // turn off validation, if validation layer is not present
     if (cp.validation) {
         if (std::find_if(supported.layers.begin(), supported.layers.end(), [](const char * l) { return strcmp(l, "VK_LAYER_KHRONOS_validation") == 0; }) ==
             supported.layers.end()) {
-            RAPID_VULKAN_LOG_WARNING("Validation layer is not supported. Validation will be disabled.");
+            RVI_LOGW("Validation layer is not supported. Validation will be disabled.");
             cp.validation = VALIDATION_DISABLED;
         }
     }
@@ -3170,14 +3171,14 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
         _instance = vk::createInstance(ici);
     } catch (vk::SystemError & e) {
         // TODO: print instance information
-        RAPID_VULKAN_LOG_ERROR("Failed to create Vulkan instance: %s", e.what());
+        RVI_LOGE("Failed to create Vulkan instance: %s", e.what());
         throw;
     }
 
     // Print instance information
     if (cp.printVkInfo) {
         auto message = instanceInfo.print(ici, Device::VERBOSE == cp.printVkInfo);
-        RAPID_VULKAN_LOG_INFO("%s", message.data());
+        RVI_LOGI("%s", message.data());
     }
 
 #if RAPID_VULKAN_ENABLE_LOADER
@@ -3194,7 +3195,7 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
         _debugReport = _instance.createDebugReportCallbackEXT(debugci);
     }
 
-    RAPID_VULKAN_LOG_INFO("Vulkan instance initialized.");
+    RVI_LOGI("Vulkan instance initialized.");
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -3205,7 +3206,7 @@ Instance::~Instance() {
         _debugReport = VK_NULL_HANDLE;
     }
     if (_instance) _instance.destroy(), _instance = VK_NULL_HANDLE;
-    RAPID_VULKAN_LOG_INFO("Vulkan instance destroyed.");
+    RVI_LOGI("Vulkan instance destroyed.");
 }
 
 } // namespace RAPID_VULKAN_NAMESPACE

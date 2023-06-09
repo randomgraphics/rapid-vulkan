@@ -2,3 +2,6 @@
 	path = dev/3rd-party/glfw
 	url = https://github.com/glfw/glfw.git
 	branch = 3.3-stable
+[submodule "dev/3rd-party/cli11"]
+	path = dev/3rd-party/cli11
+	url = https://github.com/CLIUtils/CLI11.git
