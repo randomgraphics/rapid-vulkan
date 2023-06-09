@@ -24,13 +24,14 @@ TEST_CASE("cs-buffer-args") {
     ap.c("PushConstants", 0, vk::ArrayProxy<const float> {1.0f});
 
     // run the compute shader to copy data from b1 to b2
-    auto & q = *dev->compute();
-    if (auto c = q.begin("cs-buffer-args")) {
+    auto q = dev->graphics();
+    REQUIRE(q);
+    if (auto c = q->begin("cs-buffer-args")) {
         p.cmdBind(c, ap);
         p.cmdDispatch(c, {1, 1, 1});
-        q.submit({c});
+        q->submit({c});
     }
-    q.wait();
+    q->wait();
 
     if (rdc) rdc.end();
 
