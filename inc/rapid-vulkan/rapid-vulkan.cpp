@@ -255,9 +255,9 @@ public:
 
         // check the incoming pointer
         auto p = promote(sp.commands);
-        if (!p) return; // TODO: maybe allow submitting a command buffer that is not created by this queue?
+        RVI_REQUIRE(p, "The submitted command buffer is not created by this queue!");
 
-        if (!p->submit(_desc.handle, sp)) return;
+        RVI_REQUIRE(p->submit(_desc.handle, sp));
 
         // Done. add the command buffer to the pending list.
         p->pending = _pendings.insert(_pendings.end(), p);
@@ -335,8 +335,8 @@ CommandQueue::CommandQueue(const ConstructParameters & params): Root(params), _i
 CommandQueue::~CommandQueue() { delete _impl; }
 auto CommandQueue::desc() const -> const Desc & { return _impl->desc(); }
 auto CommandQueue::begin(const char * purpose, vk::CommandBufferLevel level) -> vk::CommandBuffer { return _impl->begin(purpose, level); }
-auto CommandQueue::submit(const SubmitParameters & sp) -> void { _impl->submit(sp); }
-auto CommandQueue::wait(vk::CommandBuffer cb) -> void { _impl->wait(cb); }
+void CommandQueue::submit(const SubmitParameters & sp) { _impl->submit(sp); }
+void CommandQueue::wait(vk::CommandBuffer cb) { _impl->wait(cb); }
 
 // *********************************************************************************************************************
 // Buffer
@@ -2066,10 +2066,10 @@ void ComputePipeline::cmdDispatch(vk::CommandBuffer cb, const DispatchParameters
 Swapchain::ConstructParameters & Swapchain::ConstructParameters::setDevice(const Device & d) {
     gi                  = d.gi();
     surface             = d.surface();
-    presentQueueFamily  = d.present()->family();
-    presentQueueIndex   = d.present()->index();
     graphicsQueueFamily = d.graphics()->family();
     graphicsQueueIndex  = d.graphics()->index();
+    presentQueueFamily  = d.present()->family();
+    presentQueueIndex   = d.present()->index();
     return *this;
 }
 
@@ -2078,47 +2078,17 @@ public:
     Impl(Swapchain &, const ConstructParameters & cp): _cp(cp) {
         RVI_REQUIRE(cp.gi);
 
-        // retrieve present queue handle.
-        RVI_REQUIRE(cp.presentQueueFamily != VK_QUEUE_FAMILY_IGNORED);
-        _presentQueue = cp.gi->device.getQueue(cp.presentQueueFamily, cp.presentQueueIndex);
-        RVI_REQUIRE(_presentQueue);
-
-        // Construct a CommandQueue instance for graphics queue.
-        if (_cp.graphicsQueueFamily == VK_QUEUE_FAMILY_IGNORED) {
-            _cp.graphicsQueueFamily = cp.presentQueueFamily;
-            _cp.graphicsQueueIndex  = cp.presentQueueIndex;
-        }
-        _graphicsQueue.reset(
-            new CommandQueue(CommandQueue::ConstructParameters {{"swapchain graphics queue"}, cp.gi, _cp.graphicsQueueFamily, _cp.graphicsQueueIndex}));
-
-        // check if the back buffer format is supported.
-        auto supportedFormats = cp.gi->physical.getSurfaceFormatsKHR(cp.surface);
-        if (_cp.backbufferFormat == vk::Format::eUndefined) {
-            // use the first supported format.
-            RVI_REQUIRE(supportedFormats.size() > 0);
-            _cp.backbufferFormat = supportedFormats[0].format;
-        } else {
-            // check if the specified format is supported.
-            bool supported = false;
-            for (auto f : supportedFormats) {
-                if (f.format == _cp.backbufferFormat) {
-                    supported = true;
-                    break;
-                }
-            }
-            RVI_REQUIRE(supported, "The specified back buffer format is not supported.");
-        }
-
         // create the built-in render pass
-        auto params = RenderPass::ConstructParameters {{"swapchain dummy render pass"}, cp.gi}.simple({_cp.backbufferFormat}, _cp.depthStencilFormat);
+        auto params = RenderPass::ConstructParameters {{"swapchain built-in render pass"}, _cp.gi}.simple({_cp.backbufferFormat}, _cp.depthStencilFormat);
         // We want the color buffer be in presentable layout before and after the render pass. So it can seamlessly connected with the present() call.
         params.attachments[0].setInitialLayout(DESIRED_PRESENT_STATUS.layout).setFinalLayout(DESIRED_PRESENT_STATUS.layout);
         _renderPass.reset(new RenderPass(params));
 
-        recreateSwapchain();
-
-        // begin the first frame.
-        beginFrame();
+        if (cp.surface) {
+            constructWindowSwapchain();
+        } else {
+            constructHeadlessSwapchain();
+        }
     }
 
     ~Impl() {
@@ -2181,23 +2151,30 @@ public:
         }
         _graphicsQueue->submit({cb, {}, {frame.renderFinished}, {frame.frameEndSemaphore}});
 
-        // present current frame.h
-        auto presentInfo = vk::PresentInfoKHR()
-                               .setSwapchainCount(1)
-                               .setPSwapchains(&_handle)
-                               .setPImageIndices(&frame.imageIndex)
-                               .setWaitSemaphoreCount(1)
-                               .setPWaitSemaphores(&frame.frameEndSemaphore);
-        auto result = _presentQueue.presentKHR(&presentInfo);
-        if (vk::Result::eSuccess == result) {
-            // Store the frame end command buffer. it'll be used later to wait for the frame to be available again to further use.
-            frame.frameAvailable = cb;
-        } else if (result == vk::Result::eSuboptimalKHR || result == vk::Result::eErrorOutOfDateKHR) {
-            // this means window/surface size is changed, we need to recreate the swapchain.
-            _graphicsQueue->wait();
-            recreateSwapchain();
+        // present current frame
+        if (_handle) {
+            auto presentInfo = vk::PresentInfoKHR()
+                                .setSwapchainCount(1)
+                                .setPSwapchains(&_handle)
+                                .setPImageIndices(&frame.imageIndex)
+                                .setWaitSemaphoreCount(1)
+                                .setPWaitSemaphores(&frame.frameEndSemaphore);
+            auto result = _presentQueue.presentKHR(&presentInfo);
+            if (vk::Result::eSuccess == result) {
+                // Store the command buffer. This will be used later to wait for the frame to be available for reuse.
+                frame.frameEndCommands = cb;
+            }
+            else if (result == vk::Result::eSuboptimalKHR || result == vk::Result::eErrorOutOfDateKHR) {
+                // this means window/surface size is changed, we need to recreate the swapchain.
+                _graphicsQueue->wait();
+                recreateWindowSwapchain();
+            } else {
+                RVI_THROW("Failed to present swapchain image. result = %s", vk::to_string((vk::Result) result).c_str());
+            }
         } else {
-            RVI_THROW("Failed to present swapchain image. result = %s", vk::to_string((vk::Result) result).c_str());
+            // headless swapchain. Do a dummy submit to wait for the frame end semaphore.
+            _graphicsQueue->submit({cb, {}, {frame.frameEndSemaphore}, {}});
+            frame.frameEndCommands = cb;
         }
 
         // then start a new frame.
@@ -2209,7 +2186,7 @@ private:
     struct FrameImpl : public Frame {
         uint32_t          imageIndex {};
         vk::Semaphore     frameEndSemaphore {};
-        vk::CommandBuffer frameAvailable {};
+        vk::CommandBuffer frameEndCommands {};
     };
 
 private:
@@ -2228,10 +2205,60 @@ private:
     inline static constexpr BackbufferStatus DESIRED_PRESENT_STATUS = PresentParameters().backbufferStatus;
 
 private:
+    void constructWindowSwapchain() {
+        // retrieve present queue handle.
+        RVI_REQUIRE(_cp.presentQueueFamily != VK_QUEUE_FAMILY_IGNORED);
+        _presentQueue = _cp.gi->device.getQueue(_cp.presentQueueFamily, _cp.presentQueueIndex);
+        RVI_REQUIRE(_presentQueue);
+
+        // Construct a CommandQueue instance for graphics queue.
+        RVI_REQUIRE(_cp.graphicsQueueFamily != VK_QUEUE_FAMILY_IGNORED);
+        _graphicsQueue.reset(
+            new CommandQueue(CommandQueue::ConstructParameters {{"swapchain graphics queue"}, _cp.gi, _cp.graphicsQueueFamily, _cp.graphicsQueueIndex}));
+
+        // check if the back buffer format is supported.
+        auto supportedFormats = _cp.gi->physical.getSurfaceFormatsKHR(_cp.surface);
+        if (_cp.backbufferFormat == vk::Format::eUndefined) {
+            // use the first supported format.
+            RVI_REQUIRE(supportedFormats.size() > 0);
+            _cp.backbufferFormat = supportedFormats[0].format;
+        } else {
+            // check if the specified format is supported.
+            bool supported = false;
+            for (auto f : supportedFormats) {
+                if (f.format == _cp.backbufferFormat) {
+                    supported = true;
+                    break;
+                }
+            }
+            RVI_REQUIRE(supported, "The specified back buffer format is not supported.");
+        }
+
+        recreateWindowSwapchain();
+
+        // begin the first frame.
+        beginFrame();
+    }
+
+    void constructHeadlessSwapchain() {
+        RVI_REQUIRE(_cp.graphicsQueueFamily != VK_QUEUE_FAMILY_IGNORED);
+        _graphicsQueue.reset(
+            new CommandQueue(CommandQueue::ConstructParameters {{"swapchain graphics queue"}, _cp.gi, _cp.graphicsQueueFamily, _cp.graphicsQueueIndex}));
+
+        // check back buffer format
+        if (_cp.backbufferFormat == vk::Format::eUndefined) { _cp.backbufferFormat = vk::Format::eR8G8B8A8Unorm; }
+
+        recreateHeadlessSwapchain();
+
+        // begin the first frame.
+        beginFrame();
+    }
+
     void clearSwapchain() {
         for (auto & bb : _backbuffers) {
             bb.fb.clear();
             _cp.gi->safeDestroy(bb.view);
+            if (!_cp.surface) _cp.gi->safeDestroy(bb.image); // Need to destroy the back buffer image explicitly if it's headless.
         }
         _backbuffers.clear();
         _depthBuffer.clear();
@@ -2244,7 +2271,7 @@ private:
         _frames.clear();
     }
 
-    void recreateSwapchain() {
+    void recreateWindowSwapchain() {
         clearSwapchain();
         auto gi = _cp.gi;
 
@@ -2308,7 +2335,7 @@ private:
         // create a graphics command buffer to transfer swapchain images to the right layout.
         auto c = _graphicsQueue->begin("transfer swapchain images to right layout");
 
-        // create depth buffer is requested.
+        // create depth buffer.
         if (_cp.depthStencilFormat != vk::Format::eUndefined) {
             _depthBuffer.reset(new Image(Image::ConstructParameters {{"swapchain depth buffer"}, gi}.setDepth(w, h, _cp.depthStencilFormat)));
             Barrier()
@@ -2357,28 +2384,101 @@ private:
             f.imageAvailable    = gi->device.createSemaphore({}, gi->allocator);
             f.renderFinished    = gi->device.createSemaphore({}, gi->allocator);
             f.frameEndSemaphore = gi->device.createSemaphore({}, gi->allocator);
-            // f.frameAvailable = gi->device.createFence({vk::FenceCreateFlagBits::eSignaled}, gi->allocator);
             setVkObjectName(gi->device, f.imageAvailable, format("image available semaphore %zu", i));
             setVkObjectName(gi->device, f.renderFinished, format("render finished semaphore %zu", i));
             setVkObjectName(gi->device, f.frameEndSemaphore, format("frame end semaphore %zu", i));
-            // setVkObjectName(gi->device, f.frameAvailable, format("frame available fence %zu", i));
         }
+    }
+
+    void recreateHeadlessSwapchain() {
+        clearSwapchain();
+        auto gi = _cp.gi;
+
+        // determine the swapchain size
+        auto w = (uint32_t) _cp.width;
+        auto h = (uint32_t) _cp.height;
+        RVI_REQUIRE(w > 0 && h > 0, "Headless swapchain's width and height can't be zero.");
+
+        // create a graphics command buffer to transfer swapchain images to the right layout.
+        auto c = _graphicsQueue->begin("transfer swapchain images to right layout");
+
+        // create depth buffer.
+        if (_cp.depthStencilFormat != vk::Format::eUndefined) {
+            _depthBuffer.reset(new Image(Image::ConstructParameters {{"swapchain depth buffer"}, gi}.setDepth(w, h, _cp.depthStencilFormat)));
+            Barrier()
+                .i(_depthBuffer->handle(), vk::AccessFlagBits::eNone, vk::AccessFlagBits::eNone, vk::ImageLayout::eUndefined,
+                   vk::ImageLayout::eDepthStencilAttachmentOptimal, vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil)
+                .cmdWrite(c);
+        }
+
+        // create back buffer and frame array.
+        uint32_t imageCount = _cp.maxFramesInFlight + 1;
+        _backbuffers.resize(imageCount);
+        _frames.resize(imageCount);
+        for (uint32_t i = 0; i < imageCount; ++i) {
+            auto & bb = _backbuffers[i];
+
+            bb.extent = vk::Extent2D {w, h};
+
+            // create back buffer image
+            bb.image = gi->device.createImage(vk::ImageCreateInfo({}, vk::ImageType::e2D, _cp.backbufferFormat, {w, h, 1}, 1, 1, vk::SampleCountFlagBits::e1,
+                                                                  vk::ImageTiling::eOptimal,
+                                                                  vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst),
+                                              gi->allocator);
+            setVkObjectName(gi->device, bb.image, format("back buffer image %u", i));
+
+            // transfer the image into desired layout.
+            Barrier()
+                .i(bb.image, vk::AccessFlagBits::eNone, DESIRED_PRESENT_STATUS.access, vk::ImageLayout::eUndefined, DESIRED_PRESENT_STATUS.layout,
+                   vk::ImageAspectFlagBits::eColor)
+                .s(vk::PipelineStageFlagBits::eAllCommands, DESIRED_PRESENT_STATUS.stages)
+                .cmdWrite(c);
+
+            // create back buffer view
+            bb.view = gi->device.createImageView(vk::ImageViewCreateInfo({}, bb.image, vk::ImageViewType::e2D, _cp.backbufferFormat)
+                                                     .setSubresourceRange({vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}),
+                                                 gi->allocator);
+            setVkObjectName(gi->device, bb.view, format("back buffer view %u", i));
+
+            // create frame buffer
+            auto fbcp = Framebuffer::ConstructParameters {{format("swapchain framebuffer %u", i)}, gi}.addImageView(bb.view).setExtent(w, h).setRenderPass(
+                *_renderPass);
+            if (_depthBuffer) fbcp.addImageView(_depthBuffer->getView({}));
+            bb.fb.reset(new Framebuffer(fbcp));
+
+            // setup frame structure
+            auto & f            = _frames[i];
+            f.backbuffer        = &bb;
+            f.imageIndex        = i;
+            f.imageAvailable    = gi->device.createSemaphore({}, gi->allocator);
+            f.renderFinished    = gi->device.createSemaphore({}, gi->allocator);
+            f.frameEndSemaphore = gi->device.createSemaphore({}, gi->allocator);
+            setVkObjectName(gi->device, f.imageAvailable, format("image available semaphore %u", i));
+            setVkObjectName(gi->device, f.renderFinished, format("render finished semaphore %u", i));
+            setVkObjectName(gi->device, f.frameEndSemaphore, format("frame end semaphore %u", i));
+        }
+
+        // execute the command buffer to update image layout
+        _graphicsQueue->submit({c});
+        _graphicsQueue->wait();
     }
 
     void beginFrame() {
         auto & frame = _frames[_frameIndex % std::size(_frames)];
         frame.index  = _frameIndex;
 
-        // wait for the frame to be available.
-        if (frame.frameAvailable) {
-            _graphicsQueue->wait(frame.frameAvailable);
-            frame.frameAvailable = nullptr; // Clear the command buffer. So we only wait for it once.
+        // wait for the frame to be available again.
+        if (frame.frameEndCommands) {
+            _graphicsQueue->wait(frame.frameEndCommands);
+            frame.frameEndCommands = nullptr; // Clear the command buffer. So we only wait it once.
         }
 
-        // Acquire the next available swapchain image
-        frame.imageIndex = _cp.gi->device.acquireNextImageKHR(_handle, uint64_t(-1), frame.imageAvailable).value;
-        RAPID_VULKAN_ASSERT(frame.imageIndex < _backbuffers.size());
-        frame.backbuffer = &_backbuffers[frame.imageIndex];
+        // Acquire the next available swapchain image. Only do this if we are not in headless mode.
+        if (_handle) {
+            frame.imageIndex = _cp.gi->device.acquireNextImageKHR(_handle, uint64_t(-1), frame.imageAvailable).value;
+            RAPID_VULKAN_ASSERT(frame.imageIndex < _backbuffers.size());
+            frame.backbuffer = &_backbuffers[frame.imageIndex];
+        }
     }
 };
 

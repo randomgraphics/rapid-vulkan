@@ -1850,21 +1850,46 @@ public:
 class Swapchain : public Root {
 public:
     struct ConstructParameters : public Root::ConstructParameters {
-        const GlobalInfo * gi                  = {};
-        vk::SurfaceKHR     surface             = {};
-        uint32_t           presentQueueFamily  = VK_QUEUE_FAMILY_IGNORED; ///< Family index of the present queue.
-        uint32_t           presentQueueIndex   = 0;                       ///< Index of the present queue.
-        uint32_t           graphicsQueueFamily = VK_QUEUE_FAMILY_IGNORED; ///< family index of graphics queue, if different from the present queue.
-        uint32_t           graphicsQueueIndex  = 0; ///< Index of the graphics queue. Ignored if graphicsQueueFamily is VK_QUEUE_FAMILY_IGNORED.
-        size_t             width               = 0; ///< width of the swapchain. 0 means surface/window width.
-        size_t             height              = 0; ///< height of the swapchain. 0 means using surface/window height.
-        size_t             maxFramesInFlight   = 1; ///< Number of frames in flight. Must be at least 1.
-        bool               vsync               = true;
+        const GlobalInfo * gi = {}; ///< The Vulkan global info object.
 
-        /// Specify format of backbuffers. If set to undefined, then the first supported format will be used.
+        /// @brief Handle of the surface to present to. Set to null to create a headless swapchain.
+        vk::SurfaceKHR surface = {};
+
+        /// @brief Always set to a valid queue family index that is capable of doing graphics work.
+        uint32_t graphicsQueueFamily = VK_QUEUE_FAMILY_IGNORED;
+
+        /// @brief Index of the graphics queue.
+        uint32_t graphicsQueueIndex  = 0;
+
+        /// @brief Family index of the present queue.
+        /// When surface is valid, this must be a valid queue family index that is capable of presenting to the surface.
+        /// It can be same as the graphics queue family index.
+        /// When in headless mode, this field is ignored.
+        uint32_t presentQueueFamily  = VK_QUEUE_FAMILY_IGNORED;
+
+        /// @brief Index of the present queue. Ignored when surface is null.
+        uint32_t presentQueueIndex   = 0;
+
+        /// @brief Width and height of the swapchain. Set to 0 to use the surface size.
+        /// If the surface is null, then the width and height must be non-zero.
+        size_t width = 0;
+
+        /// @brief Height of the swapchain. Set to 0 to use the surface size.
+        /// If the surface is null, then the width and height must be non-zero.
+        size_t height = 0;
+
+        /// @brief Number of frames in flight. Must be at least 1.
+        /// The more frames in flight, the more latency you'll have. But on the other hand, the GPU will be
+        /// less likely to be idle.
+        size_t maxFramesInFlight = 1;
+
+        /// @brief Whether to enable vsync. Ignored when the swapchain is headless.
+        bool vsync = true;
+
+        /// @brief Specify format of backbuffers. If set to undefined, then the first supported format will be used.
         vk::Format backbufferFormat = vk::Format::eUndefined;
 
-        /// Format of the depth buffer. Set to undefined, if you don't need depth buffer.
+        /// @brief Format of the depth buffer. Set to undefined, if you don't need depth buffer.
         vk::Format depthStencilFormat = vk::Format::eD24UnormS8Uint;
 
         /// @brief Fill in construction parameters using values retrieved from the given device.
