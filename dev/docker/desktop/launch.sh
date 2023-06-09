@@ -6,7 +6,7 @@ sdkroot="$(cd $(dirname "${BASH_SOURCE[0]}")/../../..;pwd)"
 # parse command line arguments
 append_to_env_params=0
 run_as="-u $UID:$GID"
-gpu="--gpus all"
+gpu=
 entry_point="entrypoint.sh"
 interactive="-it"
 docker_login="registry.gitlab.com"
@@ -20,10 +20,10 @@ do
         echo "Enter the container as root user."
         run_as=
         ;;
-    --ng)
-        # disable GPU support
-        echo "Disable GPU support"
-        gpu=
+    -n)
+        # Enable NVIDIA GPU support
+        echo "Enable NVIDIA GPU support"
+        gpu="nvidia"
         ;;
     --usb)
         echo
@@ -67,9 +67,8 @@ do
   shift
 done
 
-# If GPU is enabled, then try randomizing the GPU selection to evenly distribute workload to the system.
-if [ -n "${gpu}" ]; then
-    # retrieve number of GPUs, assuming NVIDIA card.
+if [ "${gpu}" == "nvidia" ]; then
+    # Try randomizing the GPU selection to evenly distribute workload to the system.
     N=$(nvidia-smi -L|wc -l)
     S=$RANDOM
     set +e
@@ -79,6 +78,18 @@ if [ -n "${gpu}" ]; then
     -v /etc/vulkan/icd.d/nvidia_icd.json:/etc/vulkan/icd.d/nvidia_icd.json \
     -v /etc/vulkan/implicit_layer.d/nvidia_layers.json:/etc/vulkan/implicit_layer.d/nvidia_layers.json \
     -v /usr/share/glvnd/egl_vendor.d/10_nvidia.json:/usr/share/glvnd/egl_vendor.d/10_nvidia.json "
+
+    echo
+    echo "----"
+    echo "Enabling Native GPU support requires nvidia container. If you see error message"
+    echo "like: \"could not select device driver...\", it is most likely due to"
+    echo "incorrect nvida container configuration. Re-run install-docker-engine.sh"
+    echo "to refresh your nvidia-container installation should fix it. Or, you can"
+    echo "also run this script with \"--ng\" argument to disable GPU support. With"
+    echo "this option, you can still build everything as normal. Just can't run any"
+    echo "of the GPU based programs within the docker."
+    echo "----"
+    echo
 fi
 
 echo
@@ -99,18 +110,6 @@ if [[ "$(docker images -q $image 2> /dev/null)" == "" ]]; then
 else
     echo "Docker image found: ${image}"
 fi
-
-echo
-echo "----"
-echo "Note that this docker requires nvidia container. If you see error message"
-echo "like: \"could not select device driver...\", it is most likely due to"
-echo "incorrect nvida container configuration. Re-run install-docker-engine.sh"
-echo "to refresh your nvidia-container installation should fix it. Or, you can"
-echo "also run this script with \"--ng\" argument to disable GPU support. With"
-echo "this option, you can still build everything as normal. Just can't run any"
-echo "of the GPU based programs within the docker."
-echo "----"
-echo
 
 # Launch the docker
 docker run --rm \
