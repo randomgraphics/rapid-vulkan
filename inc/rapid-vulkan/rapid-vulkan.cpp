@@ -1857,15 +1857,14 @@ private:
                 }
                 if (!a) {
                     RVI_LOGE("Failed to bind argument pack (%s) to pipeline layout (%s): set %u slot %u (%s) not found in the argument pack.",
-                                           ap.name().c_str(), _owner.name().c_str(), si, i, v[0].c_str());
+                             ap.name().c_str(), _owner.name().c_str(), si, i, v[0].c_str());
                     return false;
                 }
 
                 // verify that the argument type is compatible with the descriptor type
                 if (!a->typeCompatibleWith(b.descriptorType)) {
-                    RVI_LOGE(
-                        "Failed to bind argument pack (%s) to pipeline layout (%s): set %u slot %u (%s) is of type %s, but the argument is of type %s.",
-                        ap.name().c_str(), _owner.name().c_str(), si, i, v[0].c_str(), vk::to_string(b.descriptorType).c_str(), a->type());
+                    RVI_LOGE("Failed to bind argument pack (%s) to pipeline layout (%s): set %u slot %u (%s) is of type %s, but the argument is of type %s.",
+                             ap.name().c_str(), _owner.name().c_str(), si, i, v[0].c_str(), vk::to_string(b.descriptorType).c_str(), a->type());
                     return false;
                 }
 
@@ -1905,9 +1904,8 @@ private:
             }
             auto v = std::get_if<Argument::Impl::Constants>(&a->value());
             if (!v) {
-                RVI_LOGE(
-                    "Failed to bind argument pack (%s) to pipeline layout (%s): expects push constant on variable (%s), but (%s) is provided",
-                    ap.name().c_str(), _owner.name().c_str(), n.c_str(), a->type());
+                RVI_LOGE("Failed to bind argument pack (%s) to pipeline layout (%s): expects push constant on variable (%s), but (%s) is provided",
+                         ap.name().c_str(), _owner.name().c_str(), n.c_str(), a->type());
                 continue;
             }
             cb.pushConstants(_handle, c.stageFlags, c.offset, std::min<uint32_t>(c.size, (uint32_t) v->size()), v->data());
@@ -3098,7 +3096,7 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
         _cp.apiVersion = instanceInfo.version;
     else if (_cp.apiVersion > instanceInfo.version) {
         RVI_LOGW("Requested version %d is higher than the supported version %d. The instance will be created with %d instead.", _cp.apiVersion,
-                                 instanceInfo.version, instanceInfo.version);
+                 instanceInfo.version, instanceInfo.version);
         _cp.apiVersion = instanceInfo.version;
     }
 
@@ -3113,7 +3111,6 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
     std::map<const char *, bool> instanceExtensions {
         {VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME, true},
         {VK_KHR_SURFACE_EXTENSION_NAME, true},
-        {VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME, true},
     };
     if (cp.validation) {
         // Enable in-shader debug printf, if supported.

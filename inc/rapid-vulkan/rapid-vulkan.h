@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identify the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 8
+#define RAPID_VULKAN_HEADER_REVISION 9
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -108,12 +108,12 @@ SOFTWARE.
 /// The runtime assert macro for debug build only. This macro has no effect when
 /// RAPID_VULKAN_ENABLE_DEBUG_BUILD is 0.
 #ifndef RAPID_VULKAN_ASSERT
-#define RAPID_VULKAN_ASSERT(expression, ...)                                                     \
-    if (!(expression)) {                                                                         \
-        auto errorMessage__ = RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__);                       \
+#define RAPID_VULKAN_ASSERT(expression, ...)                                       \
+    if (!(expression)) {                                                           \
+        auto errorMessage__ = RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__);         \
         RVI_LOGE("Condition " #expression " not met. %s", errorMessage__.c_str()); \
-        assert(false);                                                                           \
-    } else                                                                                       \
+        assert(false);                                                             \
+    } else                                                                         \
         void(0)
 #endif
 
@@ -241,7 +241,7 @@ SOFTWARE.
         std::stringstream errorStream_;                                                                      \
         errorStream_ << __FILE__ << "(" << __LINE__ << "): " << RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__); \
         auto errorString_ = errorStream_.str();                                                              \
-        RVI_LOGE("\n%s\n", errorString_.data());                                               \
+        RVI_LOGE("\n%s\n", errorString_.data());                                                             \
         RAPID_VULKAN_THROW(errorString_);                                                                    \
     } while (false)
 
