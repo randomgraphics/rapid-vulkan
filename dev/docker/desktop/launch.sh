@@ -75,7 +75,10 @@ if [ -n "${gpu}" ]; then
     set +e
     let "S %=${N}"
     set -e
-    gpu="--gpus device=${S}"
+    gpu="--gpus device=${S} -e NVIDIA_DRIVER_CAPABILITIES=all --device /dev/dri \
+    -v /etc/vulkan/icd.d/nvidia_icd.json:/etc/vulkan/icd.d/nvidia_icd.json \
+    -v /etc/vulkan/implicit_layer.d/nvidia_layers.json:/etc/vulkan/implicit_layer.d/nvidia_layers.json \
+    -v /usr/share/glvnd/egl_vendor.d/10_nvidia.json:/usr/share/glvnd/egl_vendor.d/10_nvidia.json "
 fi
 
 echo
