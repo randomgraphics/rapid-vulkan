@@ -2078,12 +2078,6 @@ public:
     Impl(Swapchain &, const ConstructParameters & cp): _cp(cp) {
         RVI_REQUIRE(cp.gi);
 
-        // create the built-in render pass
-        auto params = RenderPass::ConstructParameters {{"swapchain built-in render pass"}, _cp.gi}.simple({_cp.backbufferFormat}, _cp.depthStencilFormat);
-        // We want the color buffer be in presentable layout before and after the render pass. So it can seamlessly connected with the present() call.
-        params.attachments[0].setInitialLayout(DESIRED_PRESENT_STATUS.layout).setFinalLayout(DESIRED_PRESENT_STATUS.layout);
-        _renderPass.reset(new RenderPass(params));
-
         if (cp.surface) {
             constructWindowSwapchain();
         } else {
@@ -2234,6 +2228,12 @@ private:
             RVI_REQUIRE(supported, "The specified back buffer format is not supported.");
         }
 
+        // create the built-in render pass (after the back buffer format is determined)
+        auto params = RenderPass::ConstructParameters {{"swapchain built-in render pass"}, _cp.gi}.simple({_cp.backbufferFormat}, _cp.depthStencilFormat);
+        // We want the color buffer be in presentable layout before and after the render pass. So it can seamlessly connected with the present() call.
+        params.attachments[0].setInitialLayout(DESIRED_PRESENT_STATUS.layout).setFinalLayout(DESIRED_PRESENT_STATUS.layout);
+        _renderPass.reset(new RenderPass(params));
+
         recreateWindowSwapchain();
 
         // begin the first frame.
@@ -2247,6 +2247,12 @@ private:
 
         // check back buffer format
         if (_cp.backbufferFormat == vk::Format::eUndefined) { _cp.backbufferFormat = vk::Format::eR8G8B8A8Unorm; }
+
+        // create the built-in render pass (after the back buffer format is determined)
+        auto params = RenderPass::ConstructParameters {{"swapchain built-in render pass"}, _cp.gi}.simple({_cp.backbufferFormat}, _cp.depthStencilFormat);
+        // We want the color buffer be in presentable layout before and after the render pass. So it can seamlessly connected with the present() call.
+        params.attachments[0].setInitialLayout(DESIRED_PRESENT_STATUS.layout).setFinalLayout(DESIRED_PRESENT_STATUS.layout);
+        _renderPass.reset(new RenderPass(params));
 
         recreateHeadlessSwapchain();
 
