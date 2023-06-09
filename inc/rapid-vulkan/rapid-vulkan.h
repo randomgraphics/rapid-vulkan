@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identify the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 7
+#define RAPID_VULKAN_HEADER_REVISION 8
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -52,6 +52,21 @@ SOFTWARE.
 #define RAPID_VULKAN_ENABLE_VMA 1
 #endif
 
+/// \def RAPID_VULKAN_ENABLE_GLFW3
+/// Set to 1 to enable GLFW3 interation helpers. Disabled by default.
+#ifndef RAPID_VULKAN_ENABLE_GLFW3
+#define RAPID_VULKAN_ENABLE_GLFW3 0
+#endif
+
+/// \def RAPID_VULKAN_GLFW3_HEADER
+/// \brief When RAPID_VULKAN_ENABLE_GLFW3 is enabled, this macro defines the path and name of GLFW3 header file to include.
+/// By default, it is set to <GLFW/glfw3.h>. You can override it by defining it before including rapid-vulkan.h.
+#if RAPID_VULKAN_ENABLE_GLFW3
+#ifndef RAPID_VULKAN_GLFW3_HEADER
+#define RAPID_VULKAN_GLFW3_HEADER <GLFW/glfw3.h>
+#endif
+#endif
+
 /// \def RAPID_VULKAN_THROW
 /// The macro to throw runtime exception.
 #ifndef RAPID_VULKAN_THROW
@@ -64,7 +79,7 @@ SOFTWARE.
 /// quickly identify the source of the error. The default implementation does
 /// nothing but return empty string.
 #ifndef RAPID_VULKAN_BACKTRACE
-#define RAPID_VULKAN_BACKTRACE() std::string("You have to define RAPID_VULKAN_BACKTRACE to retrieve current callstack.")
+#define RAPID_VULKAN_BACKTRACE() std::string("You have to define RAPID_VULKAN_BACKTRACE to retrieve current call stack.")
 #endif
 
 /// \def RAPID_VULKAN_LOG_ERROR
@@ -137,6 +152,11 @@ SOFTWARE.
 #define VK_NO_PROTOTYPES
 #endif
 
+// check for minimal required vulkan.hpp version.
+#if VK_HEADER_VERSION < 211
+#error "rapid-vulkan library requires Vulkan SDK version 1.3.211 or later."
+#endif
+
 // ---------------------------------------------------------------------------------------------------------------------
 // include VMA header if not already included.
 #if RAPID_VULKAN_ENABLE_VMA
@@ -176,6 +196,16 @@ SOFTWARE.
 #endif // RAPID_VULKAN_ENABLE_VMA
 
 // ---------------------------------------------------------------------------------------------------------------------
+// include GLFW header if asked to do so
+#if RAPID_VULKAN_ENABLE_GLFW3
+#ifdef _glfw3_h_
+// todo issue warnings if GLFW3 header is already included.
+#else
+#include RAPID_VULKAN_GLFW3_HEADER
+#endif
+#endif
+
+// ---------------------------------------------------------------------------------------------------------------------
 // include other standard/system headers
 
 #include <cassert>
@@ -186,7 +216,9 @@ SOFTWARE.
 #include <atomic>
 #include <vector>
 #include <map>
+#include <set>
 #include <string>
+#include <sstream>
 #include <unordered_map>
 #include <tuple>
 #include <optional>
@@ -429,6 +461,16 @@ vk::PhysicalDevice selectTheMostPowerfulPhysicalDevice(vk::ArrayProxy<const vk::
 // ---------------------------------------------------------------------------------------------------------------------
 //
 std::vector<vk::ExtensionProperties> enumerateDeviceExtensions(vk::PhysicalDevice dev);
+
+#if RAPID_VULKAN_ENABLE_GLFW3
+// ---------------------------------------------------------------------------------------------------------------------
+/// @brief Helper functions to create a Vulkan surface from GLFW window.
+inline vk::UniqueSurfaceKHR createGLFWSurface(vk::Instance instance, GLFWwindow * window) {
+    VkSurfaceKHR surface;
+    if (::glfwCreateWindowSurface(instance, window, nullptr, &surface) != VK_SUCCESS) { RVI_THROW("failed to create window surface!"); }
+    return vk::UniqueSurfaceKHR(surface, {instance});
+}
+#endif
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// The root class of most of the other public classes in this library.
@@ -1199,7 +1241,7 @@ public:
     /// @param format The pixel format of the image.
     /// @param hint   The hint of the aspect flags. The function will try to use this hinted aspect flag, as long as it is compatible the format.
     ///               Set to vk::ImageAspectFlagBits::eNone to let the function determine the aspect flags.
-    static vk::ImageAspectFlags determineImageAspect(vk::Format format, vk::ImageAspectFlags hint = vk::ImageAspectFlagBits::eNone);
+    static vk::ImageAspectFlags determineImageAspect(vk::Format format, vk::ImageAspectFlags hint = vk::ImageAspectFlagBits::eNoneKHR);
 
     Image(const ConstructParameters &);
 
@@ -1639,7 +1681,7 @@ public:
         vk::PipelineDepthStencilStateCreateInfo            depth {};
         std::vector<vk::PipelineColorBlendAttachmentState> attachments {defaultAttachment()};
         std::array<float, 4>                               blendConstants {};
-        std::vector<vk::DynamicState>                      dynamic {};
+        std::map<vk::DynamicState, uint64_t>               dynamic {};
         vk::Pipeline                                       baseHandle {};
         uint32_t                                           baseIndex {};
 
@@ -1660,19 +1702,31 @@ public:
         }
 
         ConstructParameters & dynamicTopology() {
-            dynamic.push_back(vk::DynamicState::ePrimitiveTopology);
+            dynamic[vk::DynamicState::ePrimitiveTopology] = 0;
             return *this;
         }
 
-        ConstructParameters & dynamicViewport() {
-            dynamic.push_back(vk::DynamicState::eViewportWithCount);
-            viewports.clear();
+        /// @brief Enable dyanmic viewport. Also specify the number of viewports.
+        /// @param count Specify how many viewports will be used. Set to 0 to enable VK_DYNAMIC_STATE_VIEWPORT_WITH_COUNT_EXT.
+        ConstructParameters & dynamicViewport(size_t count = 1) {
+            if (0 == count) {
+                dynamic.erase(vk::DynamicState::eViewport);
+                dynamic[vk::DynamicState::eViewportWithCountEXT] = 0;
+            } else {
+                dynamic.erase(vk::DynamicState::eViewportWithCountEXT);
+                dynamic[vk::DynamicState::eViewport] = count;
+            }
             return *this;
         }
 
-        ConstructParameters & dynamicScissor() {
-            dynamic.push_back(vk::DynamicState::eScissorWithCount);
-            scissors.clear();
+        ConstructParameters & dynamicScissor(size_t count = 1) {
+            if (0 == count) {
+                dynamic.erase(vk::DynamicState::eScissor);
+                dynamic[vk::DynamicState::eScissorWithCountEXT] = 0;
+            } else {
+                dynamic.erase(vk::DynamicState::eScissorWithCountEXT);
+                dynamic[vk::DynamicState::eScissor] = count;
+            }
             return *this;
         }
 
@@ -1964,15 +2018,6 @@ public:
     RVI_NO_COPY(Device);
     RVI_NO_MOVE(Device);
 
-    /// Define level of validation on Vulkan error.
-    enum Validation {
-        VALIDATION_DISABLED = 0,
-        LOG_ON_VK_ERROR,
-        // LOG_ON_VK_ERROR_WITH_CALL_STACK,
-        THROW_ON_VK_ERROR,
-        BREAK_ON_VK_ERROR,
-    };
-
     enum Verbosity {
         SILENCE = 0,
         BRIEF,
@@ -2007,10 +2052,6 @@ public:
 
         /// Set to true to create VMA allocator and store in the GlobalInfo::vmaAllocator field.
         bool enableVmaAllocator = true;
-
-        /// Set to true to enable validation layer.
-        /// \todo move to Device class.
-        Validation validation = RAPID_VULKAN_ENABLE_DEBUG_BUILD ? LOG_ON_VK_ERROR : VALIDATION_DISABLED;
 
         /// set to false to make the creation log less verbose.
         Verbosity printVkInfo = BRIEF;
@@ -2050,11 +2091,6 @@ public:
 
         ConstructParameters & setEnableVmaAllocator(bool b) {
             enableVmaAllocator = b;
-            return *this;
-        }
-
-        ConstructParameters & setValidation(Validation v) {
-            validation = v;
             return *this;
         }
 
@@ -2102,28 +2138,26 @@ public:
 private:
     ConstructParameters         _cp;
     GlobalInfo                  _gi {};
-    vk::DebugReportCallbackEXT  _debugReport {};
-    bool                        _lost {}; // if the device has lost.
-    std::vector<CommandQueue *> _queues;  // one for each queue family
+    std::vector<CommandQueue *> _queues; // one for each queue family
     CommandQueue *              _graphics = nullptr;
     CommandQueue *              _compute  = nullptr;
     CommandQueue *              _transfer = nullptr;
     CommandQueue *              _present  = nullptr;
-
-private:
-    VkBool32 debugCallback(vk::DebugReportFlagsEXT, vk::DebugReportObjectTypeEXT, uint64_t, size_t, int32_t, const char *, const char *);
-
-    static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT objectType, uint64_t object, size_t location,
-                                                  int32_t messageCode, const char * prefix, const char * message, void * userData) {
-        auto self = (Device *) userData;
-        return self->debugCallback((vk::DebugReportFlagsEXT) flags, (vk::DebugReportObjectTypeEXT) objectType, object, location, messageCode, prefix, message);
-    }
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// A wrapper class for VkInstance
 class Instance {
 public:
+    /// Define level of validation on Vulkan error.
+    enum Validation {
+        VALIDATION_DISABLED = 0,
+        LOG_ON_VK_ERROR,
+        // LOG_ON_VK_ERROR_WITH_CALL_STACK,
+        THROW_ON_VK_ERROR,
+        BREAK_ON_VK_ERROR,
+    };
+
     struct ConstructParameters {
         /// @brief Optional parameter to specify which version of the API you want to use to create the instance.
         /// Leaving it as zero means using the highest available version.
@@ -2139,8 +2173,8 @@ public:
         /// structure chain passed to VkInstanceCreateInfo::pNext
         std::vector<StructureChain> instanceCreateInfo {};
 
-        /// Set to true to enable validation layers and extensions.
-        bool validation = RAPID_VULKAN_ENABLE_DEBUG_BUILD;
+        /// Set validation behavior.
+        Validation validation = RAPID_VULKAN_ENABLE_DEBUG_BUILD ? LOG_ON_VK_ERROR : VALIDATION_DISABLED;
 
         /// Creation log output verbosity
         Device::Verbosity printVkInfo = Device::BRIEF;
@@ -2148,6 +2182,11 @@ public:
         /// Define custom function pointer to load Vulkan function pointers. Set to null to use the built-in one.
         /// Ignored when RAPID_VULKAN_ENABLE_LOADER is not 1.
         PFN_vkGetInstanceProcAddr getInstanceProcAddr = nullptr;
+
+        ConstructParameters & setValidation(Validation v) {
+            validation = v;
+            return *this;
+        }
 
         ConstructParameters & addExtensions(bool required, const char * const * exts, size_t count = 0) {
             if (0 == count) {
@@ -2187,8 +2226,9 @@ public:
 
     /// Return a device construct parameter that works with this instance.
     Device::ConstructParameters dcp() const {
+        auto                        cp_ = cp();
         Device::ConstructParameters r;
-        r.apiVersion = cp().apiVersion;
+        r.apiVersion = cp_.apiVersion;
         r.instance   = handle();
         return r;
     }
@@ -2203,6 +2243,7 @@ private:
 #endif
     vk::DynamicLoader _loader;
 #endif
+    vk::DebugReportCallbackEXT _debugReport {};
 };
 
 } // namespace RAPID_VULKAN_NAMESPACE

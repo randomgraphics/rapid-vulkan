@@ -1970,26 +1970,36 @@ GraphicsPipeline::GraphicsPipeline(const ConstructParameters & params): Pipeline
     // setup vertex input stage
     auto vertex = vk::PipelineVertexInputStateCreateInfo().setVertexAttributeDescriptions(params.va).setVertexBindingDescriptions(params.vb);
 
-    // setup dynamic states
-    auto dynamic  = vk::PipelineDynamicStateCreateInfo().setDynamicStates(params.dynamic);
-    bool dynaView = false, dynaScissor = false;
-    for (auto s : params.dynamic) {
-        if (vk::DynamicState::eViewportWithCount == s)
-            dynaView = true;
-        else if (vk::DynamicState::eScissorWithCount == s)
-            dynaScissor = true;
-    }
-
-    // setup viewport stage
+    // setup viewport and scissor states.
     auto viewport = vk::PipelineViewportStateCreateInfo();
-    if (!dynaView) {
-        RVI_REQUIRE(params.viewports.size() > 0);
-        viewport.setViewports(params.viewports);
+    viewport.setViewports(params.viewports);
+    viewport.setScissors(params.scissors);
+
+    // setup dynamic states
+    std::vector<vk::DynamicState> dynamicStates;
+    for (const auto & [s, v] : params.dynamic) {
+        dynamicStates.push_back(s);
+        switch (s) {
+        case vk::DynamicState::eViewport:
+            viewport.setViewportCount((uint32_t) v);
+            viewport.setPViewports(nullptr);
+            break;
+        case vk::DynamicState::eViewportWithCount:
+            viewport.setViewports({});
+            break;
+        case vk::DynamicState::eScissor:
+            viewport.setScissorCount((uint32_t) v);
+            viewport.setPScissors(nullptr);
+            break;
+        case vk::DynamicState::eScissorWithCount:
+            viewport.setScissors({});
+            break;
+        default:
+            // do nothing
+            break;
+        }
     }
-    if (!dynaScissor) {
-        RVI_REQUIRE(params.scissors.size() > 0);
-        viewport.setScissors(params.scissors);
-    }
+    vk::PipelineDynamicStateCreateInfo dynamicCI({}, dynamicStates);
 
     // setup blend stage
     auto blend           = vk::PipelineColorBlendStateCreateInfo {}.setAttachments(params.attachments);
@@ -1997,7 +2007,7 @@ GraphicsPipeline::GraphicsPipeline(const ConstructParameters & params): Pipeline
 
     // setup the create info
     auto ci = vk::GraphicsPipelineCreateInfo({}, (uint32_t) shaderStages.size(), shaderStages.data(), &vertex, &params.ia, &params.tess, &viewport,
-                                             &params.rast, &params.msaa, &params.depth, &blend, &dynamic, layout().handle(), params.pass, params.subpass,
+                                             &params.rast, &params.msaa, &params.depth, &blend, &dynamicCI, layout().handle(), params.pass, params.subpass,
                                              params.baseHandle, params.baseIndex);
 
     // create the shader.
@@ -2135,8 +2145,13 @@ public:
         }
 
         // set dynamic viewport and scissor
-        cb.setViewportWithCount(vk::Viewport(0, 0, (float) bb->extent.width, (float) bb->extent.height, 0, 1));
-        cb.setScissorWithCount(vk::Rect2D({0, 0}, bb->extent));
+        vk::Viewport vp(0, 0, (float) bb->extent.width, (float) bb->extent.height, 0, 1);
+        // cb.setViewportWithCount(1, &vp); // FIXME: this line crashes on Ubunut. Reason unknown.
+        cb.setViewport(0, 1, &vp);
+
+        vk::Rect2D scissor({0, 0}, bb->extent);
+        // cb.setScissorWithCount(1, &scissor); // FIXME: this line crashes on Ubunut. Reason unknown.
+        cb.setScissor(0, 1, &scissor);
 
         std::array cv = {vk::ClearValue().setColor(params.color), vk::ClearValue().setDepthStencil(params.depth)};
         _renderPass->cmdBegin(cb, vk::RenderPassBeginInfo {{}, bb->fb->handle(), vk::Rect2D({0, 0}, bb->extent)}.setClearValues(cv));
@@ -2382,59 +2397,6 @@ void Swapchain::present(const PresentParameters & pp) { return _impl->present(pp
 // *********************************************************************************************************************
 // Device
 // *********************************************************************************************************************
-
-// ---------------------------------------------------------------------------------------------------------------------
-//
-VkBool32 Device::debugCallback(vk::DebugReportFlagsEXT flags, vk::DebugReportObjectTypeEXT objectType,
-                               uint64_t, // object
-                               size_t,   // location,
-                               int32_t,  // messageCode,
-                               const char * prefix, const char * message) {
-    auto reportVkError = [&]() {
-        if (objectType == vk::DebugReportObjectTypeEXT::eDevice && _lost) {
-            // Ignore validation errors on lost device, to avoid spamming log with useless messages.
-            return VK_FALSE;
-        }
-
-        auto ss = std::stringstream();
-        ss << "[Vulkan] " << prefix << " : " << message;
-        // if (v >= LOG_ON_VK_ERROR_WITH_CALL_STACK) { ss << std::endl << backtrace(false); }
-        auto str = ss.str();
-        RAPID_VULKAN_LOG_ERROR("%s", str.data());
-        if (_cp.validation == THROW_ON_VK_ERROR) {
-            RVI_THROW("%s", str.data());
-        } else if (_cp.validation == BREAK_ON_VK_ERROR) {
-#ifdef _WIN32
-            ::DebugBreak();
-#elif __ANDROID__
-            __builtin_trap();
-#else
-            asm("int $3");
-#endif
-        }
-
-        return VK_FALSE;
-    };
-
-    if (flags & vk::DebugReportFlagBitsEXT::eError) reportVkError();
-
-    // treat warning as error.
-    if (flags & vk::DebugReportFlagBitsEXT::eWarning) reportVkError();
-
-    // if (flags & VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT) {
-    //     RAPID_VULKAN_LOG_WARNING("[Vulkan] %s : %s", prefix, message);
-    // }
-
-    // if (flags & VK_DEBUG_REPORT_INFORMATION_BIT_EXT) {
-    //     RAPID_VULKAN_LOG_INFO("[Vulkan] %s : %s", prefix, message);
-    // }
-
-    // if (flags & VK_DEBUG_REPORT_DEBUG_BIT_EXT) {
-    //     RAPID_VULKAN_LOG_INFO("[Vulkan] %s : %s", prefix, message);
-    // }
-
-    return VK_FALSE;
-}
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
@@ -2746,15 +2708,6 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
     RVI_REQUIRE(cp.instance);
     _gi.instance = cp.instance;
 
-    // setup debug callback
-    if (cp.validation) {
-        auto debugci = vk::DebugReportCallbackCreateInfoEXT()
-                           .setFlags(vk::DebugReportFlagBitsEXT::eError | vk::DebugReportFlagBitsEXT::eWarning)
-                           .setPfnCallback(staticDebugCallback)
-                           .setPUserData(this);
-        _debugReport = _gi.instance.createDebugReportCallbackEXT(debugci);
-    }
-
     // enumerate physical devices
     auto phydevs = enumeratePhysicalDevices(_gi.instance);
 
@@ -2771,8 +2724,12 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
     PhysicalDeviceFeatureList   deviceFeatures(cp.features1, cp.features2, cp.features3);
     std::map<std::string, bool> askedDeviceExtensions = cp.deviceExtensions;
 
-    // more extension
+    vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT extendedDynamicStateFeatures(true);
+    deviceFeatures.addFeature(extendedDynamicStateFeatures);
+
+    // some extensions are always enabled by default
     askedDeviceExtensions[VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME] = true;
+    askedDeviceExtensions[VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME]    = true;
 
     // #if PH_ANDROID == 0
     //     if (isRenderDocPresent()) {                                                       // only add this when renderdoc is available
@@ -2874,10 +2831,6 @@ Device::~Device() {
         _gi.device.destroy(_gi.allocator);
         _gi.device = nullptr;
         RAPID_VULKAN_LOG_INFO("[Device] device destroyed");
-    }
-    if (_debugReport) {
-        _gi.instance.destroyDebugReportCallbackEXT(_debugReport);
-        _debugReport = VK_NULL_HANDLE;
     }
 }
 
@@ -3066,6 +3019,64 @@ struct PhysicalDeviceInfo {
     }
 };
 
+// ---------------------------------------------------------------------------------------------------------------------
+//
+static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT objectType, uint64_t object, size_t location,
+                                              int32_t messageCode, const char * prefix, const char * message, void * userData) {
+    auto reportVkError = [&]() {
+        // if (objectType == vk::DebugReportObjectTypeEXT::eDevice && _lost) {
+        //     // Ignore validation errors on lost device, to avoid spamming log with useless messages.
+        //     return VK_FALSE;
+        // }
+        (void) objectType;
+        (void) object;
+        (void) location;
+        (void) messageCode;
+        (void) prefix;
+
+        Instance *   instance = reinterpret_cast<Instance *>(userData);
+        const auto & cp       = instance->cp();
+
+        auto ss = std::stringstream();
+        ss << "[Vulkan] " << prefix << " : " << message;
+        // if (v >= LOG_ON_VK_ERROR_WITH_CALL_STACK) { ss << std::endl << backtrace(false); }
+        auto str = ss.str();
+        RAPID_VULKAN_LOG_ERROR("%s", str.data());
+        if (cp.validation == Instance::THROW_ON_VK_ERROR) {
+            RVI_THROW("%s", str.data());
+        } else if (cp.validation == Instance::BREAK_ON_VK_ERROR) {
+#ifdef _WIN32
+            ::DebugBreak();
+#elif __ANDROID__
+            __builtin_trap();
+#else
+            asm("int $3");
+#endif
+        }
+
+        return VK_FALSE;
+    };
+
+    if (flags & VK_DEBUG_REPORT_ERROR_BIT_EXT) reportVkError();
+
+    // treat warning as error.
+    // if (flags & vk::DebugReportFlagBitsEXT::eWarning) reportVkError();
+
+    // if (flags & VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT) {
+    //     RAPID_VULKAN_LOG_WARNING("[Vulkan] %s : %s", prefix, message);
+    // }
+
+    // if (flags & VK_DEBUG_REPORT_INFORMATION_BIT_EXT) {
+    //     RAPID_VULKAN_LOG_INFO("[Vulkan] %s : %s", prefix, message);
+    // }
+
+    // if (flags & VK_DEBUG_REPORT_DEBUG_BIT_EXT) {
+    //     RAPID_VULKAN_LOG_INFO("[Vulkan] %s : %s", prefix, message);
+    // }
+
+    return VK_FALSE;
+}
+
 // *********************************************************************************************************************
 // Instance
 // *********************************************************************************************************************
@@ -3108,6 +3119,15 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
         instanceExtensions[VK_EXT_DEBUG_REPORT_EXTENSION_NAME] = false;
         instanceExtensions[VK_EXT_DEBUG_UTILS_EXTENSION_NAME]  = false;
     }
+#ifdef _glfw3_h_
+    {
+        // Automatically enable window surface extension if GLFW is available. This is to make it easier to use
+        // rapid-vulkan with GLFW.
+        uint32_t count;
+        auto     exts = glfwGetRequiredInstanceExtensions(&count);
+        for (uint32_t i = 0; i < count; ++i) { instanceExtensions[exts[i]] = false; }
+    }
+#endif
     for (const auto & e : cp.instanceExtensions) { instanceExtensions[e.first.c_str()] = e.second; }
 
     // make sure all required layers and extensions are actually supported
@@ -3129,7 +3149,16 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
     instanceCreationPrompt << std::endl;
     RAPID_VULKAN_LOG_INFO("%s", instanceCreationPrompt.str().c_str());
 
-    // create VK 1.1 instance
+    // turn off validation, if validation layer is not present
+    if (cp.validation) {
+        if (std::find_if(supported.layers.begin(), supported.layers.end(), [](const char * l) { return strcmp(l, "VK_LAYER_KHRONOS_validation") == 0; }) ==
+            supported.layers.end()) {
+            RAPID_VULKAN_LOG_WARNING("Validation layer is not supported. Validation will be disabled.");
+            cp.validation = VALIDATION_DISABLED;
+        }
+    }
+
+    // create VK instance
     // TODO: check against available version.
     auto appInfo = vk::ApplicationInfo().setApiVersion(_cp.apiVersion);
     auto ici     = vk::InstanceCreateInfo()
@@ -3156,12 +3185,25 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
     VULKAN_HPP_DEFAULT_DISPATCHER.init(_instance);
 #endif
 
+    // setup debug callback
+    if (cp.validation) {
+        auto debugci = vk::DebugReportCallbackCreateInfoEXT()
+                           .setFlags(vk::DebugReportFlagBitsEXT::eError | vk::DebugReportFlagBitsEXT::eWarning)
+                           .setPfnCallback(staticDebugCallback)
+                           .setPUserData(this);
+        _debugReport = _instance.createDebugReportCallbackEXT(debugci);
+    }
+
     RAPID_VULKAN_LOG_INFO("Vulkan instance initialized.");
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
 Instance::~Instance() {
+    if (_debugReport) {
+        _instance.destroyDebugReportCallbackEXT(_debugReport);
+        _debugReport = VK_NULL_HANDLE;
+    }
     if (_instance) _instance.destroy(), _instance = VK_NULL_HANDLE;
     RAPID_VULKAN_LOG_INFO("Vulkan instance destroyed.");
 }

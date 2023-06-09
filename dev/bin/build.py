@@ -79,7 +79,7 @@ def cmake_config(args, build_dir, build_type):
             "
     elif 'nt' != os.name:
         if not args.use_gcc: config += " -DCMAKE_C_COMPILER=clang-14 -DCMAKE_CXX_COMPILER=clang++-14"
-        config += " -GNinja"
+        if not args.use_makefile: config += " -GNinja"
     cmake(build_dir, config)
 
 # ==========
@@ -93,6 +93,7 @@ ap.add_argument("-b", dest="build_dir", default="build", help="Build output fold
 ap.add_argument("-c", dest="config_only", action="store_true", help="Run CMake config only. Skip cmake build.")
 ap.add_argument("-C", dest="skip_config", action="store_true", help="Skip CMake config. Run build process only.")
 ap.add_argument("-g", dest="use_gcc", action="store_true", help="Use GCC instead of Clang as the compiler.")
+ap.add_argument("-m", dest="use_makefile", action="store_true", help="Use Makefile instead of Ninja. Default is Ninja.")
 ap.add_argument("variant", help="Specify build variant. Acceptable values are: d(ebug)/p(rofile)/r(elease)/c(lean). "
                                          "Note that all parameters alert this one will be considered \"extra\" and passed to CMake directly.")
 ap.add_argument("extra", nargs=argparse.REMAINDER, help="Extra arguments passing to cmake.")
