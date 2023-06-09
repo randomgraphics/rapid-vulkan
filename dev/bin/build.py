@@ -32,6 +32,7 @@ def update_submodules():
     submodules = [
         # list all submodules here to automatically fetch them as part of the build process.
         "dev/3rd-party/glfw",
+        "dev/3rd-party/cli11"
     ]
     for s in submodules:
         dir = sdk_root_dir / s
