@@ -2273,7 +2273,6 @@ private:
         for (auto & bb : _backbuffers) {
             bb.fb.clear();
             _cp.gi->safeDestroy(bb.view);
-            if (!_cp.surface) _cp.gi->safeDestroy(bb.image); // Need to destroy the back buffer image explicitly if it's headless.
         }
         _backbuffers.clear();
         _depthBuffer.clear();
@@ -2439,22 +2438,24 @@ private:
             f.imageAvailable    = gi->device.createSemaphore({}, gi->allocator);
             f.renderFinished    = gi->device.createSemaphore({}, gi->allocator);
             f.frameEndSemaphore = gi->device.createSemaphore({}, gi->allocator);
-            f.headlessImage     = new Image(Image::ConstructParameters {{"swapchain headless image"}, gi}.set2D(w, h, _cp.backbufferFormat).addUsage(
-                vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst));
+            f.headlessImage.reset(new Image(Image::ConstructParameters {{"swapchain headless image"}, gi}
+                                                .setFormat(_cp.backbufferFormat)
+                                                .set2D(w, h)
+                                                .addUsage(vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst)));
             setVkObjectName(gi->device, f.imageAvailable, format("image available semaphore %u", i));
             setVkObjectName(gi->device, f.renderFinished, format("render finished semaphore %u", i));
             setVkObjectName(gi->device, f.frameEndSemaphore, format("frame end semaphore %u", i));
 
             // transfer the image into desired layout.
             Barrier()
-                .i(f.headlessImage, vk::AccessFlagBits::eNone, DESIRED_PRESENT_STATUS.access, vk::ImageLayout::eUndefined, DESIRED_PRESENT_STATUS.layout,
-                   vk::ImageAspectFlagBits::eColor)
+                .i(f.headlessImage->handle(), vk::AccessFlagBits::eNone, DESIRED_PRESENT_STATUS.access, vk::ImageLayout::eUndefined,
+                   DESIRED_PRESENT_STATUS.layout, vk::ImageAspectFlagBits::eColor)
                 .s(vk::PipelineStageFlagBits::eAllCommands, DESIRED_PRESENT_STATUS.stages)
                 .cmdWrite(c);
 
             // Store the image to back buffer structure
             bb.extent = vk::Extent2D {w, h};
-            bb.image = f.headlessImage;
+            bb.image  = f.headlessImage->handle();
 
             // create back buffer view
             bb.view = gi->device.createImageView(vk::ImageViewCreateInfo({}, bb.image, vk::ImageViewType::e2D, _cp.backbufferFormat)
