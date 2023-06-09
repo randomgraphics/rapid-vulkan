@@ -1,7 +1,22 @@
 #include "test-instance.h"
 #include "../3rd-party/catch2/catch.hpp"
 #include "shader/argument-test.comp.spv.h"
+#include "shader/noop.comp.spv.h"
 #include "rdc.h"
+
+TEST_CASE("noop-compute") {
+    using namespace rapid_vulkan;
+    auto device = TestVulkanInstance::device.get();
+    auto gi     = device->gi();
+    auto noop   = Shader(Shader::ConstructParameters {{"noop"}, gi}.setSpirv(noop_comp));
+    auto p      = ComputePipeline({{"noop"}, &noop});
+    auto q      = CommandQueue({{"main"}, gi, device->graphics()->family(), device->graphics()->index()});
+    if (auto c = q.begin("main")) {
+        p.cmdDispatch(c, {1, 1, 1});
+        q.submit({c});
+    }
+    q.wait();
+}
 
 TEST_CASE("cs-buffer-args") {
     using namespace rapid_vulkan;

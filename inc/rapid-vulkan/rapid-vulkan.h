@@ -69,8 +69,9 @@ SOFTWARE.
 
 /// \def RAPID_VULKAN_THROW
 /// The macro to throw runtime exception.
+/// \param errorString The error string to throw. Can be std::string or const char*.
 #ifndef RAPID_VULKAN_THROW
-#define RAPID_VULKAN_THROW(...) throw std::runtime_error(__VA_ARGS__)
+#define RAPID_VULKAN_THROW(errorString) throw std::runtime_error(errorString)
 #endif
 
 /// \def RAPID_VULKAN_BACKTRACE
@@ -84,34 +85,23 @@ SOFTWARE.
 
 /// \def RAPID_VULKAN_LOG_ERROR
 /// The macro to log error message. The default implementation prints to stderr.
+/// \paam message The error message to log. The type is const char *.
 #ifndef RAPID_VULKAN_LOG_ERROR
-#define RAPID_VULKAN_LOG_ERROR(...)    \
-    do {                               \
-        fprintf(stderr, "[ ERROR ] "); \
-        fprintf(stderr, __VA_ARGS__);  \
-        fprintf(stderr, "\n");         \
-    } while (false)
+#define RAPID_VULKAN_LOG_ERROR(message) fprintf(stderr, "[ ERROR ] %s\n", message)
 #endif
 
-/// \def RAPID_VULKAN_LOG_WARNING
+/// \def RVI_LOGW
 /// The macro to log warning message. The default implementation prints to stderr.
+/// \param message The warning message to log. The type is const char *.
 #ifndef RAPID_VULKAN_LOG_WARNING
-#define RAPID_VULKAN_LOG_WARNING(...)  \
-    do {                               \
-        fprintf(stderr, "[WARNING] "); \
-        fprintf(stderr, __VA_ARGS__);  \
-        fprintf(stderr, "\n");         \
-    } while (false)
+#define RAPID_VULKAN_LOG_WARNING(message) fprintf(stderr, "[WARNING] %s\n", message)
 #endif
 
 /// \def RAPID_VULKAN_LOG_INFO
 /// The macro to log informational message. The default implementation prints to stdout.
+/// \param message The message to log. The type is const char *.
 #ifndef RAPID_VULKAN_LOG_INFO
-#define RAPID_VULKAN_LOG_INFO(...)    \
-    do {                              \
-        fprintf(stdout, __VA_ARGS__); \
-        fprintf(stdout, "\n");        \
-    } while (false)
+#define RAPID_VULKAN_LOG_INFO(message) fprintf(stdout, "%s", message)
 #endif
 
 /// \def RAPID_VULKAN_ASSERT
@@ -121,7 +111,7 @@ SOFTWARE.
 #define RAPID_VULKAN_ASSERT(expression, ...)                                                     \
     if (!(expression)) {                                                                         \
         auto errorMessage__ = RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__);                       \
-        RAPID_VULKAN_LOG_ERROR("Condition " #expression " not met. %s", errorMessage__.c_str()); \
+        RVI_LOGE("Condition " #expression " not met. %s", errorMessage__.c_str()); \
         assert(false);                                                                           \
     } else                                                                                       \
         void(0)
@@ -182,7 +172,7 @@ SOFTWARE.
 // #define VMA_DEBUG_MARGIN            32
 // #endif
 #ifndef VMA_DEBUG_ERROR_LOG
-#define VMA_DEBUG_ERROR_LOG RAPID_VULKAN_LOG_INFO
+#define VMA_DEBUG_ERROR_LOG RVI_LOGI
 #endif
 #define VMA_STATIC_VULKAN_FUNCTIONS  0
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 0
@@ -242,12 +232,17 @@ SOFTWARE.
 
 #define RVI_STR_HELPER(x) #x
 
-#define RVI_THROW(...)                                                                                \
-    do {                                                                                              \
-        std::stringstream ss___;                                                                      \
-        ss___ << __FILE__ << "(" << __LINE__ << "): " << RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__); \
-        RAPID_VULKAN_LOG_ERROR("%s", ss___.str().data());                                             \
-        RAPID_VULKAN_THROW(ss___.str());                                                              \
+#define RVI_LOGI(...) RAPID_VULKAN_LOG_INFO(RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
+#define RVI_LOGW(...) RAPID_VULKAN_LOG_WARNING(RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
+#define RVI_LOGE(...) RAPID_VULKAN_LOG_ERROR(RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
+
+#define RVI_THROW(...)                                                                                       \
+    do {                                                                                                     \
+        std::stringstream errorStream_;                                                                      \
+        errorStream_ << __FILE__ << "(" << __LINE__ << "): " << RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__); \
+        auto errorString_ = errorStream_.str();                                                              \
+        RVI_LOGE("\n%s\n", errorString_.data());                                               \
+        RAPID_VULKAN_THROW(errorString_);                                                                    \
     } while (false)
 
 #if RAPID_VULKAN_ENABLE_DEBUG_BUILD
@@ -1946,7 +1941,7 @@ public:
     struct PresentParameters {
         /// @brief Specify the current status of the back buffer image when calling present().
         /// The present() function will insert proper barrier to transit the current back buffer image into VK_IMAGE_LAYOUT_PRESENT_SRC_KHR layouy.
-        /// If the back buffer image is alreadh in VK_IMAGE_LAYOUT_PRESENT_SRC_KHR layout, then no barrier will be inserted.
+        /// If the back buffer image is already in VK_IMAGE_LAYOUT_PRESENT_SRC_KHR layout, then no barrier will be inserted.
         BackbufferStatus backbufferStatus = {vk::ImageLayout::ePresentSrcKHR, vk::AccessFlagBits::eMemoryRead, vk::PipelineStageFlagBits::eBottomOfPipe};
     };
 
@@ -2009,10 +2004,11 @@ public:
     RenderLoop(const ConstructParameters &);
 };
 
+// ---------------------------------------------------------------------------------------------------------------------
+/// \def Device A wrapper class for VkDevice
+
 class Instance;
 
-// ---------------------------------------------------------------------------------------------------------------------
-/// A wrapper class for VkDevice
 class Device {
 public:
     RVI_NO_COPY(Device);
