@@ -2,17 +2,17 @@
 #ifdef _WIN32
 #define NOMINMAX
 #include <windows.h>
-#define RAPID_VULKAN_LOG_ERROR(message)                          \
-    do {                                                         \
-        auto message___ = rapid_vulkan::format("%s\n", message); \
-        fprintf(stderr, message___.c_str());                     \
-        ::OutputDebugStringA(message___.c_str());                \
+#define RAPID_VULKAN_LOG_ERROR(message)                                  \
+    do {                                                                 \
+        auto message___ = rapid_vulkan::format("[ERROR] %s\n", message); \
+        fprintf(stderr, message___.c_str());                             \
+        ::OutputDebugStringA(message___.c_str());                        \
     } while (false)
-#define RAPID_VULKAN_LOG_WARNING(message)                        \
-    do {                                                         \
-        auto message___ = rapid_vulkan::format("%s\n", message); \
-        fprintf(stderr, message___.c_str());                     \
-        ::OutputDebugStringA(message___.c_str());                \
+#define RAPID_VULKAN_LOG_WARNING(message)                                \
+    do {                                                                 \
+        auto message___ = rapid_vulkan::format("[WARN_] %s\n", message); \
+        fprintf(stderr, message___.c_str());                             \
+        ::OutputDebugStringA(message___.c_str());                        \
     } while (false)
 #endif
 

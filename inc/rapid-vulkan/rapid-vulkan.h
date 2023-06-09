@@ -71,7 +71,7 @@ SOFTWARE.
 /// The macro to throw runtime exception.
 /// \param errorString The error string to throw. Can be std::string or const char*.
 #ifndef RAPID_VULKAN_THROW
-#define RAPID_VULKAN_THROW(errorString) throw std::runtime_error(errorString)
+#define RAPID_VULKAN_THROW(message) throw std::runtime_error(message)
 #endif
 
 /// \def RAPID_VULKAN_BACKTRACE
@@ -101,7 +101,7 @@ SOFTWARE.
 /// The macro to log informational message. The default implementation prints to stdout.
 /// \param message The message to log. The type is const char *.
 #ifndef RAPID_VULKAN_LOG_INFO
-#define RAPID_VULKAN_LOG_INFO(message) fprintf(stdout, "%s", message)
+#define RAPID_VULKAN_LOG_INFO(message) fprintf(stdout, "%s\n", message)
 #endif
 
 /// \def RAPID_VULKAN_ASSERT
@@ -241,7 +241,7 @@ SOFTWARE.
         std::stringstream errorStream_;                                                                      \
         errorStream_ << __FILE__ << "(" << __LINE__ << "): " << RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__); \
         auto errorString_ = errorStream_.str();                                                              \
-        RVI_LOGE("\n%s\n", errorString_.data());                                                             \
+        RVI_LOGE("%s", errorString_.data());                                                                 \
         RAPID_VULKAN_THROW(errorString_);                                                                    \
     } while (false)
 
