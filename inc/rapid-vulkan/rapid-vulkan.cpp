@@ -2069,11 +2069,11 @@ Swapchain::ConstructParameters & Swapchain::ConstructParameters::setDevice(const
     graphicsQueueFamily = d.graphics()->family();
     graphicsQueueIndex  = d.graphics()->index();
     if (d.present()) {
-        presentQueueFamily  = d.present()->family();
-        presentQueueIndex   = d.present()->index();
+        presentQueueFamily = d.present()->family();
+        presentQueueIndex  = d.present()->index();
     } else {
-        presentQueueFamily  = VK_QUEUE_FAMILY_IGNORED;
-        presentQueueIndex   = 0;
+        presentQueueFamily = VK_QUEUE_FAMILY_IGNORED;
+        presentQueueIndex  = 0;
     }
     return *this;
 }
@@ -2153,17 +2153,16 @@ public:
         // present current frame
         if (_handle) {
             auto presentInfo = vk::PresentInfoKHR()
-                                .setSwapchainCount(1)
-                                .setPSwapchains(&_handle)
-                                .setPImageIndices(&frame.imageIndex)
-                                .setWaitSemaphoreCount(1)
-                                .setPWaitSemaphores(&frame.frameEndSemaphore);
+                                   .setSwapchainCount(1)
+                                   .setPSwapchains(&_handle)
+                                   .setPImageIndices(&frame.imageIndex)
+                                   .setWaitSemaphoreCount(1)
+                                   .setPWaitSemaphores(&frame.frameEndSemaphore);
             auto result = _presentQueue.presentKHR(&presentInfo);
             if (vk::Result::eSuccess == result) {
                 // Store the command buffer. This will be used later to wait for the frame to be available for reuse.
                 frame.frameEndCommands = cb;
-            }
-            else if (result == vk::Result::eSuboptimalKHR || result == vk::Result::eErrorOutOfDateKHR) {
+            } else if (result == vk::Result::eSuboptimalKHR || result == vk::Result::eErrorOutOfDateKHR) {
                 // this means window/surface size is changed, we need to recreate the swapchain.
                 _graphicsQueue->wait();
                 recreateWindowSwapchain();
@@ -2186,6 +2185,7 @@ private:
         uint32_t          imageIndex {};
         vk::Semaphore     frameEndSemaphore {};
         vk::CommandBuffer frameEndCommands {};
+        Ref<Image>        headlessImage; ///< the image that is used as the backbuffer for headless swapchain.
     };
 
 private:
@@ -2431,23 +2431,30 @@ private:
         _backbuffers.resize(imageCount);
         _frames.resize(imageCount);
         for (uint32_t i = 0; i < imageCount; ++i) {
-            auto & bb = _backbuffers[i];
-
-            bb.extent = vk::Extent2D {w, h};
-
-            // create back buffer image
-            bb.image = gi->device.createImage(vk::ImageCreateInfo({}, vk::ImageType::e2D, _cp.backbufferFormat, {w, h, 1}, 1, 1, vk::SampleCountFlagBits::e1,
-                                                                  vk::ImageTiling::eOptimal,
-                                                                  vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst),
-                                              gi->allocator);
-            setVkObjectName(gi->device, bb.image, format("back buffer image %u", i));
+            // setup frame structure
+            auto & bb           = _backbuffers[i];
+            auto & f            = _frames[i];
+            f.backbuffer        = &bb;
+            f.imageIndex        = i;
+            f.imageAvailable    = gi->device.createSemaphore({}, gi->allocator);
+            f.renderFinished    = gi->device.createSemaphore({}, gi->allocator);
+            f.frameEndSemaphore = gi->device.createSemaphore({}, gi->allocator);
+            f.headlessImage     = new Image(Image::ConstructParameters {{"swapchain headless image"}, gi}.set2D(w, h, _cp.backbufferFormat).addUsage(
+                vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst));
+            setVkObjectName(gi->device, f.imageAvailable, format("image available semaphore %u", i));
+            setVkObjectName(gi->device, f.renderFinished, format("render finished semaphore %u", i));
+            setVkObjectName(gi->device, f.frameEndSemaphore, format("frame end semaphore %u", i));
 
             // transfer the image into desired layout.
             Barrier()
-                .i(bb.image, vk::AccessFlagBits::eNone, DESIRED_PRESENT_STATUS.access, vk::ImageLayout::eUndefined, DESIRED_PRESENT_STATUS.layout,
+                .i(f.headlessImage, vk::AccessFlagBits::eNone, DESIRED_PRESENT_STATUS.access, vk::ImageLayout::eUndefined, DESIRED_PRESENT_STATUS.layout,
                    vk::ImageAspectFlagBits::eColor)
                 .s(vk::PipelineStageFlagBits::eAllCommands, DESIRED_PRESENT_STATUS.stages)
                 .cmdWrite(c);
+
+            // Store the image to back buffer structure
+            bb.extent = vk::Extent2D {w, h};
+            bb.image = f.headlessImage;
 
             // create back buffer view
             bb.view = gi->device.createImageView(vk::ImageViewCreateInfo({}, bb.image, vk::ImageViewType::e2D, _cp.backbufferFormat)
@@ -2460,17 +2467,6 @@ private:
                 *_renderPass);
             if (_depthBuffer) fbcp.addImageView(_depthBuffer->getView({}));
             bb.fb.reset(new Framebuffer(fbcp));
-
-            // setup frame structure
-            auto & f            = _frames[i];
-            f.backbuffer        = &bb;
-            f.imageIndex        = i;
-            f.imageAvailable    = gi->device.createSemaphore({}, gi->allocator);
-            f.renderFinished    = gi->device.createSemaphore({}, gi->allocator);
-            f.frameEndSemaphore = gi->device.createSemaphore({}, gi->allocator);
-            setVkObjectName(gi->device, f.imageAvailable, format("image available semaphore %u", i));
-            setVkObjectName(gi->device, f.renderFinished, format("render finished semaphore %u", i));
-            setVkObjectName(gi->device, f.frameEndSemaphore, format("frame end semaphore %u", i));
         }
 
         // execute the command buffer to update image layout
