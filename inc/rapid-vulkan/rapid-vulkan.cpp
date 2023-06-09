@@ -3111,21 +3111,24 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
     std::map<const char *, bool> instanceExtensions {
         {VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME, true},
         {VK_KHR_SURFACE_EXTENSION_NAME, true},
+#ifdef _WIN32
+        {"VK_KHR_win32_surface", false},
+#elif defined(__ANDROID__)
+        {"VK_KHR_android_surface", false},
+#elif defined(__linux__)
+        {"VK_KHR_xcb_surface", false},
+        {"VK_KHR_xlib_surface", false},
+        {"VK_KHR_wayland_surface", false},
+#else // macOS
+        {"VK_MVK_macos_surface", false},
+        {"VK_EXT_metal_surface", false},
+#endif
     };
     if (cp.validation) {
         // Enable in-shader debug printf, if supported.
         instanceExtensions[VK_EXT_DEBUG_REPORT_EXTENSION_NAME] = false;
         instanceExtensions[VK_EXT_DEBUG_UTILS_EXTENSION_NAME]  = false;
     }
-#ifdef _glfw3_h_
-    {
-        // Automatically enable window surface extension if GLFW is available. This is to make it easier to use
-        // rapid-vulkan with GLFW.
-        uint32_t count;
-        auto     exts = glfwGetRequiredInstanceExtensions(&count);
-        for (uint32_t i = 0; i < count; ++i) { instanceExtensions[exts[i]] = false; }
-    }
-#endif
     for (const auto & e : cp.instanceExtensions) { instanceExtensions[e.first.c_str()] = e.second; }
 
     // make sure all required layers and extensions are actually supported
