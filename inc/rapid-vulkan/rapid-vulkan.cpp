@@ -2068,8 +2068,13 @@ Swapchain::ConstructParameters & Swapchain::ConstructParameters::setDevice(const
     surface             = d.surface();
     graphicsQueueFamily = d.graphics()->family();
     graphicsQueueIndex  = d.graphics()->index();
-    presentQueueFamily  = d.present()->family();
-    presentQueueIndex   = d.present()->index();
+    if (d.present()) {
+        presentQueueFamily  = d.present()->family();
+        presentQueueIndex   = d.present()->index();
+    } else {
+        presentQueueFamily  = VK_QUEUE_FAMILY_IGNORED;
+        presentQueueIndex   = 0;
+    }
     return *this;
 }
 
@@ -2200,15 +2205,19 @@ private:
 
 private:
     void constructWindowSwapchain() {
-        // retrieve present queue handle.
-        RVI_REQUIRE(_cp.presentQueueFamily != VK_QUEUE_FAMILY_IGNORED);
-        _presentQueue = _cp.gi->device.getQueue(_cp.presentQueueFamily, _cp.presentQueueIndex);
-        RVI_REQUIRE(_presentQueue);
-
         // Construct a CommandQueue instance for graphics queue.
         RVI_REQUIRE(_cp.graphicsQueueFamily != VK_QUEUE_FAMILY_IGNORED);
         _graphicsQueue.reset(
             new CommandQueue(CommandQueue::ConstructParameters {{"swapchain graphics queue"}, _cp.gi, _cp.graphicsQueueFamily, _cp.graphicsQueueIndex}));
+
+        // retrieve present queue handle.
+        if (_cp.presentQueueFamily != VK_QUEUE_FAMILY_IGNORED) {
+            _presentQueue = _cp.gi->device.getQueue(_cp.presentQueueFamily, _cp.presentQueueIndex);
+            RVI_REQUIRE(_presentQueue);
+        } else {
+            // use graphics queue as present queue.
+            _presentQueue = _graphicsQueue->handle();
+        }
 
         // check if the back buffer format is supported.
         auto supportedFormats = _cp.gi->physical.getSurfaceFormatsKHR(_cp.surface);

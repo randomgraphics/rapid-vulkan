@@ -6,7 +6,8 @@ struct GLFWInit {
     vk::Instance inst;
     GLFWwindow * window  = nullptr;
     VkSurfaceKHR surface = nullptr;
-    GLFWInit(vk::Instance instance, uint32_t w, uint32_t h, const char * title): inst(instance) {
+    GLFWInit(bool headless, vk::Instance instance, uint32_t w, uint32_t h, const char * title): inst(instance) {
+        if (headless) return; // do nothing in headless mode.
         glfwInit();
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         window = glfwCreateWindow(w, h, title, nullptr, nullptr);
@@ -21,18 +22,18 @@ struct GLFWInit {
     }
 };
 
-int main() {
+void entry(bool headless) {
     using namespace rapid_vulkan;
     auto w        = uint32_t(1280);
     auto h        = uint32_t(720);
     auto instance = Instance(Instance::ConstructParameters {}.setValidation(Instance::BREAK_ON_VK_ERROR));
-    auto glfw     = GLFWInit(instance, w, h, "simple-triangle");
+    auto glfw     = GLFWInit(headless, instance, w, h, "simple-triangle");
     auto device   = Device(instance.dcp().setSurface(glfw.surface));
     auto gi       = device.gi();
     auto vs       = Shader(Shader::ConstructParameters {{"simple-triangle-vs"}}.setGi(gi).setSpirv(simple_triangle_vert));
     auto fs       = Shader(Shader::ConstructParameters {{"simple-triangle-fs"}, gi}.setSpirv(simple_triangle_frag));
     auto q        = CommandQueue({{"main"}, gi, device.graphics()->family(), device.graphics()->index()});
-    auto sw       = Swapchain(Swapchain::ConstructParameters {{"simple-triangle"}}.setDevice(device));
+    auto sw       = Swapchain(Swapchain::ConstructParameters {{"simple-triangle"}}.setDevice(device).setDimensions(w, h));
 
     // create the graphics pipeline
     auto gcp = GraphicsPipeline::ConstructParameters {{"simple-triangle"}}.setRenderPass(sw.renderPass()).setVS(&vs).setFS(&fs);
@@ -48,9 +49,14 @@ int main() {
     auto p = GraphicsPipeline(gcp);
 
     // Endless render loop for this simple sample.
-    glfwShowWindow(glfw.window);
-    while (!glfwWindowShouldClose(glfw.window)) {
-        glfwPollEvents();
+    if (!headless) glfwShowWindow(glfw.window);
+    for(;;) {
+        if (headless) {
+            if (sw.currentFrame().index > 10) break; // render 10 frames in headless mode.
+        } else {
+            if (glfwWindowShouldClose(glfw.window)) break;
+            glfwPollEvents();
+        }
         auto & frame = sw.currentFrame();
         auto   c     = q.begin("simple-triangle");
         sw.cmdBeginBuiltInRenderPass(c, Swapchain::BeginRenderPassParameters {}.setColorF(0.0f, 1.0f, 0.0f, 1.0f)); // clear to green
@@ -59,4 +65,8 @@ int main() {
         q.submit({c, {}, {frame.imageAvailable}, {frame.renderFinished}});
         sw.present({});
     };
+}
+
+int main() {
+    entry(false);
 }

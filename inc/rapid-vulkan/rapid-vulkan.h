@@ -1855,19 +1855,17 @@ public:
         /// @brief Handle of the surface to present to. Set to null to create a headless swapchain.
         vk::SurfaceKHR surface = {};
 
-        /// @brief Always set to a valid queue family index that is capable of doing graphics work.
+        /// @brief Must always set to a valid queue family index that is capable of doing graphics work.
         uint32_t graphicsQueueFamily = VK_QUEUE_FAMILY_IGNORED;
 
         /// @brief Index of the graphics queue.
         uint32_t graphicsQueueIndex  = 0;
 
-        /// @brief Family index of the present queue.
-        /// When surface is valid, this must be a valid queue family index that is capable of presenting to the surface.
-        /// It can be same as the graphics queue family index.
-        /// When in headless mode, this field is ignored.
+        /// @brief Family index of the present queue, or VK_QUEUE_FAMILY_IGNORED if the present queue is the same as the
+        /// graphics queue. Ignored in headless mode.
         uint32_t presentQueueFamily  = VK_QUEUE_FAMILY_IGNORED;
 
-        /// @brief Index of the present queue. Ignored when surface is null.
+        /// @brief Index of the present queue. Ignored when the present queue is VK_QUEUE_FAMILY_IGNORED.
         uint32_t presentQueueIndex   = 0;
 
         /// @brief Width and height of the swapchain. Set to 0 to use the surface size.
@@ -1895,6 +1893,13 @@ public:
         /// @brief Fill in construction parameters using values retrieved from the given device.
         /// This method will fill in the following fields: gi, surface and present/graphics queue properties.
         ConstructParameters & setDevice(const Device &);
+
+        /// @brief Set dimension in pixels of the swapchain.
+        ConstructParameters & setDimensions(size_t width_, size_t height_) {
+            width  = width_;
+            height = height_;
+            return *this;
+        }
     };
 
     /// @brief Specify the desired status of the back buffer image.
