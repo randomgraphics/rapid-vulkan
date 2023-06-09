@@ -3,22 +3,31 @@
 #include "shader/simple-triangle.frag.spv.h"
 
 struct GLFWInit {
-    GLFWInit() {
+    vk::Instance inst;
+    GLFWwindow * window  = nullptr;
+    VkSurfaceKHR surface = nullptr;
+    GLFWInit(vk::Instance instance, uint32_t w, uint32_t h, const char * title): inst(instance) {
         glfwInit();
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+        window = glfwCreateWindow(w, h, title, nullptr, nullptr);
+        RVI_REQUIRE(window, "Failed to create GLFW window.");
+        glfwCreateWindowSurface(instance, window, nullptr, &surface);
+        RVI_REQUIRE(surface, "Failed to create surface.");
     }
-    ~GLFWInit() { glfwTerminate(); }
+    ~GLFWInit() {
+        if (surface) inst.destroySurfaceKHR(surface), surface = VK_NULL_HANDLE;
+        if (window) glfwDestroyWindow(window), window = nullptr;
+        glfwTerminate();
+    }
 };
 
 int main() {
     using namespace rapid_vulkan;
     auto w        = uint32_t(1280);
     auto h        = uint32_t(720);
-    auto glfw     = GLFWInit();
-    auto window   = glfwCreateWindow(w, h, "simple-triangle", nullptr, nullptr);
     auto instance = Instance(Instance::ConstructParameters {}.setValidation(Instance::BREAK_ON_VK_ERROR));
-    auto surface  = createGLFWSurface(instance, window);
-    auto device   = Device(instance.dcp().setSurface(surface.get()));
+    auto glfw     = GLFWInit(instance, w, h, "simple-triangle");
+    auto device   = Device(instance.dcp().setSurface(glfw.surface));
     auto gi       = device.gi();
     auto vs       = Shader(Shader::ConstructParameters {{"simple-triangle-vs"}}.setGi(gi).setSpirv(simple_triangle_vert));
     auto fs       = Shader(Shader::ConstructParameters {{"simple-triangle-fs"}, gi}.setSpirv(simple_triangle_frag));
@@ -39,8 +48,8 @@ int main() {
     auto p = GraphicsPipeline(gcp);
 
     // Endless render loop for this simple sample.
-    glfwShowWindow(window);
-    while (!glfwWindowShouldClose(window)) {
+    glfwShowWindow(glfw.window);
+    while (!glfwWindowShouldClose(glfw.window)) {
         glfwPollEvents();
         auto & frame = sw.currentFrame();
         auto   c     = q.begin("simple-triangle");
@@ -50,6 +59,4 @@ int main() {
         q.submit({c, {}, {frame.imageAvailable}, {frame.renderFinished}});
         sw.present({});
     };
-
-    glfwDestroyWindow(window);
 }
