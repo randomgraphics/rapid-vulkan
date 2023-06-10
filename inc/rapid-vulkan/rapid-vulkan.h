@@ -341,11 +341,11 @@ format(const char * format, ...) {
     }
 
     // Allocate the buffer.
-    std::string buffer(size + 1, '\0');
+    std::string buffer((size_t)size + 1, '\0');
 
     // Format the string.
     va_start(args, format);
-    vsnprintf(&buffer[0], size + 1, format, args);
+    vsnprintf(&buffer[0], (size_t)size + 1, format, args);
     va_end(args);
 
     // Return the formatted string.
@@ -962,9 +962,9 @@ public:
         RVI_NO_COPY(Map);
         RVI_NO_MOVE(Map);
 
-        Map(Buffer & buffer_, vk::DeviceSize offset = 0, vk::DeviceSize size = vk::DeviceSize(-1)) {
+        Map(Buffer & buffer_, vk::DeviceSize offset_ = 0, vk::DeviceSize size_ = vk::DeviceSize(-1)) {
             RVI_ASSERT(empty());
-            auto mapped = buffer_.map({offset, size});
+            auto mapped = buffer_.map({offset_, size_});
             if (!mapped.data) return;
             buffer = &buffer_;
             data   = (T *) mapped.data;
@@ -1677,7 +1677,7 @@ public:
         std::array<float, 4>                               blendConstants {};
         std::map<vk::DynamicState, uint64_t>               dynamic {};
         vk::Pipeline                                       baseHandle {};
-        uint32_t                                           baseIndex {};
+        int32_t                                            baseIndex {};
 
         ConstructParameters & setRenderPass(vk::RenderPass pass_, size_t sub = 0) {
             pass    = pass_;
@@ -1921,7 +1921,7 @@ public:
     /// @brief Represents a GPU frame.
     struct Frame {
         /// @brief Index of the frame. The value will be incremented after each present.
-        int64_t index = 0;
+        uint64_t index = 0;
 
         // /// @brief Index of the frame that GPU has done all the rendering. All resources used to render this frame could be safely recycled or destroyed.
         // int64_t safeFrameIndex = -1;

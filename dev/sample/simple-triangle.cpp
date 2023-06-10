@@ -10,7 +10,7 @@ struct GLFWInit {
         if (headless) return; // do nothing in headless mode.
         glfwInit();
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-        window = glfwCreateWindow(w, h, title, nullptr, nullptr);
+        window = glfwCreateWindow((int)w, (int)h, title, nullptr, nullptr);
         RVI_REQUIRE(window, "Failed to create GLFW window.");
         glfwCreateWindowSurface(instance, window, nullptr, &surface);
         RVI_REQUIRE(surface, "Failed to create surface.");

@@ -25,10 +25,6 @@ SOFTWARE.
 #undef RAPID_VULKAN_IMPLEMENTATION
 #include "rapid-vulkan.h"
 
-#include "3rd-party/spriv-reflect/spirv_reflect.c"
-
-#ifdef RVI_NEED_VMA_IMPL
-#define VMA_IMPLEMENTATION
 #ifdef _MSC_VER
 #pragma warning(push, 0)
 #elif defined(__GNUC__)
@@ -42,10 +38,16 @@ SOFTWARE.
 #pragma GCC diagnostic ignored "-Wtype-limits"
 #pragma GCC diagnostic ignored "-Wformat"
 #pragma GCC diagnostic ignored "-Wundef"
+#pragma GCC diagnostic ignored "-Wconversion"
 #pragma GCC diagnostic ignored "-Wparentheses"
 #pragma GCC diagnostic ignored "-Wimplicit-fallthrough"
 #endif
+
+#include "3rd-party/spriv-reflect/spirv_reflect.c"
+#ifdef RVI_NEED_VMA_IMPL
+#define VMA_IMPLEMENTATION
 #include "3rd-party/vma-3.0.1/vk_mem_alloc.h"
+
 #ifdef _MSC_VER
 #pragma warning(pop)
 #elif defined(__GNUC__)
@@ -2191,7 +2193,7 @@ private:
 private:
     ConstructParameters _cp;
     Ref<RenderPass>     _renderPass;
-    int64_t             _frameIndex = 0;
+    uint64_t            _frameIndex = 0;
     vk::Queue           _presentQueue;
     Ref<CommandQueue>   _graphicsQueue;
 
@@ -2426,7 +2428,7 @@ private:
         }
 
         // create back buffer and frame array.
-        uint32_t imageCount = _cp.maxFramesInFlight + 1;
+        auto imageCount = _cp.maxFramesInFlight + 1;
         _backbuffers.resize(imageCount);
         _frames.resize(imageCount);
         for (uint32_t i = 0; i < imageCount; ++i) {
@@ -3013,11 +3015,11 @@ struct InstanceInfo {
         // hold list of supported extensions in a set to avoid duplicated extension names.
         std::set<const char *> available;
 
-        auto processSupportedExtension = [&](const vk::ExtensionProperties & available) {
+        auto processSupportedExtension = [&](const vk::ExtensionProperties & available_) {
             // Add supported ones to v.instanceExtensions list. Then remove it from extensions_ list. So we won't check
             // the same extension twice.
             for (auto asked = extensions_.begin(); asked != extensions_.end();) {
-                if (0 == strcmp(asked->first, available.extensionName)) {
+                if (0 == strcmp(asked->first, available_.extensionName)) {
                     v.instanceExtensions.push_back(asked->first);
                     // Remove "found" extensions from the list. So it won't be checked again.
                     asked = extensions_.erase(asked);
