@@ -2843,18 +2843,14 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
     askedDeviceExtensions[VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME] = true;
     askedDeviceExtensions[VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME]    = true;
 
+    // enable swapchian extension regardless to support VK_IMAGE_LAYOUT_PRESENT_SRC.
+    askedDeviceExtensions[VK_KHR_SWAPCHAIN_EXTENSION_NAME] = true;
+
     // #if PH_ANDROID == 0
     //     if (isRenderDocPresent()) {                                                       // only add this when renderdoc is available
     //         askedDeviceExtensions[VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME] = true; // add this to allow debugging on compute shaders
     //     }
     // #endif
-
-    // Add swapchain extension when there is a surface.
-    bool presenting = false;
-    if (cp.surface) {
-        askedDeviceExtensions[VK_KHR_SWAPCHAIN_EXTENSION_NAME] = true;
-        presenting                                             = true;
-    }
 
     // make sure all extensions are actually supported by the hardware.
     auto availableDeviceExtensions = enumerateDeviceExtensions(_gi.physical);
@@ -2921,7 +2917,7 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
             (f.queueFlags & vk::QueueFlagBits::eTransfer))
             _transfer = q;
 
-        if (!_present && presenting) {
+        if (cp.surface && !_present) {
             auto supportPresenting = _gi.physical.getSurfaceSupportKHR(i, cp.surface);
             if (supportPresenting) _present = q;
         }

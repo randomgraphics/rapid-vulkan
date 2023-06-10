@@ -68,5 +68,5 @@ void entry(bool headless) {
 }
 
 int main() {
-    entry(false);
+    entry(true);
 }
