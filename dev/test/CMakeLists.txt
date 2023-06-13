@@ -5,5 +5,6 @@ add_executable(rapid-vulkan-test
     graphics-test.cpp
     image-test.cpp
     test-main.cpp
+    sample-test.cpp
 )
 target_link_libraries(rapid-vulkan-test PUBLIC rapid-vulkan-static ${RAPID_VULKAN_SYSTEM_LIBRARIES})

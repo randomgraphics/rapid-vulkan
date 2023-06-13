@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identify the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 9
+#define RAPID_VULKAN_HEADER_REVISION 10
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -341,11 +341,11 @@ format(const char * format, ...) {
     }
 
     // Allocate the buffer.
-    std::string buffer((size_t)size + 1, '\0');
+    std::string buffer((size_t) size + 1, '\0');
 
     // Format the string.
     va_start(args, format);
-    vsnprintf(&buffer[0], (size_t)size + 1, format, args);
+    vsnprintf(&buffer[0], (size_t) size + 1, format, args);
     va_end(args);
 
     // Return the formatted string.
@@ -728,7 +728,6 @@ public:
     auto handle() const -> vk::Queue { return desc().handle; }
 
 protected:
-
     void onNameChanged(const std::string &) override;
 
 private:
@@ -1867,14 +1866,14 @@ public:
         uint32_t graphicsQueueFamily = VK_QUEUE_FAMILY_IGNORED;
 
         /// @brief Index of the graphics queue.
-        uint32_t graphicsQueueIndex  = 0;
+        uint32_t graphicsQueueIndex = 0;
 
         /// @brief Family index of the present queue, or VK_QUEUE_FAMILY_IGNORED if the present queue is the same as the
         /// graphics queue. Ignored in headless mode.
-        uint32_t presentQueueFamily  = VK_QUEUE_FAMILY_IGNORED;
+        uint32_t presentQueueFamily = VK_QUEUE_FAMILY_IGNORED;
 
         /// @brief Index of the present queue. Ignored when the present queue is VK_QUEUE_FAMILY_IGNORED.
-        uint32_t presentQueueIndex   = 0;
+        uint32_t presentQueueIndex = 0;
 
         /// @brief Width and height of the swapchain. Set to 0 to use the surface size.
         /// If the surface is null, then the width and height must be non-zero.
