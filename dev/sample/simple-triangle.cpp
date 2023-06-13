@@ -1,4 +1,5 @@
 #include "../rv.h"
+#include <iostream>
 #include "shader/simple-triangle.vert.spv.h"
 #include "shader/simple-triangle.frag.spv.h"
 
@@ -53,6 +54,7 @@ void entry(bool headless) {
     for(;;) {
         if (headless) {
             if (sw.currentFrame().index > 10) break; // render 10 frames in headless mode.
+            std::cout << "Frame " << sw.currentFrame().index << std::endl;
         } else {
             if (glfwWindowShouldClose(glfw.window)) break;
             glfwPollEvents();
@@ -64,7 +66,8 @@ void entry(bool headless) {
         sw.cmdEndBuiltInRenderPass(c);
         q.submit({c, {}, {frame.imageAvailable}, {frame.renderFinished}});
         sw.present({});
-    };
+    }
+    device.waitIdle();
 }
 
 int main() {

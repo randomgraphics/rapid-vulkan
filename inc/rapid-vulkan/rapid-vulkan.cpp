@@ -113,6 +113,14 @@ std::vector<vk::ExtensionProperties> enumerateDeviceExtensions(vk::PhysicalDevic
     return extensions;
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+//
+void threadSafeWaitForDeviceIdle(vk::Device device) {
+    static std::mutex mutex;
+    auto              lock = std::lock_guard {mutex};
+    device.waitIdle();
+}
+
 // *********************************************************************************************************************
 // Command Buffer/Pool/Queue
 // *********************************************************************************************************************
@@ -276,6 +284,11 @@ public:
         finish(p);
     }
 
+    void setName(const std::string & name) {
+        auto lock = std::lock_guard {_mutex};
+        setVkObjectName(_desc.gi->device, _desc.handle, name.c_str());
+    }
+
 private:
     typedef std::unordered_map<VkCommandBuffer, std::unique_ptr<CommandBuffer>> CommandBufferSet;
     typedef std::list<CommandBuffer *>                                          PendingList;
@@ -333,12 +346,13 @@ private:
     }
 };
 
-CommandQueue::CommandQueue(const ConstructParameters & params): Root(params), _impl(new Impl(params)) {}
+CommandQueue::CommandQueue(const ConstructParameters & params): Root(params), _impl(new Impl(params)) { _impl->setName(name()); }
 CommandQueue::~CommandQueue() { delete _impl; }
 auto CommandQueue::desc() const -> const Desc & { return _impl->desc(); }
 auto CommandQueue::begin(const char * purpose, vk::CommandBufferLevel level) -> vk::CommandBuffer { return _impl->begin(purpose, level); }
 void CommandQueue::submit(const SubmitParameters & sp) { _impl->submit(sp); }
 void CommandQueue::wait(vk::CommandBuffer cb) { _impl->wait(cb); }
+void CommandQueue::onNameChanged(const std::string &) { _impl->setName(name()); }
 
 // *********************************************************************************************************************
 // Buffer
@@ -2150,10 +2164,11 @@ public:
         } else {
             bb->status = pp.backbufferStatus;
         }
-        _graphicsQueue->submit({cb, {}, {frame.renderFinished}, {frame.frameEndSemaphore}});
 
         // present current frame
         if (_handle) {
+            _graphicsQueue->submit({cb, {}, {frame.renderFinished}, {frame.frameEndSemaphore}});
+
             auto presentInfo = vk::PresentInfoKHR()
                                    .setSwapchainCount(1)
                                    .setPSwapchains(&_handle)
@@ -2172,8 +2187,8 @@ public:
                 RVI_THROW("Failed to present swapchain image. result = %s", vk::to_string((vk::Result) result).c_str());
             }
         } else {
-            // headless swapchain. Do a dummy submit to wait for the frame end semaphore.
-            _graphicsQueue->submit({cb, {}, {frame.frameEndSemaphore}, {}});
+            // headless swapchain.
+            _graphicsQueue->submit({cb, {}, {frame.renderFinished}, {frame.imageAvailable}});
             frame.frameEndCommands = cb;
         }
 
@@ -2474,6 +2489,13 @@ private:
 
         // execute the command buffer to update image layout
         _graphicsQueue->submit({c});
+
+        // do dummy submits to signal image available signals for all frames.
+        for (auto & f : _frames) {
+            auto cb = _graphicsQueue->begin("dummy submit to signal image available semaphore");
+            _graphicsQueue->submit({cb, {}, {}, {f.imageAvailable}});
+        }
+
         _graphicsQueue->wait();
     }
 

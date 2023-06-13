@@ -456,6 +456,10 @@ vk::PhysicalDevice selectTheMostPowerfulPhysicalDevice(vk::ArrayProxy<const vk::
 //
 std::vector<vk::ExtensionProperties> enumerateDeviceExtensions(vk::PhysicalDevice dev);
 
+// ---------------------------------------------------------------------------------------------------------------------
+/// @brief Calling vkDeviceWaitIdle() in a thread-safe manner.
+void threadSafeWaitForDeviceIdle(vk::Device device);
+
 #if RAPID_VULKAN_ENABLE_GLFW3
 // ---------------------------------------------------------------------------------------------------------------------
 /// @brief Helper functions to create a Vulkan surface from GLFW window.
@@ -722,6 +726,10 @@ public:
     auto family() const -> uint32_t { return desc().family; }
     auto index() const -> uint32_t { return desc().index; }
     auto handle() const -> vk::Queue { return desc().handle; }
+
+protected:
+
+    void onNameChanged(const std::string &) override;
 
 private:
     class Impl;
@@ -2150,7 +2158,7 @@ public:
 
     bool separatePresentQueue() const { return _present != _graphics; }
 
-    // VkResult waitIdle() const { return _vgi.device ? threadSafeDeviceWaitIdle(_vgi.device) : VK_SUCCESS; }
+    void waitIdle() const { return threadSafeWaitForDeviceIdle(_gi.device); }
 
     vk::Device handle() const { return _gi.device; }
 
