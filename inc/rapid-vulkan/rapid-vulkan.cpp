@@ -586,7 +586,7 @@ Buffer::Buffer(const ImportParameters & cp): Root(cp) { _impl = new Impl(*this, 
 Buffer::~Buffer() { delete _impl; }
 auto Buffer::desc() const -> const Desc & { return _impl->desc(); }
 void Buffer::cmdCopy(const CopyParameters & p) { return _impl->cmdCopy(p); }
-void Buffer::setContent(const SetContentParameters & p) { return _impl->setContent(p); }
+auto Buffer::setContent(const SetContentParameters & p) -> Buffer & { _impl->setContent(p); return *this; }
 auto Buffer::readContent(const ReadParameters & p) -> std::vector<uint8_t> { return _impl->readContent(p); }
 auto Buffer::map(const MapParameters & p) -> MappedResult { return _impl->map(p); }
 void Buffer::unmap() { return _impl->unmap(); }
@@ -1523,9 +1523,9 @@ private:
 
 Argument::Argument(): _impl(new Impl()) {}
 Argument::~Argument() { delete _impl; }
-void Argument::b(vk::ArrayProxy<const BufferView> v) { return _impl->b(v); }
-void Argument::i(vk::ArrayProxy<const ImageSampler> v) { return _impl->i(v); }
-void Argument::c(size_t offset, size_t size, const void * data) { return _impl->c(offset, size, data); }
+Argument & Argument::b(vk::ArrayProxy<const BufferView> v) { _impl->b(v); return *this; }
+Argument & Argument::i(vk::ArrayProxy<const ImageSampler> v) { _impl->i(v); return *this; }
+Argument & Argument::c(size_t offset, size_t size, const void * data) { _impl->c(offset, size, data); return *this; }
 
 class ArgumentImpl : public Argument {
 public:
@@ -1560,10 +1560,10 @@ private:
 
 ArgumentPack::ArgumentPack(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this); }
 ArgumentPack::~ArgumentPack() { delete _impl; }
-void ArgumentPack::clear() { return _impl->clear(); }
-void ArgumentPack::b(const std::string & name, vk::ArrayProxy<const BufferView> v) { return _impl->set(name, v); }
-void ArgumentPack::i(const std::string & name, vk::ArrayProxy<const ImageSampler> v) { return _impl->set(name, v); }
-void ArgumentPack::c(const std::string & name, size_t offset, size_t size, const void * data) { return _impl->set(name, offset, size, data); }
+auto ArgumentPack::clear() -> ArgumentPack & { _impl->clear(); return *this; }
+auto ArgumentPack::b(const std::string & name, vk::ArrayProxy<const BufferView> v) -> ArgumentPack & { _impl->set(name, v); return *this; }
+auto ArgumentPack::i(const std::string & name, vk::ArrayProxy<const ImageSampler> v) -> ArgumentPack & { _impl->set(name, v); return *this; }
+auto ArgumentPack::c(const std::string & name, size_t offset, size_t size, const void * data) -> ArgumentPack & { _impl->set(name, offset, size, data); return *this; }
 auto ArgumentPack::get(const std::string & name) -> Argument * { return _impl->get(name); }
 auto ArgumentPack::get(const std::string & name) const -> const Argument * { return _impl->get(name); }
 

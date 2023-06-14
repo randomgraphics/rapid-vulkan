@@ -25,6 +25,7 @@ if (HAS_VOLK_H)
     add_sample_no_link_to_rv(use-with-volk-loader)
 endif()
 add_sample(noop-compute)
+add_sample(pipeline-args)
 
 if (NOT ANDROID)
     add_sample(simple-triangle)

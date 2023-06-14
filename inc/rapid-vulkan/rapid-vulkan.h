@@ -1009,7 +1009,7 @@ public:
 
     auto desc() const -> const Desc &;
     void cmdCopy(const CopyParameters &);
-    void setContent(const SetContentParameters &);
+    auto setContent(const SetContentParameters &) -> Buffer &;
     auto readContent(const ReadParameters &) -> std::vector<uint8_t>;
     auto map(const MapParameters &) -> MappedResult;
     void unmap();
@@ -1554,13 +1554,13 @@ public:
     RVI_NO_COPY_NO_MOVE(Argument);
 
     /// @brief Set value of buffer argument. No effect, if the argument is not a buffer.
-    void b(vk::ArrayProxy<const BufferView>);
+    Argument & b(vk::ArrayProxy<const BufferView>);
 
     /// @brief Set value of image/sampler argument. No effect, if the argument is not a image/sampler
-    void i(vk::ArrayProxy<const ImageSampler>);
+    Argument & i(vk::ArrayProxy<const ImageSampler>);
 
     /// @brief Set value of push constant. No effect, if the argument is not a push constant.
-    void c(size_t offset, size_t size, const void * data);
+    Argument & c(size_t offset, size_t size, const void * data);
 
 protected:
     Argument();
@@ -1585,20 +1585,20 @@ public:
     ~ArgumentPack();
 
     /// @brief clear all arguments.
-    void clear();
+    ArgumentPack & clear();
 
     /// @brief Set value of buffer argument. If the argument has not been set before, a new argument will be created.
-    void b(const std::string & name, vk::ArrayProxy<const BufferView>);
+    ArgumentPack & b(const std::string & name, vk::ArrayProxy<const BufferView>);
 
     /// @brief Set value of image/sampler argument. If the argument has not been set before, a new argument will be created.
-    void i(const std::string & name, vk::ArrayProxy<const ImageSampler>);
+    ArgumentPack & i(const std::string & name, vk::ArrayProxy<const ImageSampler>);
 
     /// @brief Set value of push constant. If the argument has not been set before, a new argument will be created.
-    void c(const std::string & name, size_t offset, size_t size, const void * data);
+    ArgumentPack & c(const std::string & name, size_t offset, size_t size, const void * data);
 
     /// @brief Set value of push constant. If the argument has not been set before, a new argument will be created.
     template<typename T>
-    void c(const std::string & name, size_t offset, vk::ArrayProxy<T> data) {
+    ArgumentPack & c(const std::string & name, size_t offset, vk::ArrayProxy<T> data) {
         return c(name, offset, data.size() * sizeof(T), data.data());
     }
 
@@ -1803,6 +1803,11 @@ public:
 
         /// Vertex offset of indexed draw. Ignored for non-indexed draw.
         int32_t vertexOffset = 0;
+
+        DrawParameters & setVertexBuffers(vk::ArrayProxy<const BufferView> vb) {
+            vertexBuffers = vb;
+            return *this;
+        }
 
         DrawParameters & setNonIndexed(size_t vertexCount_, size_t firstVertex_ = 0) {
             indexBuffer.buffer = VK_NULL_HANDLE;
