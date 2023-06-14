@@ -2,8 +2,8 @@
 
 #define UNIT_TEST
 
+#ifndef __ANDROID__
 #include "../sample/simple-triangle.cpp"
-
 TEST_CASE("simple-triangle", "[sample]") {
     simple_triangle::Options o;
     o.headless = true;
@@ -18,3 +18,4 @@ TEST_CASE("simple-triangle", "[sample]") {
         simple_triangle::entry(o);
     }
 }
+#endif
