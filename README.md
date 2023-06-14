@@ -5,8 +5,7 @@ The library is compiled against C++17 standard. It depends on the C++ version of
 
 It is currently developed and tested on both Windows 11 and Ubuntu 22.04.
 
-# Example
-The following is an example of loading and executing a Vulkan compute shader using rapid-vulkan:
+The library is aiming for decreasing the code you have to write yourself to use Vulkan. The following is an example that loads and executes a Vulkan compute shader using rapid-vulkan:
 
 ```c++
 #define RAPID_VULKAN_IMPLEMENTATION
@@ -27,7 +26,7 @@ int main() {
 }
 ```
 
-# Usage
+# Integration
 The library aims for easy integration with any Vulkan project. Everything you need is included in [inc](inc) folder.
 
 Here are how you integrate it with your project:
@@ -60,6 +59,25 @@ On Windows, you'll need to manually install Vulkan SDK, as well as cmake, git an
 After that, run [env.sh](env.sh)/[env.cmd](env.cmd) to launch the dev console. Then type `b d` to build debug variant, `b p` to build profile variant or `b r` to build release variant. Type `b --help` for detail help.
 
 After everything is built. You can use `cit` command to launch the check-in-test suite to verify the library.
+
+# Hello World
+```c++
+#define RAPID_VULKAN_IMPLEMENTATION
+#include <rapid-vulkan/rapid-vulkan.h>
+int main() {
+    auto instance = rapid_vulkan::Instance({});
+    auto device   = rapid_vulkan::Device(instance.dcp());
+    return 0;
+}
+```
+This is the simplist form of an app created out of the rapid-vulkan library. It creates a Vulkan instance using default options. Then creates a Vulkan device out of that instance.
+
+# Pipeline
+VkPipeline sits at the center of Vulkan architecture that defines how GPU pipeline should be configured to render the scene. It is powerful but tediours to use. You'll have to create and manage an whole series of supporting objects, such as pipeline layout, descriptor set layout, descriptor set, descriptor pool to use it. To simplify this task, the rapid-vulkan library wraps all of them into 3 easy to use classes: **Pipeline**, **PipelineLayout** and **ArgumentPack**
+
+**Pipeline** class is basically a wrapper of VkPipeline object. It has 2 sub classes for compute and graphcis pipeline. It has some utility methods that makes constructing a pipeline object a bit less verbose.
+
+**PipelineLayout**
 
 # License
 The library is released under MIT license. See [LICENSE](LICENSE) file for details.
