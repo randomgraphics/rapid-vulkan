@@ -30,9 +30,9 @@ jobs:
           name: build
           command: |
             source dev/env/env.rc
-            build.py -g d
-            build.py -g p
-            build.py -g r
+            build.py d
+            build.py p
+            build.py r
             build/posix.gcc.d/dev/test/rapid-vulkan-test
             build/posix.gcc.p/dev/test/rapid-vulkan-test
             build/posix.gcc.r/dev/test/rapid-vulkan-test
@@ -51,9 +51,9 @@ jobs:
           name: build
           command: |
             source dev/env/env.rc
-            build.py d
-            build.py p
-            build.py r
+            build.py --clang -n d
+            build.py --clang -n p
+            build.py --clang -n r
 
   build-android:
     docker:
