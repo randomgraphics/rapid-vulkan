@@ -46,10 +46,10 @@ void entry(const Options & options) {
     auto glfw     = GLFWInit(options.headless, instance, w, h, "pipeline-args");
     auto device   = Device(instance.dcp().setSurface(glfw.surface));
     auto gi       = device.gi();
-    auto vs       = Shader(Shader::ConstructParameters {{"vs"}}.setGi(gi).setSpirv(pipeline_vert));
-    auto fs       = Shader(Shader::ConstructParameters {{"fs"}, gi}.setSpirv(pipeline_frag));
     auto q        = CommandQueue({{"main"}, gi, device.graphics()->family(), device.graphics()->index()});
     auto sw       = Swapchain(Swapchain::ConstructParameters {{"swapchain"}}.setDevice(device).setDimensions(w, h));
+    auto vs       = Shader(Shader::ConstructParameters {{"vs"}}.setGi(gi).setSpirv(pipeline_vert));
+    auto fs       = Shader(Shader::ConstructParameters {{"fs"}, gi}.setSpirv(pipeline_frag));
     auto p = GraphicsPipeline(GraphicsPipeline::ConstructParameters {}.setRenderPass(sw.renderPass()).setVS(&vs).setFS(&fs).dynamicScissor().dynamicViewport());
 
     // This part is what this sample is about. We create 2 uniform buffers and bind them to the pipeline via ArgumentPack.
