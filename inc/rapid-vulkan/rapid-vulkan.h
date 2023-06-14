@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identify the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 9
+#define RAPID_VULKAN_HEADER_REVISION 10
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -341,11 +341,11 @@ format(const char * format, ...) {
     }
 
     // Allocate the buffer.
-    std::string buffer(size + 1, '\0');
+    std::string buffer((size_t) size + 1, '\0');
 
     // Format the string.
     va_start(args, format);
-    vsnprintf(&buffer[0], size + 1, format, args);
+    vsnprintf(&buffer[0], (size_t) size + 1, format, args);
     va_end(args);
 
     // Return the formatted string.
@@ -455,6 +455,10 @@ vk::PhysicalDevice selectTheMostPowerfulPhysicalDevice(vk::ArrayProxy<const vk::
 // ---------------------------------------------------------------------------------------------------------------------
 //
 std::vector<vk::ExtensionProperties> enumerateDeviceExtensions(vk::PhysicalDevice dev);
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// @brief Calling vkDeviceWaitIdle() in a thread-safe manner.
+void threadSafeWaitForDeviceIdle(vk::Device device);
 
 #if RAPID_VULKAN_ENABLE_GLFW3
 // ---------------------------------------------------------------------------------------------------------------------
@@ -723,6 +727,9 @@ public:
     auto index() const -> uint32_t { return desc().index; }
     auto handle() const -> vk::Queue { return desc().handle; }
 
+protected:
+    void onNameChanged(const std::string &) override;
+
 private:
     class Impl;
     Impl * _impl = nullptr;
@@ -962,9 +969,9 @@ public:
         RVI_NO_COPY(Map);
         RVI_NO_MOVE(Map);
 
-        Map(Buffer & buffer_, vk::DeviceSize offset = 0, vk::DeviceSize size = vk::DeviceSize(-1)) {
+        Map(Buffer & buffer_, vk::DeviceSize offset_ = 0, vk::DeviceSize size_ = vk::DeviceSize(-1)) {
             RVI_ASSERT(empty());
-            auto mapped = buffer_.map({offset, size});
+            auto mapped = buffer_.map({offset_, size_});
             if (!mapped.data) return;
             buffer = &buffer_;
             data   = (T *) mapped.data;
@@ -1677,7 +1684,7 @@ public:
         std::array<float, 4>                               blendConstants {};
         std::map<vk::DynamicState, uint64_t>               dynamic {};
         vk::Pipeline                                       baseHandle {};
-        uint32_t                                           baseIndex {};
+        int32_t                                            baseIndex {};
 
         ConstructParameters & setRenderPass(vk::RenderPass pass_, size_t sub = 0) {
             pass    = pass_;
@@ -1850,26 +1857,56 @@ public:
 class Swapchain : public Root {
 public:
     struct ConstructParameters : public Root::ConstructParameters {
-        const GlobalInfo * gi                  = {};
-        vk::SurfaceKHR     surface             = {};
-        uint32_t           presentQueueFamily  = VK_QUEUE_FAMILY_IGNORED; ///< Family index of the present queue.
-        uint32_t           presentQueueIndex   = 0;                       ///< Index of the present queue.
-        uint32_t           graphicsQueueFamily = VK_QUEUE_FAMILY_IGNORED; ///< family index of graphics queue, if different from the present queue.
-        uint32_t           graphicsQueueIndex  = 0; ///< Index of the graphics queue. Ignored if graphicsQueueFamily is VK_QUEUE_FAMILY_IGNORED.
-        size_t             width               = 0; ///< width of the swapchain. 0 means surface/window width.
-        size_t             height              = 0; ///< height of the swapchain. 0 means using surface/window height.
-        size_t             maxFramesInFlight   = 1; ///< Number of frames in flight. Must be at least 1.
-        bool               vsync               = true;
+        const GlobalInfo * gi = {}; ///< The Vulkan global info object.
 
-        /// Specify format of backbuffers. If set to undefined, then the first supported format will be used.
+        /// @brief Handle of the surface to present to. Set to null to create a headless swapchain.
+        vk::SurfaceKHR surface = {};
+
+        /// @brief Must always set to a valid queue family index that is capable of doing graphics work.
+        uint32_t graphicsQueueFamily = VK_QUEUE_FAMILY_IGNORED;
+
+        /// @brief Index of the graphics queue.
+        uint32_t graphicsQueueIndex = 0;
+
+        /// @brief Family index of the present queue, or VK_QUEUE_FAMILY_IGNORED if the present queue is the same as the
+        /// graphics queue. Ignored in headless mode.
+        uint32_t presentQueueFamily = VK_QUEUE_FAMILY_IGNORED;
+
+        /// @brief Index of the present queue. Ignored when the present queue is VK_QUEUE_FAMILY_IGNORED.
+        uint32_t presentQueueIndex = 0;
+
+        /// @brief Width and height of the swapchain. Set to 0 to use the surface size.
+        /// If the surface is null, then the width and height must be non-zero.
+        size_t width = 0;
+
+        /// @brief Height of the swapchain. Set to 0 to use the surface size.
+        /// If the surface is null, then the width and height must be non-zero.
+        size_t height = 0;
+
+        /// @brief Number of frames in flight. Must be at least 1.
+        /// The more frames in flight, the more latency you'll have. But on the other hand, the GPU will be
+        /// less likely to be idle.
+        size_t maxFramesInFlight = 1;
+
+        /// @brief Whether to enable vsync. Ignored when the swapchain is headless.
+        bool vsync = true;
+
+        /// @brief Specify format of backbuffers. If set to undefined, then the first supported format will be used.
         vk::Format backbufferFormat = vk::Format::eUndefined;
 
-        /// Format of the depth buffer. Set to undefined, if you don't need depth buffer.
+        /// @brief Format of the depth buffer. Set to undefined, if you don't need depth buffer.
         vk::Format depthStencilFormat = vk::Format::eD24UnormS8Uint;
 
         /// @brief Fill in construction parameters using values retrieved from the given device.
         /// This method will fill in the following fields: gi, surface and present/graphics queue properties.
         ConstructParameters & setDevice(const Device &);
+
+        /// @brief Set dimension in pixels of the swapchain.
+        ConstructParameters & setDimensions(size_t width_, size_t height_) {
+            width  = width_;
+            height = height_;
+            return *this;
+        }
     };
 
     /// @brief Specify the desired status of the back buffer image.
@@ -1891,7 +1928,7 @@ public:
     /// @brief Represents a GPU frame.
     struct Frame {
         /// @brief Index of the frame. The value will be incremented after each present.
-        int64_t index = 0;
+        uint64_t index = 0;
 
         // /// @brief Index of the frame that GPU has done all the rendering. All resources used to render this frame could be safely recycled or destroyed.
         // int64_t safeFrameIndex = -1;
@@ -2120,7 +2157,7 @@ public:
 
     bool separatePresentQueue() const { return _present != _graphics; }
 
-    // VkResult waitIdle() const { return _vgi.device ? threadSafeDeviceWaitIdle(_vgi.device) : VK_SUCCESS; }
+    void waitIdle() const { return threadSafeWaitForDeviceIdle(_gi.device); }
 
     vk::Device handle() const { return _gi.device; }
 
