@@ -1725,7 +1725,10 @@ static PipelineReflection::Descriptor convertArray(const MergedDescriptorBinding
 
 static PipelineReflection::DescriptorSet convertSet(const MergedDescriptorSet & merged) {
     PipelineReflection::DescriptorSet set;
-    for (const auto & kv : merged.descriptors) set[kv.first] = convertArray(kv.second);
+    for (const auto & kv : merged.descriptors) {
+        if (set.size() <= kv.first) set.resize(kv.first + 1);
+        set[kv.first] = convertArray(kv.second);
+    }
     return set;
 }
 
