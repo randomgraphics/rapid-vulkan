@@ -1471,37 +1471,6 @@ private:
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// A utility class that represents the full layout of a pipeline object.
-struct PipelineReflection {
-    typedef vk::DescriptorSetLayoutBinding Descriptor;
-
-    /// Collection of descriptors in one set. We can't use binding point as key, since multiple shader variable might bind to same set and binding point.
-    typedef std::unordered_map<std::string, Descriptor> DescriptorSet;
-
-    /// Collection of descriptor sets indexed by their set index in shader.
-    typedef std::vector<DescriptorSet> DescriptorLayout;
-
-    typedef vk::PushConstantRange Constant;
-
-    /// Collection of push constants.
-    typedef std::unordered_map<std::string, Constant> ConstantLayout;
-
-    /// Properties of vertex shader input.
-    struct VertexShaderInput {
-        uint32_t   location = 0;
-        vk::Format format   = vk::Format::eUndefined;
-    };
-
-    /// Collection of vertex shader input.
-    typedef std::unordered_map<std::string, VertexShaderInput> VertexLayout;
-
-    std::string      name; ///< name of the program that this reflect is from. this field is for logging and debugging.
-    DescriptorLayout descriptors;
-    ConstantLayout   constants;
-    VertexLayout     vertex;
-};
-
-// ---------------------------------------------------------------------------------------------------------------------
 /// @brief View to a sub-range of a buffer.
 struct BufferView {
     vk::Buffer     buffer = {};
@@ -1629,9 +1598,6 @@ public:
 
     /// @brief Returns the underlying Vulkan handle.
     vk::PipelineLayout handle() const;
-
-    /// @brief Returns the pipeline reflection object that is used to construct this pipeline layout.
-    const PipelineReflection & reflection() const;
 
     /// @brief Bind argument pack to the command buffer
     /// After this method succeeded (returns true), it is ready to bind issue draw/dispatch commands.
