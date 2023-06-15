@@ -34,9 +34,9 @@ TEST_CASE("cs-buffer-args") {
     auto b2 = Buffer({{"buf2"}, TestVulkanInstance::device->gi(), 4, vk::BufferUsageFlagBits::eStorageBuffer});
     b2.setContent(Buffer::SetContentParameters {}.setData(vk::ArrayProxy<const uint32_t> {0xbadbeef}));
     auto ap = ArgumentPack(ArgumentPack::ConstructParameters {{"cs-buffer-args"}});
-    ap.b("InputBuffer", {{b1}});
-    ap.b("OutputBuffer", {{b2}});
-    ap.c("PushConstants", 0, vk::ArrayProxy<const float> {1.0f});
+    ap.b({0, 0}, {{b1}});
+    ap.b({0, 1}, {{b2}});
+    ap.c(0, vk::ArrayProxy<const float> {1.0f});
 
     // run the compute shader to copy data from b1 to b2
     auto q = dev->graphics();

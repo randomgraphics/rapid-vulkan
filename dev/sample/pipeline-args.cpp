@@ -55,7 +55,7 @@ void entry(const Options & options) {
     // This part is what this sample is about. We create 2 uniform buffers and bind them to the pipeline via ArgumentPack.
     auto   u0   = Buffer(Buffer::ConstructParameters {{"ub0"}}.setUniform().setSize(sizeof(float) * 2));
     auto   u1   = Buffer(Buffer::ConstructParameters {{"ub1"}}.setUniform().setSize(sizeof(float) * 3));
-    auto & args = ArgumentPack(ArgumentPack::ConstructParameters {}).b("u0", {{u0.handle()}}).b("u1", {{u1.handle()}});
+    auto & args = ArgumentPack(ArgumentPack::ConstructParameters {}).b({0, 0}, {{u0.handle()}}).b({0, 1}, {{u1.handle()}});
 
     // We also need a vertex buffer to draw the triangle.
     auto bc = Buffer::SetContentParameters {}.setQueue(*device.graphics());

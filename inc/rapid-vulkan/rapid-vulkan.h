@@ -1517,7 +1517,8 @@ struct ImageSampler {
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// Represent a single pipeline argument
+/// Represent a single pipeline descriptor
+/// @todo rename to Descriptor
 class Argument {
 public:
     RVI_NO_COPY_NO_MOVE(Argument);
@@ -1528,9 +1529,6 @@ public:
     /// @brief Set value of image/sampler argument. No effect, if the argument is not a image/sampler
     Argument & i(vk::ArrayProxy<const ImageSampler>);
 
-    /// @brief Set value of push constant. No effect, if the argument is not a push constant.
-    Argument & c(size_t offset, size_t size, const void * data);
-
 protected:
     Argument();
     ~Argument(); // No need make this virtual, since we'll always delete it through the derived class.
@@ -1539,6 +1537,26 @@ protected:
     Impl * _impl = nullptr;
 
     friend class PipelineLayout;
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// Unique identifier of a pipeline descriptor
+union DescriptorIdentifier {
+    uint64_t u64 = 0;
+    struct {
+        uint32_t set;
+        uint32_t binding;
+    };
+
+    DescriptorIdentifier() = default;
+
+    DescriptorIdentifier(uint32_t s, uint32_t b): set(s), binding(b) {}
+
+    bool operator==(const DescriptorIdentifier & rhs) const { return u64 == rhs.u64; }
+
+    bool operator!=(const DescriptorIdentifier & rhs) const { return u64 != rhs.u64; }
+
+    bool operator<(const DescriptorIdentifier & rhs) const { return u64 < rhs.u64; }
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1557,29 +1575,30 @@ public:
     ArgumentPack & clear();
 
     /// @brief Set value of buffer argument. If the argument has not been set before, a new argument will be created.
-    ArgumentPack & b(const std::string & name, vk::ArrayProxy<const BufferView>);
+    ArgumentPack & b(DescriptorIdentifier id, vk::ArrayProxy<const BufferView>);
 
     /// @brief Set value of image/sampler argument. If the argument has not been set before, a new argument will be created.
-    ArgumentPack & i(const std::string & name, vk::ArrayProxy<const ImageSampler>);
+    ArgumentPack & i(DescriptorIdentifier id, vk::ArrayProxy<const ImageSampler>);
 
-    /// @brief Set value of push constant. If the argument has not been set before, a new argument will be created.
-    ArgumentPack & c(const std::string & name, size_t offset, size_t size, const void * data);
+    /// @brief Set value of push constant.
+    ArgumentPack & c(size_t offset, size_t size, const void * data, vk::ShaderStageFlags stages = vk::ShaderStageFlagBits::eAll);
 
-    /// @brief Set value of push constant. If the argument has not been set before, a new argument will be created.
+    /// @brief Set value of push constant.
     template<typename T>
-    ArgumentPack & c(const std::string & name, size_t offset, vk::ArrayProxy<T> data) {
-        return c(name, offset, data.size() * sizeof(T), data.data());
+    ArgumentPack & c(size_t offset, vk::ArrayProxy<T> data, vk::ShaderStageFlags stages = vk::ShaderStageFlagBits::eAll) {
+        return c(offset, data.size() * sizeof(T), data.data(), stages);
     }
 
-    /// @brief Get argument by name.
+    /// @brief Get argument by ID.
     /// The returned argument instance can be used to set value of that argument w/o paying the cost of string hashing.
     /// If the argument has not been set before, a new argument will be created and returned.
-    Argument * get(const std::string & name);
+    Argument * get(DescriptorIdentifier);
 
     /// @brief Get an existing argument by name. Returns nullptr if the argument has not been set.
-    const Argument * get(const std::string & name) const;
+    const Argument * get(DescriptorIdentifier) const;
 
 private:
+    friend class PipelineLayout;
     class Impl;
     Impl * _impl = nullptr;
 };
@@ -2250,6 +2269,24 @@ private:
 };
 
 } // namespace RAPID_VULKAN_NAMESPACE
+
+namespace std {
+
+template<>
+struct hash<RAPID_VULKAN_NAMESPACE::DescriptorIdentifier> {
+    size_t operator()(const RAPID_VULKAN_NAMESPACE::DescriptorIdentifier & v) const {
+        return std::hash<uint64_t>()(v.u64);
+    }
+};
+
+template<>
+struct hash<vk::ShaderStageFlags> {
+    size_t operator()(const vk::ShaderStageFlags & v) const {
+        return std::hash<uint32_t>()(static_cast<uint32_t>(v));
+    }
+};
+
+} // namespace std
 
 #endif // RAPID_VULKAN_H
 
