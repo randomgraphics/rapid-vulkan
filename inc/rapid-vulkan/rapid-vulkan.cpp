@@ -1616,54 +1616,6 @@ auto ArgumentPack::get(DescriptorIdentifier id) const -> const Argument * { retu
 // Pipeline Reflection
 // *********************************************************************************************************************
 
-// ---------------------------------------------------------------------------------------------------------------------
-/// A utility class that represents the full layout of a pipeline object.
-struct PipelineReflection {
-    /// @brief Represents one descriptor or descriptor array.
-    struct Descriptor {
-        /// @brief names of the shader variable.
-        /// The whole structure is considered empty/invalid, if names set is empty.
-        std::set<std::string> names;
-
-        /// @brief The descriptor binding information.
-        /// If the descriptor count is empty, then the whole structure is considered empty/invalid.
-        vk::DescriptorSetLayoutBinding binding;
-
-        bool empty() const { return names.empty() || 0 == binding.descriptorCount; }
-    };
-
-    /// Collection of descriptors in one set.
-    typedef std::vector<Descriptor> DescriptorSet;
-
-    /// Collection of descriptor sets indexed by the set index.
-    typedef std::vector<DescriptorSet> DescriptorLayout;
-
-    struct Constant {
-        uint32_t begin = (uint32_t) -1;
-        uint32_t end   = 0;
-        // TODO: add push constant name information.
-
-        bool empty() const { return begin >= end; }
-    };
-
-    /// Collection of push constants.
-    typedef std::unordered_map<vk::ShaderStageFlags, Constant> ConstantLayout;
-
-    /// Properties of vertex shader input.
-    struct VertexShaderInput {
-        uint32_t   location = 0;
-        vk::Format format   = vk::Format::eUndefined;
-    };
-
-    /// Collection of vertex shader input.
-    typedef std::unordered_map<std::string, VertexShaderInput> VertexLayout;
-
-    std::string      name; ///< name of the program that this reflect is from. this field is for logging and debugging.
-    DescriptorLayout descriptors;
-    ConstantLayout   constants;
-    VertexLayout     vertex;
-};
-
 template<typename T, typename FUNC, typename... ARGS>
 static std::vector<T *> enumerateShaderVariables(SpvReflectShaderModule & module, FUNC func, ARGS... args) {
     uint32_t count  = 0;
@@ -1748,7 +1700,7 @@ static void convertVertexInputs(PipelineReflection & refl, vk::ArrayProxy<SpvRef
     for (auto i : vertexInputs) {
         auto name = std::string(i->name);
         if (name.substr(0, 3) == "gl_") continue; // skip OpenGL's reserved inputs.
-        refl.vertex[name] = {i->location, (vk::Format) i->format};
+        refl.vertex[i->location] = {(vk::Format) i->format, name};
     }
 }
 
@@ -1783,7 +1735,7 @@ static PipelineReflection reflectShaders(const std::string & pipelineName, vk::A
         // enumerate push constants
         auto pc = enumerateShaderVariables<SpvReflectBlockVariable>(module, spvReflectEnumeratePushConstantBlocks);
         for (const auto & c : pc) {
-            auto & sc = constants[(vk::ShaderStageFlags) module.shader_stage];
+            auto & sc = constants[(vk::ShaderStageFlagBits) module.shader_stage];
             sc.begin  = std::min(sc.begin, (uint32_t) c->offset);
             sc.end    = std::max(sc.end, (uint32_t) (c->offset + c->size));
         }
@@ -1861,8 +1813,10 @@ public:
         // create push constant array
         std::vector<vk::PushConstantRange> pc;
         pc.reserve(_reflection.constants.size());
-        for (const auto & kv : _reflection.constants)
-            if (!kv.second.empty()) pc.push_back({kv.first, kv.second.begin, kv.second.end - kv.second.begin});
+        for (const auto & kv : _reflection.constants) {
+            if (kv.second.empty()) continue;
+            pc.push_back({kv.first, kv.second.begin, kv.second.end - kv.second.begin});
+        }
 
         // create pipeline layout array
         std::vector<vk::DescriptorSetLayout> layouts;
@@ -1883,6 +1837,8 @@ public:
     }
 
     vk::PipelineLayout handle() const { return _handle; }
+
+    const PipelineReflection & reflection() const { return _reflection; }
 
     bool cmdBind(vk::CommandBuffer cb, vk::PipelineBindPoint bp, const ArgumentPack & ap) { return bindDescriptors(cb, bp, ap) && bindPushConstants(cb, ap); }
 
@@ -2000,9 +1956,10 @@ private:
 
 PipelineLayout::PipelineLayout(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this, cp.shaders); }
 PipelineLayout::~PipelineLayout() { delete _impl; }
-vk::PipelineLayout PipelineLayout::handle() const { return _impl->handle(); }
-bool               PipelineLayout::cmdBind(vk::CommandBuffer cb, vk::PipelineBindPoint bp, const ArgumentPack & ap) const { return _impl->cmdBind(cb, bp, ap); }
-void               PipelineLayout::onNameChanged(const std::string &) { _impl->onNameChanged(); }
+auto PipelineLayout::handle() const -> vk::PipelineLayout { return _impl->handle(); }
+auto PipelineLayout::reflection() const -> const PipelineReflection & { return _impl->reflection(); }
+bool PipelineLayout::cmdBind(vk::CommandBuffer cb, vk::PipelineBindPoint bp, const ArgumentPack & ap) const { return _impl->cmdBind(cb, bp, ap); }
+void PipelineLayout::onNameChanged(const std::string &) { _impl->onNameChanged(); }
 
 // *********************************************************************************************************************
 // Pipeline
@@ -2025,7 +1982,9 @@ public:
 
     PipelineLayout & layout() const { return *_layout; }
 
-    void cmdBind(vk::CommandBuffer cb, const ArgumentPack & args) const { _layout->cmdBind(cb, bindPoint, args); }
+    void cmdBind(vk::CommandBuffer cb, const ArgumentPack & args) const {
+        if (handle) _layout->cmdBind(cb, bindPoint, args);
+    }
 
 private:
     const GlobalInfo *  _gi = nullptr;
@@ -2050,6 +2009,28 @@ GraphicsPipeline::GraphicsPipeline(const ConstructParameters & params): Pipeline
     if (params.fs) shaderStages.push_back({{}, vk::ShaderStageFlagBits::eFragment, params.fs->handle(), params.fs->entry().c_str()});
 
     // setup vertex input stage
+    const auto & refl = layout().reflection();
+    if (refl.vertex.size() != params.va.size()) {
+        RVI_LOGE("Failed to create graphics pipeline (%s): vertex input stage requires %zu attributes, but only %zu are provided.", params.name.c_str(),
+                 refl.vertex.size(), params.va.size());
+        return;
+    }
+    for (const auto & kv : refl.vertex) {
+        auto location = kv.first;
+        auto iter     = std::find_if(params.va.begin(), params.va.end(), [location](const auto & a) { return a.location == location; });
+        if (iter == params.va.end()) {
+            RVI_LOGE("Failed to create graphics pipeline (%s): vertex input stage requires attribute at location %u, but it is not provided.",
+                     params.name.c_str(), location);
+            return;
+        }
+        const auto & attribute = *iter;
+        auto         vbi       = std::find_if(params.vb.begin(), params.vb.end(), [attribute](const auto & b) { return b.binding == attribute.binding; });
+        if (vbi == params.vb.end()) {
+            RVI_LOGE("Failed to create graphics pipeline (%s): vertex input stage requires vertex buffer #%u, but it is not provided.", params.name.c_str(),
+                     attribute.binding);
+            return;
+        }
+    }
     auto vertex = vk::PipelineVertexInputStateCreateInfo().setVertexAttributeDescriptions(params.va).setVertexBindingDescriptions(params.vb);
 
     // setup viewport and scissor states.
@@ -2098,6 +2079,8 @@ GraphicsPipeline::GraphicsPipeline(const ConstructParameters & params): Pipeline
 }
 
 void GraphicsPipeline::cmdDraw(vk::CommandBuffer cb, const DrawParameters & dp) {
+    if (!_impl->handle) return;
+
     cb.bindPipeline(vk::PipelineBindPoint::eGraphics, _impl->handle);
 
     // bind vertex buffers

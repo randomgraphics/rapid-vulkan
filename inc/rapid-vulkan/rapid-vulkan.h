@@ -1604,6 +1604,56 @@ private:
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
+/// A utility class that describes parameter layout of a pipeline object.
+struct PipelineReflection {
+    /// @brief Represents one descriptor or descriptor array.
+    struct Descriptor {
+        /// @brief names of the shader variable.
+        /// The whole structure is considered empty/invalid, if names set is empty.
+        std::set<std::string> names;
+
+        /// @brief The descriptor binding information.
+        /// If the descriptor count is empty, then the whole structure is considered empty/invalid.
+        vk::DescriptorSetLayoutBinding binding;
+
+        bool empty() const { return names.empty() || 0 == binding.descriptorCount; }
+    };
+
+    /// Collection of descriptors in one set.
+    typedef std::vector<Descriptor> DescriptorSet;
+
+    /// Collection of descriptor sets indexed by the set index.
+    typedef std::vector<DescriptorSet> DescriptorLayout;
+
+    struct Constant {
+        uint32_t begin = (uint32_t) -1;
+        uint32_t end   = 0;
+        // TODO: add push constant name information.
+
+        bool empty() const { return begin >= end; }
+    };
+
+    /// Collection of push constants for each shader stage.
+    typedef std::map<vk::ShaderStageFlagBits, Constant> ConstantLayout;
+
+    /// Properties of vertex shader input.
+    struct VertexShaderInput {
+        vk::Format  format = vk::Format::eUndefined;
+        std::string shaderVariable; ///< name of the shader variable.
+    };
+
+    /// Collection of vertex shader input. Key is input location.
+    typedef std::map<uint32_t, VertexShaderInput> VertexLayout;
+
+    std::string      name; ///< name of the program that this reflect is from. this field is for logging and debugging.
+    DescriptorLayout descriptors;
+    ConstantLayout   constants;
+    VertexLayout     vertex;
+
+    PipelineReflection() {}
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
 /// A wrapper class for VkPipelineLayout
 class PipelineLayout : public Root {
 public:
@@ -1617,6 +1667,8 @@ public:
 
     /// @brief Returns the underlying Vulkan handle.
     vk::PipelineLayout handle() const;
+
+    const PipelineReflection & reflection() const;
 
     /// @brief Bind argument pack to the command buffer
     /// After this method succeeded (returns true), it is ready to bind issue draw/dispatch commands.
@@ -2275,11 +2327,6 @@ namespace std {
 template<>
 struct hash<RAPID_VULKAN_NAMESPACE::DescriptorIdentifier> {
     size_t operator()(const RAPID_VULKAN_NAMESPACE::DescriptorIdentifier & v) const { return std::hash<uint64_t>()(v.u64); }
-};
-
-template<>
-struct hash<vk::ShaderStageFlags> {
-    size_t operator()(const vk::ShaderStageFlags & v) const { return std::hash<uint32_t>()(static_cast<uint32_t>(v)); }
 };
 
 } // namespace std
