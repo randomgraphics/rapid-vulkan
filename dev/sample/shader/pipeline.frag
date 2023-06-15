@@ -1,6 +1,7 @@
 #version 450
 
-layout(binding = 1) uniform UniformBuffer1 { vec3 color; } u;
+layout(binding = 1) uniform UniformBuffer1 { vec3 color; }
+u;
 
 layout(location = 0) out vec4 o_color;
 

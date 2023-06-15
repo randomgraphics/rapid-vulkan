@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identify the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 10
+#define RAPID_VULKAN_HEADER_REVISION 11
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -2274,16 +2274,12 @@ namespace std {
 
 template<>
 struct hash<RAPID_VULKAN_NAMESPACE::DescriptorIdentifier> {
-    size_t operator()(const RAPID_VULKAN_NAMESPACE::DescriptorIdentifier & v) const {
-        return std::hash<uint64_t>()(v.u64);
-    }
+    size_t operator()(const RAPID_VULKAN_NAMESPACE::DescriptorIdentifier & v) const { return std::hash<uint64_t>()(v.u64); }
 };
 
 template<>
 struct hash<vk::ShaderStageFlags> {
-    size_t operator()(const vk::ShaderStageFlags & v) const {
-        return std::hash<uint32_t>()(static_cast<uint32_t>(v));
-    }
+    size_t operator()(const vk::ShaderStageFlags & v) const { return std::hash<uint32_t>()(static_cast<uint32_t>(v)); }
 };
 
 } // namespace std

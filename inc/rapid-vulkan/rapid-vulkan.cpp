@@ -1566,7 +1566,6 @@ public:
     std::vector<std::tuple<vk::PushConstantRange, const void *>> getConstant(vk::ShaderStageFlags stages, uint32_t begin, uint32_t end) const {
         if (!stages) return {};
         if (begin >= end) return {};
-
         std::vector<std::tuple<vk::PushConstantRange, const void *>> v;
         for (auto & c : _constants) {
             vk::PushConstantRange range {};
