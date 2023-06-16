@@ -583,7 +583,10 @@ private:
 
 Buffer::Buffer(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this, cp); }
 Buffer::Buffer(const ImportParameters & cp): Root(cp) { _impl = new Impl(*this, cp); }
-Buffer::~Buffer() { delete _impl; }
+Buffer::~Buffer() {
+    delete _impl;
+    _impl = nullptr;
+}
 auto Buffer::desc() const -> const Desc & { return _impl->desc(); }
 void Buffer::cmdCopy(const CopyParameters & p) { return _impl->cmdCopy(p); }
 auto Buffer::setContent(const SetContentParameters & p) -> Buffer & {
@@ -1592,7 +1595,10 @@ private:
 };
 
 ArgumentPack::ArgumentPack(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this); }
-ArgumentPack::~ArgumentPack() { delete _impl; }
+ArgumentPack::~ArgumentPack() {
+    delete _impl;
+    _impl = nullptr;
+}
 auto ArgumentPack::clear() -> ArgumentPack & {
     _impl->clear();
     return *this;

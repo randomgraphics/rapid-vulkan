@@ -289,6 +289,11 @@ SOFTWARE.
 
 namespace RAPID_VULKAN_NAMESPACE {
 
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4201) // nonstandard extension used: nameless struct/union
+#endif 
+
 using namespace std::string_literals;
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -915,7 +920,7 @@ public:
         }
 
         template<typename T>
-        SetContentParameters & setData(vk::ArrayProxy<T> data_) {
+        SetContentParameters & setData(vk::ArrayProxy<const T> data_) {
             data = data_.data();
             size = data_.size() * sizeof(T);
             return *this;
@@ -2357,6 +2362,10 @@ private:
 #endif
     vk::DebugReportCallbackEXT _debugReport {};
 };
+
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif 
 
 } // namespace RAPID_VULKAN_NAMESPACE
 
