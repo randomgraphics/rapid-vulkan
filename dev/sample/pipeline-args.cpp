@@ -53,13 +53,13 @@ void entry(const Options & options) {
     auto p = GraphicsPipeline(GraphicsPipeline::ConstructParameters {}.setRenderPass(sw.renderPass()).setVS(&vs).setFS(&fs).dynamicScissor().dynamicViewport());
 
     // This part is what this sample is about. We create 2 uniform buffers and bind them to the pipeline via ArgumentPack.
-    auto   u0   = Buffer(Buffer::ConstructParameters {{"ub0"}}.setUniform().setSize(sizeof(float) * 2));
-    auto   u1   = Buffer(Buffer::ConstructParameters {{"ub1"}}.setUniform().setSize(sizeof(float) * 3));
+    auto   u0   = Buffer(Buffer::ConstructParameters {{"ub0"}, gi}.setUniform().setSize(sizeof(float) * 2));
+    auto   u1   = Buffer(Buffer::ConstructParameters {{"ub1"}, gi}.setUniform().setSize(sizeof(float) * 3));
     auto & args = ArgumentPack(ArgumentPack::ConstructParameters {}).b({0, 0}, {{u0.handle()}}).b({0, 1}, {{u1.handle()}});
 
     // We also need a vertex buffer to draw the triangle.
     auto bc = Buffer::SetContentParameters {}.setQueue(*device.graphics());
-    auto vb = Buffer(Buffer::ConstructParameters {{"vb"}}.setVertex().setSize(sizeof(float) * 2 * 3));
+    auto vb = Buffer(Buffer::ConstructParameters {{"vb"}, gi}.setVertex().setSize(sizeof(float) * 2 * 3));
     vb.setContent(bc.setData<float>({-0.5f, -0.5f, 0.5f, -0.5f, 0.5f, 0.5f}));
 
     glfw.show();
