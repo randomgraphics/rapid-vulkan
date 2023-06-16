@@ -347,7 +347,10 @@ private:
 };
 
 CommandQueue::CommandQueue(const ConstructParameters & params): Root(params), _impl(new Impl(params)) { _impl->setName(name()); }
-CommandQueue::~CommandQueue() { delete _impl; }
+CommandQueue::~CommandQueue() {
+    delete _impl;
+    _impl = nullptr;
+}
 auto CommandQueue::desc() const -> const Desc & { return _impl->desc(); }
 auto CommandQueue::begin(const char * purpose, vk::CommandBufferLevel level) -> vk::CommandBuffer { return _impl->begin(purpose, level); }
 void CommandQueue::submit(const SubmitParameters & sp) { _impl->submit(sp); }
@@ -1206,7 +1209,10 @@ vk::ImageAspectFlags Image::determineImageAspect(vk::Format format, vk::ImageAsp
 }
 
 Image::Image(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this, cp); }
-Image::~Image() { delete _impl; }
+Image::~Image() {
+    delete _impl;
+    _impl = nullptr;
+}
 auto Image::desc() const -> const Desc & { return _impl->desc(); }
 auto Image::getView(const GetViewParameters & p) const -> vk::ImageView { return _impl->getView(p); }
 void Image::setContent(const SetContentParameters & p) { return _impl->setContent(p); }
@@ -1522,7 +1528,10 @@ private:
 };
 
 Argument::Argument(): _impl(new Impl()) {}
-Argument::~Argument() { delete _impl; }
+Argument::~Argument() {
+    delete _impl;
+    _impl = nullptr;
+}
 Argument & Argument::b(vk::ArrayProxy<const BufferView> v) {
     _impl->b(v);
     return *this;
@@ -1961,7 +1970,10 @@ private:
 };
 
 PipelineLayout::PipelineLayout(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this, cp.shaders); }
-PipelineLayout::~PipelineLayout() { delete _impl; }
+PipelineLayout::~PipelineLayout() {
+    delete _impl;
+    _impl = nullptr;
+}
 auto PipelineLayout::handle() const -> vk::PipelineLayout { return _impl->handle(); }
 auto PipelineLayout::reflection() const -> const PipelineReflection & { return _impl->reflection(); }
 bool PipelineLayout::cmdBind(vk::CommandBuffer cb, vk::PipelineBindPoint bp, const ArgumentPack & ap) const { return _impl->cmdBind(cb, bp, ap); }
@@ -1998,7 +2010,10 @@ private:
 };
 
 Pipeline::Pipeline(const std::string & name, vk::ArrayProxy<const Shader * const> shaders): Root({name}) { _impl = new Impl(*this, shaders); }
-Pipeline::~Pipeline() { delete _impl; }
+Pipeline::~Pipeline() {
+    delete _impl;
+    _impl = nullptr;
+}
 auto Pipeline::layout() const -> const PipelineLayout & { return _impl->layout(); }
 void Pipeline::cmdBind(vk::CommandBuffer cb, const ArgumentPack & ap) const { return _impl->cmdBind(cb, ap); }
 
@@ -2096,7 +2111,7 @@ void GraphicsPipeline::cmdDraw(vk::CommandBuffer cb, const DrawParameters & dp) 
         vk::DeviceSize offsets[16];
         for (size_t i = 0; i < dp.vertexBuffers.size(); ++i) {
             const auto & view = dp.vertexBuffers.data()[i];
-            RVI_REQUIRE(!view.buffer, "Empty vertex buffer is not allowed.");
+            RVI_REQUIRE(view.buffer, "Empty vertex buffer is not allowed.");
             buffers[i] = view.buffer;
             offsets[i] = view.offset;
             // TODO: validate vertex buffer size on debug build.
@@ -2578,7 +2593,10 @@ private:
 // ---------------------------------------------------------------------------------------------------------------------
 //
 Swapchain::Swapchain(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this, cp); }
-Swapchain::~Swapchain() { delete _impl; }
+Swapchain::~Swapchain() {
+    delete _impl;
+    _impl = nullptr;
+}
 auto Swapchain::renderPass() const -> const RenderPass & { return _impl->renderPass(); }
 void Swapchain::cmdBeginBuiltInRenderPass(vk::CommandBuffer cb, const BeginRenderPassParameters & bp) { return _impl->cmdBeginBuiltInRenderPass(cb, bp); }
 void Swapchain::cmdEndBuiltInRenderPass(vk::CommandBuffer cb) { return _impl->cmdEndBuiltInRenderPass(cb); }
