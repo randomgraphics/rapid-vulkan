@@ -1162,6 +1162,11 @@ public:
         vk::SampleCountFlagBits samples     = vk::SampleCountFlagBits::e1;
     };
 
+    struct ImportParameters : Root::ConstructParameters {
+        const GlobalInfo * gi = nullptr;
+        Desc               desc {};
+    };
+
     struct GetViewParameters {
         vk::ImageViewType         type   = (vk::ImageViewType) -1; ///< set to -1 to use the default view type.
         vk::Format                format = vk::Format::eUndefined; ///< set to eUndefined to use image's format.
@@ -1249,7 +1254,12 @@ public:
     ///               Set to vk::ImageAspectFlagBits::eNone to let the function determine the aspect flags.
     static vk::ImageAspectFlags determineImageAspect(vk::Format format, vk::ImageAspectFlags hint = vk::ImageAspectFlagBits::eNoneKHR);
 
+    /// @brief Construct an image from scratch
     Image(const ConstructParameters &);
+
+    /// @brief Create an image class instance from an existing vk::Image.
+    /// Note that some functionalies of the image class could be limited.
+    Image(const ImportParameters &);
 
     ~Image();
 

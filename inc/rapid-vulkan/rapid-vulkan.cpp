@@ -936,6 +936,8 @@ public:
         // setVkObjectName(g.device, view, name);
     }
 
+    Impl(Image & o, const ImportParameters & ip): _owner(o), _gi(ip.gi) {}
+
     ~Impl() {
         for (auto & kv : _views) {
             auto view = kv.second;
@@ -1209,6 +1211,7 @@ vk::ImageAspectFlags Image::determineImageAspect(vk::Format format, vk::ImageAsp
 }
 
 Image::Image(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this, cp); }
+Image::Image(const ImportParameters & cp): Root(cp) { _impl = new Impl(*this, cp); }
 Image::~Image() {
     delete _impl;
     _impl = nullptr;
