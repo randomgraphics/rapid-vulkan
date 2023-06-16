@@ -291,8 +291,8 @@ namespace RAPID_VULKAN_NAMESPACE {
 
 #ifdef _MSC_VER
 #pragma warning(push)
-#pragma warning(disable: 4201) // nonstandard extension used: nameless struct/union
-#endif 
+#pragma warning(disable : 4201) // nonstandard extension used: nameless struct/union
+#endif
 
 using namespace std::string_literals;
 
@@ -1817,9 +1817,7 @@ public:
             return vk::PipelineInputAssemblyStateCreateInfo().setTopology(vk::PrimitiveTopology::eTriangleList);
         }
 
-        static constexpr vk::PipelineRasterizationStateCreateInfo defaultRastStates() {
-            return vk::PipelineRasterizationStateCreateInfo().setLineWidth(1.0f);
-        }
+        static constexpr vk::PipelineRasterizationStateCreateInfo defaultRastStates() { return vk::PipelineRasterizationStateCreateInfo().setLineWidth(1.0f); }
 
         static const vk::PipelineColorBlendAttachmentState defaultAttachment() {
             return vk::PipelineColorBlendAttachmentState().setColorWriteMask(vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
@@ -2365,7 +2363,7 @@ private:
 
 #ifdef _MSC_VER
 #pragma warning(pop)
-#endif 
+#endif
 
 } // namespace RAPID_VULKAN_NAMESPACE
 
