@@ -1594,8 +1594,8 @@ public:
     /// If the argument has not been set before, a new argument will be created and returned.
     Argument * get(DescriptorIdentifier);
 
-    /// @brief Get an existing argument by name. Returns nullptr if the argument has not been set.
-    const Argument * get(DescriptorIdentifier) const;
+    /// @brief Retrieve an existing argument by name. Returns nullptr if the argument has not been set.
+    const Argument * find(DescriptorIdentifier) const;
 
 private:
     friend class PipelineLayout;
@@ -1739,6 +1739,43 @@ public:
             return *this;
         }
 
+        /// @brief Add a vertex attribute, in order of location.
+        /// The first call to this method adds a vertex attribute for location 0. The second call adds a vertex attribute for location 1, and so on.
+        ConstructParameters & addVertexAttribute(size_t binding, size_t offset, vk::Format format) {
+            vk::VertexInputAttributeDescription desc {};
+            desc.binding  = (uint32_t) binding;
+            desc.location = (uint32_t) va.size();
+            desc.offset   = (uint32_t) offset;
+            desc.format   = format;
+            va.push_back(desc);
+            return *this;
+        }
+
+        /// @brief Add a vertex buffer, in order of vertex buffer binding index.
+        /// The first call to this method or addInstanceBuffer() adds a vertex buffer for binding 0. The second call to them adds a vertex buffer for binding 1,
+        /// and so on.
+        ConstructParameters & addVertexBuffer(uint32_t stride) {
+            vk::VertexInputBindingDescription desc;
+            desc.binding   = (uint32_t) vb.size();
+            desc.stride    = stride;
+            desc.inputRate = vk::VertexInputRate::eVertex;
+            vb.push_back(desc);
+            return *this;
+        }
+
+        /// @brief Add an instance buffer, in order of vertex buffer binding index.
+        /// The first call to this method or addVertexBuffer() adds a vertex buffer for binding 0. The second call to them adds a vertex buffer for binding 1,
+        /// and so on.
+        ConstructParameters & addInstanceBuffer(uint32_t stride) {
+            vk::VertexInputBindingDescription desc;
+            desc.binding   = (uint32_t) vb.size();
+            desc.stride    = stride;
+            desc.inputRate = vk::VertexInputRate::eInstance;
+            vb.push_back(desc);
+            return *this;
+        }
+
+        /// @brief Enable dynamic topology.
         ConstructParameters & dynamicTopology() {
             dynamic[vk::DynamicState::ePrimitiveTopology] = 0;
             return *this;
@@ -1757,6 +1794,8 @@ public:
             return *this;
         }
 
+        /// @brief Enable dynamic scissor. Also specify the number of scissors.
+        /// @param count Specify how many scissors will be used. Set to 0 to enable VK_DYNAMIC_STATE_SCISSOR_WITH_COUNT_EXT.
         ConstructParameters & dynamicScissor(size_t count = 1) {
             if (0 == count) {
                 dynamic.erase(vk::DynamicState::eScissor);
@@ -1768,14 +1807,13 @@ public:
             return *this;
         }
 
+    private:
         static constexpr vk::PipelineInputAssemblyStateCreateInfo defaultIAStates() {
             return vk::PipelineInputAssemblyStateCreateInfo().setTopology(vk::PrimitiveTopology::eTriangleList);
         }
 
         static constexpr vk::PipelineRasterizationStateCreateInfo defaultRastStates() {
-            vk::PipelineRasterizationStateCreateInfo r;
-            r.setLineWidth(1.0f);
-            return r;
+            return vk::PipelineRasterizationStateCreateInfo().setLineWidth(1.0f);
         }
 
         static const vk::PipelineColorBlendAttachmentState defaultAttachment() {

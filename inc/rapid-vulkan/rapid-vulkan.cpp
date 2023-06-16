@@ -1558,7 +1558,7 @@ public:
 
     Argument * get(DescriptorIdentifier id) { return &_descriptors[id]; }
 
-    const Argument * get(DescriptorIdentifier id) const {
+    const Argument * find(DescriptorIdentifier id) const {
         auto iter = _descriptors.find(id);
         return iter == _descriptors.end() ? nullptr : &iter->second;
     }
@@ -1610,7 +1610,7 @@ auto ArgumentPack::c(size_t offset, size_t size, const void * data, vk::ShaderSt
     return *this;
 }
 auto ArgumentPack::get(DescriptorIdentifier id) -> Argument * { return _impl->get(id); }
-auto ArgumentPack::get(DescriptorIdentifier id) const -> const Argument * { return _impl->get(id); }
+auto ArgumentPack::find(DescriptorIdentifier id) const -> const Argument * { return _impl->find(id); }
 
 // *********************************************************************************************************************
 // Pipeline Reflection
@@ -1881,7 +1881,7 @@ private:
     vk::PipelineLayout   _handle;
 
     static const Argument::Impl * findArgument(const ArgumentPack & ap, uint32_t set, uint32_t binding) {
-        auto a = ap.get({set, binding});
+        auto a = ap.find({set, binding});
         return a ? a->_impl : nullptr;
     }
 

@@ -50,7 +50,14 @@ void entry(const Options & options) {
     auto sw       = Swapchain(Swapchain::ConstructParameters {{"swapchain"}}.setDevice(device).setDimensions(w, h));
     auto vs       = Shader(Shader::ConstructParameters {{"vs"}}.setGi(gi).setSpirv(pipeline_vert));
     auto fs       = Shader(Shader::ConstructParameters {{"fs"}, gi}.setSpirv(pipeline_frag));
-    auto p = GraphicsPipeline(GraphicsPipeline::ConstructParameters {}.setRenderPass(sw.renderPass()).setVS(&vs).setFS(&fs).dynamicScissor().dynamicViewport());
+    auto p        = GraphicsPipeline(GraphicsPipeline::ConstructParameters {}
+                                         .setRenderPass(sw.renderPass())
+                                         .setVS(&vs)
+                                         .setFS(&fs)
+                                         .dynamicScissor()
+                                         .dynamicViewport()
+                                         .addVertexAttribute(0, 0, vk::Format::eR32G32Sfloat)
+                                         .addVertexBuffer(2 * sizeof(float)));
 
     // This part is what this sample is about. We create 2 uniform buffers and bind them to the pipeline via ArgumentPack.
     auto   u0   = Buffer(Buffer::ConstructParameters {{"ub0"}, gi}.setUniform().setSize(sizeof(float) * 2));
