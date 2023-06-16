@@ -65,7 +65,6 @@ To support this case, the ArgumentPack class should just be a collection of name
 
 
 ## Design Choice
-- Pipeline objects holds the descriptor set pool
-- PipelineLayout object holds layout and setlayout.
+- PipelineLayout object holds layout, set layout and descriptor pool.
 - ArgumentPack is just a simple collection of named arguments.
 - Each argument is a container of buffer/image/constant

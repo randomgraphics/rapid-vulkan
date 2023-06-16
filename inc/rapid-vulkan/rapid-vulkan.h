@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identify the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 10
+#define RAPID_VULKAN_HEADER_REVISION 11
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -288,6 +288,11 @@ SOFTWARE.
 #endif
 
 namespace RAPID_VULKAN_NAMESPACE {
+
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4201) // nonstandard extension used: nameless struct/union
+#endif
 
 using namespace std::string_literals;
 
@@ -915,7 +920,7 @@ public:
         }
 
         template<typename T>
-        SetContentParameters & setData(vk::ArrayProxy<T> data_) {
+        SetContentParameters & setData(vk::ArrayProxy<const T> data_) {
             data = data_.data();
             size = data_.size() * sizeof(T);
             return *this;
@@ -1009,7 +1014,7 @@ public:
 
     auto desc() const -> const Desc &;
     void cmdCopy(const CopyParameters &);
-    void setContent(const SetContentParameters &);
+    auto setContent(const SetContentParameters &) -> Buffer &;
     auto readContent(const ReadParameters &) -> std::vector<uint8_t>;
     auto map(const MapParameters &) -> MappedResult;
     void unmap();
@@ -1471,37 +1476,6 @@ private:
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// A utility class that represents the full layout of a pipeline object.
-struct PipelineReflection {
-    typedef vk::DescriptorSetLayoutBinding Descriptor;
-
-    /// Collection of descriptors in one set. We can't use binding point as key, since multiple shader variable might bind to same set and binding point.
-    typedef std::unordered_map<std::string, Descriptor> DescriptorSet;
-
-    /// Collection of descriptor sets indexed by their set index in shader.
-    typedef std::vector<DescriptorSet> DescriptorLayout;
-
-    typedef vk::PushConstantRange Constant;
-
-    /// Collection of push constants.
-    typedef std::unordered_map<std::string, Constant> ConstantLayout;
-
-    /// Properties of vertex shader input.
-    struct VertexShaderInput {
-        uint32_t   location = 0;
-        vk::Format format   = vk::Format::eUndefined;
-    };
-
-    /// Collection of vertex shader input.
-    typedef std::unordered_map<std::string, VertexShaderInput> VertexLayout;
-
-    std::string      name; ///< name of the program that this reflect is from. this field is for logging and debugging.
-    DescriptorLayout descriptors;
-    ConstantLayout   constants;
-    VertexLayout     vertex;
-};
-
-// ---------------------------------------------------------------------------------------------------------------------
 /// @brief View to a sub-range of a buffer.
 struct BufferView {
     vk::Buffer     buffer = {};
@@ -1548,19 +1522,17 @@ struct ImageSampler {
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// Represent a single pipeline argument
+/// Represent a single pipeline descriptor
+/// @todo rename to Descriptor
 class Argument {
 public:
     RVI_NO_COPY_NO_MOVE(Argument);
 
     /// @brief Set value of buffer argument. No effect, if the argument is not a buffer.
-    void b(vk::ArrayProxy<const BufferView>);
+    Argument & b(vk::ArrayProxy<const BufferView>);
 
     /// @brief Set value of image/sampler argument. No effect, if the argument is not a image/sampler
-    void i(vk::ArrayProxy<const ImageSampler>);
-
-    /// @brief Set value of push constant. No effect, if the argument is not a push constant.
-    void c(size_t offset, size_t size, const void * data);
+    Argument & i(vk::ArrayProxy<const ImageSampler>);
 
 protected:
     Argument();
@@ -1570,6 +1542,26 @@ protected:
     Impl * _impl = nullptr;
 
     friend class PipelineLayout;
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// Unique identifier of a pipeline descriptor
+union DescriptorIdentifier {
+    uint64_t u64 = 0;
+    struct {
+        uint32_t set;
+        uint32_t binding;
+    };
+
+    DescriptorIdentifier() = default;
+
+    DescriptorIdentifier(uint32_t s, uint32_t b): set(s), binding(b) {}
+
+    bool operator==(const DescriptorIdentifier & rhs) const { return u64 == rhs.u64; }
+
+    bool operator!=(const DescriptorIdentifier & rhs) const { return u64 != rhs.u64; }
+
+    bool operator<(const DescriptorIdentifier & rhs) const { return u64 < rhs.u64; }
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1585,34 +1577,85 @@ public:
     ~ArgumentPack();
 
     /// @brief clear all arguments.
-    void clear();
+    ArgumentPack & clear();
 
     /// @brief Set value of buffer argument. If the argument has not been set before, a new argument will be created.
-    void b(const std::string & name, vk::ArrayProxy<const BufferView>);
+    ArgumentPack & b(DescriptorIdentifier id, vk::ArrayProxy<const BufferView>);
 
     /// @brief Set value of image/sampler argument. If the argument has not been set before, a new argument will be created.
-    void i(const std::string & name, vk::ArrayProxy<const ImageSampler>);
+    ArgumentPack & i(DescriptorIdentifier id, vk::ArrayProxy<const ImageSampler>);
 
-    /// @brief Set value of push constant. If the argument has not been set before, a new argument will be created.
-    void c(const std::string & name, size_t offset, size_t size, const void * data);
+    /// @brief Set value of push constant.
+    ArgumentPack & c(size_t offset, size_t size, const void * data, vk::ShaderStageFlags stages = vk::ShaderStageFlagBits::eAll);
 
-    /// @brief Set value of push constant. If the argument has not been set before, a new argument will be created.
+    /// @brief Set value of push constant.
     template<typename T>
-    void c(const std::string & name, size_t offset, vk::ArrayProxy<T> data) {
-        return c(name, offset, data.size() * sizeof(T), data.data());
+    ArgumentPack & c(size_t offset, vk::ArrayProxy<T> data, vk::ShaderStageFlags stages = vk::ShaderStageFlagBits::eAll) {
+        return c(offset, data.size() * sizeof(T), data.data(), stages);
     }
 
-    /// @brief Get argument by name.
+    /// @brief Get argument by ID.
     /// The returned argument instance can be used to set value of that argument w/o paying the cost of string hashing.
     /// If the argument has not been set before, a new argument will be created and returned.
-    Argument * get(const std::string & name);
+    Argument * get(DescriptorIdentifier);
 
-    /// @brief Get an existing argument by name. Returns nullptr if the argument has not been set.
-    const Argument * get(const std::string & name) const;
+    /// @brief Retrieve an existing argument by name. Returns nullptr if the argument has not been set.
+    const Argument * find(DescriptorIdentifier) const;
 
 private:
+    friend class PipelineLayout;
     class Impl;
     Impl * _impl = nullptr;
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// A utility class that describes parameter layout of a pipeline object.
+struct PipelineReflection {
+    /// @brief Represents one descriptor or descriptor array.
+    struct Descriptor {
+        /// @brief names of the shader variable.
+        /// The whole structure is considered empty/invalid, if names set is empty.
+        std::set<std::string> names;
+
+        /// @brief The descriptor binding information.
+        /// If the descriptor count is empty, then the whole structure is considered empty/invalid.
+        vk::DescriptorSetLayoutBinding binding;
+
+        bool empty() const { return names.empty() || 0 == binding.descriptorCount; }
+    };
+
+    /// Collection of descriptors in one set.
+    typedef std::vector<Descriptor> DescriptorSet;
+
+    /// Collection of descriptor sets indexed by the set index.
+    typedef std::vector<DescriptorSet> DescriptorLayout;
+
+    struct Constant {
+        uint32_t begin = (uint32_t) -1;
+        uint32_t end   = 0;
+        // TODO: add push constant name information.
+
+        bool empty() const { return begin >= end; }
+    };
+
+    /// Collection of push constants for each shader stage.
+    typedef std::map<vk::ShaderStageFlagBits, Constant> ConstantLayout;
+
+    /// Properties of vertex shader input.
+    struct VertexShaderInput {
+        vk::Format  format = vk::Format::eUndefined;
+        std::string shaderVariable; ///< name of the shader variable.
+    };
+
+    /// Collection of vertex shader input. Key is input location.
+    typedef std::map<uint32_t, VertexShaderInput> VertexLayout;
+
+    std::string      name; ///< name of the program that this reflect is from. this field is for logging and debugging.
+    DescriptorLayout descriptors;
+    ConstantLayout   constants;
+    VertexLayout     vertex;
+
+    PipelineReflection() {}
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1630,7 +1673,6 @@ public:
     /// @brief Returns the underlying Vulkan handle.
     vk::PipelineLayout handle() const;
 
-    /// @brief Returns the pipeline reflection object that is used to construct this pipeline layout.
     const PipelineReflection & reflection() const;
 
     /// @brief Bind argument pack to the command buffer
@@ -1702,6 +1744,43 @@ public:
             return *this;
         }
 
+        /// @brief Add a vertex attribute, in order of location.
+        /// The first call to this method adds a vertex attribute for location 0. The second call adds a vertex attribute for location 1, and so on.
+        ConstructParameters & addVertexAttribute(size_t binding, size_t offset, vk::Format format) {
+            vk::VertexInputAttributeDescription desc {};
+            desc.binding  = (uint32_t) binding;
+            desc.location = (uint32_t) va.size();
+            desc.offset   = (uint32_t) offset;
+            desc.format   = format;
+            va.push_back(desc);
+            return *this;
+        }
+
+        /// @brief Add a vertex buffer, in order of vertex buffer binding index.
+        /// The first call to this method or addInstanceBuffer() adds a vertex buffer for binding 0. The second call to them adds a vertex buffer for binding 1,
+        /// and so on.
+        ConstructParameters & addVertexBuffer(uint32_t stride) {
+            vk::VertexInputBindingDescription desc;
+            desc.binding   = (uint32_t) vb.size();
+            desc.stride    = stride;
+            desc.inputRate = vk::VertexInputRate::eVertex;
+            vb.push_back(desc);
+            return *this;
+        }
+
+        /// @brief Add an instance buffer, in order of vertex buffer binding index.
+        /// The first call to this method or addVertexBuffer() adds a vertex buffer for binding 0. The second call to them adds a vertex buffer for binding 1,
+        /// and so on.
+        ConstructParameters & addInstanceBuffer(uint32_t stride) {
+            vk::VertexInputBindingDescription desc;
+            desc.binding   = (uint32_t) vb.size();
+            desc.stride    = stride;
+            desc.inputRate = vk::VertexInputRate::eInstance;
+            vb.push_back(desc);
+            return *this;
+        }
+
+        /// @brief Enable dynamic topology.
         ConstructParameters & dynamicTopology() {
             dynamic[vk::DynamicState::ePrimitiveTopology] = 0;
             return *this;
@@ -1720,6 +1799,8 @@ public:
             return *this;
         }
 
+        /// @brief Enable dynamic scissor. Also specify the number of scissors.
+        /// @param count Specify how many scissors will be used. Set to 0 to enable VK_DYNAMIC_STATE_SCISSOR_WITH_COUNT_EXT.
         ConstructParameters & dynamicScissor(size_t count = 1) {
             if (0 == count) {
                 dynamic.erase(vk::DynamicState::eScissor);
@@ -1731,15 +1812,12 @@ public:
             return *this;
         }
 
+    private:
         static constexpr vk::PipelineInputAssemblyStateCreateInfo defaultIAStates() {
             return vk::PipelineInputAssemblyStateCreateInfo().setTopology(vk::PrimitiveTopology::eTriangleList);
         }
 
-        static constexpr vk::PipelineRasterizationStateCreateInfo defaultRastStates() {
-            vk::PipelineRasterizationStateCreateInfo r;
-            r.setLineWidth(1.0f);
-            return r;
-        }
+        static constexpr vk::PipelineRasterizationStateCreateInfo defaultRastStates() { return vk::PipelineRasterizationStateCreateInfo().setLineWidth(1.0f); }
 
         static const vk::PipelineColorBlendAttachmentState defaultAttachment() {
             return vk::PipelineColorBlendAttachmentState().setColorWriteMask(vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
@@ -1803,6 +1881,11 @@ public:
 
         /// Vertex offset of indexed draw. Ignored for non-indexed draw.
         int32_t vertexOffset = 0;
+
+        DrawParameters & setVertexBuffers(vk::ArrayProxy<const BufferView> vb) {
+            vertexBuffers = vb;
+            return *this;
+        }
 
         DrawParameters & setNonIndexed(size_t vertexCount_, size_t firstVertex_ = 0) {
             indexBuffer.buffer = VK_NULL_HANDLE;
@@ -2278,7 +2361,20 @@ private:
     vk::DebugReportCallbackEXT _debugReport {};
 };
 
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
+
 } // namespace RAPID_VULKAN_NAMESPACE
+
+namespace std {
+
+template<>
+struct hash<RAPID_VULKAN_NAMESPACE::DescriptorIdentifier> {
+    size_t operator()(const RAPID_VULKAN_NAMESPACE::DescriptorIdentifier & v) const { return std::hash<uint64_t>()(v.u64); }
+};
+
+} // namespace std
 
 #endif // RAPID_VULKAN_H
 

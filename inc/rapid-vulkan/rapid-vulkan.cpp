@@ -347,7 +347,10 @@ private:
 };
 
 CommandQueue::CommandQueue(const ConstructParameters & params): Root(params), _impl(new Impl(params)) { _impl->setName(name()); }
-CommandQueue::~CommandQueue() { delete _impl; }
+CommandQueue::~CommandQueue() {
+    delete _impl;
+    _impl = nullptr;
+}
 auto CommandQueue::desc() const -> const Desc & { return _impl->desc(); }
 auto CommandQueue::begin(const char * purpose, vk::CommandBufferLevel level) -> vk::CommandBuffer { return _impl->begin(purpose, level); }
 void CommandQueue::submit(const SubmitParameters & sp) { _impl->submit(sp); }
@@ -583,10 +586,16 @@ private:
 
 Buffer::Buffer(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this, cp); }
 Buffer::Buffer(const ImportParameters & cp): Root(cp) { _impl = new Impl(*this, cp); }
-Buffer::~Buffer() { delete _impl; }
+Buffer::~Buffer() {
+    delete _impl;
+    _impl = nullptr;
+}
 auto Buffer::desc() const -> const Desc & { return _impl->desc(); }
 void Buffer::cmdCopy(const CopyParameters & p) { return _impl->cmdCopy(p); }
-void Buffer::setContent(const SetContentParameters & p) { return _impl->setContent(p); }
+auto Buffer::setContent(const SetContentParameters & p) -> Buffer & {
+    _impl->setContent(p);
+    return *this;
+}
 auto Buffer::readContent(const ReadParameters & p) -> std::vector<uint8_t> { return _impl->readContent(p); }
 auto Buffer::map(const MapParameters & p) -> MappedResult { return _impl->map(p); }
 void Buffer::unmap() { return _impl->unmap(); }
@@ -1200,7 +1209,10 @@ vk::ImageAspectFlags Image::determineImageAspect(vk::Format format, vk::ImageAsp
 }
 
 Image::Image(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this, cp); }
-Image::~Image() { delete _impl; }
+Image::~Image() {
+    delete _impl;
+    _impl = nullptr;
+}
 auto Image::desc() const -> const Desc & { return _impl->desc(); }
 auto Image::getView(const GetViewParameters & p) const -> vk::ImageView { return _impl->getView(p); }
 void Image::setContent(const SetContentParameters & p) { return _impl->setContent(p); }
@@ -1365,9 +1377,7 @@ public:
         }
     };
 
-    typedef std::vector<uint8_t> Constants;
-
-    typedef std::variant<std::monostate, BufferArgs, ImageArgs, Constants> Value;
+    typedef std::variant<std::monostate, BufferArgs, ImageArgs> Value;
 
     Impl() {
         RAPID_VULKAN_ASSERT(_value.index() == 0); // should start with monostate.
@@ -1438,22 +1448,22 @@ public:
         _timestamp.fetch_add(1);
     }
 
-    void c(size_t offset, size_t size, const void * data) {
-        auto p = std::get_if<Constants>(&_value);
-        if (p) {
-            auto sameValue = [&]() {
-                if (p->size() != (offset + size)) return false;
-                return memcmp(p->data() + offset, data, size) == 0;
-            };
-            if (sameValue()) return;
-            memcpy(p->data() + offset, data, size);
-        } else {
-            std::vector<uint8_t> v(offset + size, 0);
-            memcpy(v.data() + offset, data, size);
-            _value = std::move(v);
-        }
-        _timestamp.fetch_add(1);
-    }
+    // void c(size_t offset, size_t size, const void * data) {
+    //     auto p = std::get_if<Constants>(&_value);
+    //     if (p) {
+    //         auto sameValue = [&]() {
+    //             if (p->size() != (offset + size)) return false;
+    //             return memcmp(p->data() + offset, data, size) == 0;
+    //         };
+    //         if (sameValue()) return;
+    //         memcpy(p->data() + offset, data, size);
+    //     } else {
+    //         std::vector<uint8_t> v(offset + size, 0);
+    //         memcpy(v.data() + offset, data, size);
+    //         _value = std::move(v);
+    //     }
+    //     _timestamp.fetch_add(1);
+    // }
 
     const Value & value() const { return _value; }
 
@@ -1464,10 +1474,8 @@ public:
         auto index = _value.index();
         if (1 == index)
             return std::get<BufferArgs>(_value).infos.size();
-        else if (2 == index) {
+        else if (2 == index)
             return std::get<ImageArgs>(_value).infos.size();
-        } else if (3 == index)
-            return 1;
         else
             return 0;
     }
@@ -1510,9 +1518,7 @@ public:
             default:
                 return "<InvalidImageSampler>";
             }
-        } else if (3 == index)
-            return "Constant";
-        else
+        } else
             return "<None>";
     }
 
@@ -1522,10 +1528,18 @@ private:
 };
 
 Argument::Argument(): _impl(new Impl()) {}
-Argument::~Argument() { delete _impl; }
-void Argument::b(vk::ArrayProxy<const BufferView> v) { return _impl->b(v); }
-void Argument::i(vk::ArrayProxy<const ImageSampler> v) { return _impl->i(v); }
-void Argument::c(size_t offset, size_t size, const void * data) { return _impl->c(offset, size, data); }
+Argument::~Argument() {
+    delete _impl;
+    _impl = nullptr;
+}
+Argument & Argument::b(vk::ArrayProxy<const BufferView> v) {
+    _impl->b(v);
+    return *this;
+}
+Argument & Argument::i(vk::ArrayProxy<const ImageSampler> v) {
+    _impl->i(v);
+    return *this;
+}
 
 class ArgumentImpl : public Argument {
 public:
@@ -1539,33 +1553,79 @@ public:
 
     ~Impl() {}
 
-    void clear() { _arguments.clear(); }
+    void clear() {
+        _descriptors.clear();
+        _constants.clear();
+    }
 
-    void set(const std::string & name, vk::ArrayProxy<const BufferView> v) { _arguments[name].b(v); }
+    void set(DescriptorIdentifier id, vk::ArrayProxy<const BufferView> v) { _descriptors[id].b(v); }
 
-    void set(const std::string & name, vk::ArrayProxy<const ImageSampler> v) { _arguments[name].i(v); }
+    void set(DescriptorIdentifier id, vk::ArrayProxy<const ImageSampler> v) { _descriptors[id].i(v); }
 
-    void set(const std::string & name, size_t offset, size_t size, const void * data) { _arguments[name].c(offset, size, data); }
+    void set(size_t offset, size_t size, const void * data, vk::ShaderStageFlags stages) {
+        if (0 == data || 0 == size || !stages) return; // ignore empty data.
+        _constants.push_back({stages, (uint32_t) offset});
+        _constants.back().value.assign((const uint8_t *) data, (const uint8_t *) data + size);
+    }
 
-    Argument * get(const std::string & name) { return &_arguments[name]; }
+    Argument * get(DescriptorIdentifier id) { return &_descriptors[id]; }
 
-    const Argument * get(const std::string & name) const {
-        auto iter = _arguments.find(name);
-        return iter == _arguments.end() ? nullptr : &iter->second;
+    const Argument * find(DescriptorIdentifier id) const {
+        auto iter = _descriptors.find(id);
+        return iter == _descriptors.end() ? nullptr : &iter->second;
+    }
+
+    std::vector<std::tuple<vk::PushConstantRange, const void *>> getConstant(vk::ShaderStageFlags stages, uint32_t begin, uint32_t end) const {
+        if (!stages) return {};
+        if (begin >= end) return {};
+        std::vector<std::tuple<vk::PushConstantRange, const void *>> v;
+        for (auto & c : _constants) {
+            vk::PushConstantRange range {};
+            range.stageFlags = c.stages & stages;
+            if (!range.stageFlags) continue;
+            range.offset = std::max(c.offset, begin);
+            end          = std::min((uint32_t) (c.offset + c.value.size()), end);
+            if (range.offset >= end) continue;
+            range.size = end - range.offset;
+            v.push_back({range, c.value.data() + range.offset - c.offset});
+        }
+        return v;
     }
 
 private:
-    std::unordered_map<std::string, ArgumentImpl> _arguments;
+    struct ConstantArgument {
+        vk::ShaderStageFlags stages {};
+        uint32_t             offset {};
+        std::vector<uint8_t> value {};
+    };
+
+    std::unordered_map<DescriptorIdentifier, ArgumentImpl> _descriptors;
+    std::vector<ConstantArgument>                          _constants;
 };
 
 ArgumentPack::ArgumentPack(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this); }
-ArgumentPack::~ArgumentPack() { delete _impl; }
-void ArgumentPack::clear() { return _impl->clear(); }
-void ArgumentPack::b(const std::string & name, vk::ArrayProxy<const BufferView> v) { return _impl->set(name, v); }
-void ArgumentPack::i(const std::string & name, vk::ArrayProxy<const ImageSampler> v) { return _impl->set(name, v); }
-void ArgumentPack::c(const std::string & name, size_t offset, size_t size, const void * data) { return _impl->set(name, offset, size, data); }
-auto ArgumentPack::get(const std::string & name) -> Argument * { return _impl->get(name); }
-auto ArgumentPack::get(const std::string & name) const -> const Argument * { return _impl->get(name); }
+ArgumentPack::~ArgumentPack() {
+    delete _impl;
+    _impl = nullptr;
+}
+auto ArgumentPack::clear() -> ArgumentPack & {
+    _impl->clear();
+    return *this;
+}
+auto ArgumentPack::b(DescriptorIdentifier id, vk::ArrayProxy<const BufferView> v) -> ArgumentPack & {
+    _impl->set(id, v);
+    return *this;
+}
+auto ArgumentPack::i(DescriptorIdentifier id, vk::ArrayProxy<const ImageSampler> v) -> ArgumentPack & {
+    _impl->set(id, v);
+    return *this;
+}
+auto ArgumentPack::c(size_t offset, size_t size, const void * data, vk::ShaderStageFlags stages) -> ArgumentPack & {
+    _impl->set(offset, size, data, stages);
+    return *this;
+}
+auto ArgumentPack::get(DescriptorIdentifier id) -> Argument * { return _impl->get(id); }
+auto ArgumentPack::find(DescriptorIdentifier id) const -> const Argument * { return _impl->find(id); }
 
 // *********************************************************************************************************************
 // Pipeline Reflection
@@ -1585,10 +1645,11 @@ static std::vector<T *> enumerateShaderVariables(SpvReflectShaderModule & module
 struct MergedDescriptorBinding {
     SpvReflectDescriptorBinding * binding    = nullptr;
     VkShaderStageFlags            stageFlags = 0;
+    std::set<std::string>         names;
 };
 
 struct MergedDescriptorSet {
-    std::map<std::string, MergedDescriptorBinding> descriptors;
+    std::map<uint32_t, MergedDescriptorBinding> descriptors; // key is binding location
 };
 
 static const char * getDescriptorName(const SpvReflectDescriptorBinding * d) {
@@ -1603,34 +1664,38 @@ static void mergeDescriptorSet(MergedDescriptorSet & merged, const SpvReflectSha
                                const vk::ArrayProxy<SpvReflectDescriptorBinding *> & incoming) {
     for (const auto & i : incoming) {
         const char * name = getDescriptorName(i);
-        auto &       d    = merged.descriptors[name];
+        auto &       d    = merged.descriptors[i->binding];
         if (d.binding) {
-            RVI_ASSERT(0 == strcmp(getDescriptorName(d.binding), name));
+            RVI_ASSERT(d.binding->binding == i->binding);
             // check for possible conflict
-            if (d.binding->binding != i->binding)
-                RVI_LOGE("Shader variable %s has conflicting bindings: %d != %d", name, d.binding->binding, i->binding);
-            else if (d.binding->descriptor_type != i->descriptor_type)
+            if (d.binding->descriptor_type != i->descriptor_type)
                 RVI_LOGE("Shader variable %s has conflicting types: %d != %d", name, d.binding->descriptor_type, i->descriptor_type);
+            // TODO: check array.dims_count and array.dims
         } else {
             d.binding = i;
         }
         d.stageFlags |= module.shader_stage;
+        d.names.insert(name);
     }
 }
 
 static PipelineReflection::Descriptor convertArray(const MergedDescriptorBinding & src) {
     PipelineReflection::Descriptor dst = {};
-    dst.binding                        = src.binding->binding; // wtf, so many bindings ...
-    dst.descriptorType                 = static_cast<vk::DescriptorType>(src.binding->descriptor_type);
-    dst.descriptorCount                = 1;
-    for (uint32_t i = 0; i < src.binding->array.dims_count; ++i) dst.descriptorCount *= src.binding->array.dims[i];
-    dst.stageFlags = (vk::ShaderStageFlagBits) src.stageFlags;
+    dst.names                          = src.names;
+    dst.binding.binding                = src.binding->binding; // wtf, so many bindings ...
+    dst.binding.descriptorType         = static_cast<vk::DescriptorType>(src.binding->descriptor_type);
+    dst.binding.descriptorCount        = 1;
+    for (uint32_t i = 0; i < src.binding->array.dims_count; ++i) dst.binding.descriptorCount *= src.binding->array.dims[i];
+    dst.binding.stageFlags = (vk::ShaderStageFlagBits) src.stageFlags;
     return dst;
 }
 
 static PipelineReflection::DescriptorSet convertSet(const MergedDescriptorSet & merged) {
     PipelineReflection::DescriptorSet set;
-    for (const auto & kv : merged.descriptors) set[kv.first] = convertArray(kv.second);
+    for (const auto & kv : merged.descriptors) {
+        if (set.size() <= kv.first) set.resize(kv.first + 1);
+        set[kv.first] = convertArray(kv.second);
+    }
     return set;
 }
 
@@ -1650,7 +1715,7 @@ static void convertVertexInputs(PipelineReflection & refl, vk::ArrayProxy<SpvRef
     for (auto i : vertexInputs) {
         auto name = std::string(i->name);
         if (name.substr(0, 3) == "gl_") continue; // skip OpenGL's reserved inputs.
-        refl.vertex[name] = {i->location, (vk::Format) i->format};
+        refl.vertex[i->location] = {(vk::Format) i->format, name};
     }
 }
 
@@ -1685,17 +1750,9 @@ static PipelineReflection reflectShaders(const std::string & pipelineName, vk::A
         // enumerate push constants
         auto pc = enumerateShaderVariables<SpvReflectBlockVariable>(module, spvReflectEnumeratePushConstantBlocks);
         for (const auto & c : pc) {
-            if (constants.find(c->name) == constants.end()) {
-                auto & range     = constants[c->name];
-                range.offset     = c->offset;
-                range.size       = c->size;
-                range.stageFlags = (vk::ShaderStageFlags) module.shader_stage;
-            } else {
-                auto & range = constants[c->name];
-                RVI_ASSERT(range.offset == c->offset);
-                RVI_ASSERT(range.size == c->size);
-                range.stageFlags |= (vk::ShaderStageFlags) module.shader_stage;
-            }
+            auto & sc = constants[(vk::ShaderStageFlagBits) module.shader_stage];
+            sc.begin  = std::min(sc.begin, (uint32_t) c->offset);
+            sc.end    = std::max(sc.end, (uint32_t) (c->offset + c->size));
         }
 
         // Enumerate vertex shader inputs
@@ -1739,35 +1796,23 @@ public:
 
         // create descriptor set
         _sets.resize(_reflection.descriptors.size());
-        for (size_t i = 0; i < _sets.size(); ++i) {
+        for (uint32_t s = 0; s < _sets.size(); ++s) {
             // go through all descriptors in this set. build variable and binding arrays.
-            auto &                                 variables = _sets[i].variables;
-            auto &                                 bindings  = _sets[i].bindings;
-            std::map<vk::DescriptorType, uint32_t> sizesMap;
-            std::map<uint32_t, size_t>             occupied; // key is binding slot that is already occupied. value is the index into the bindings array.
-            variables.reserve(_reflection.descriptors[i].size());
-            bindings.reserve(_reflection.descriptors[i].size());
-            for (const auto & d : _reflection.descriptors[i]) {
-                // we have to check for redundant binding, since it is legit to delcare mutiple variables in GLSL on same binding number.
-                auto o = occupied.find(d.second.binding);
-                if (o != occupied.end()) {
-                    // this means that we already have variable bound on this slot. Now we just need to remember the name of this new variable.
-                    RVI_ASSERT(o->second < variables.size());
-                    variables[o->second].push_back(d.first);
-                } else {
-                    // this means this is the first time we see this binding slot. We need to create a new binding.
-                    occupied.insert({d.second.binding, bindings.size()});
-                    variables.push_back({d.first});
-                    bindings.push_back(d.second);
-                    sizesMap[d.second.descriptorType] += d.second.descriptorCount;
-                }
+            auto & bindings = _sets[s].bindings;
+            auto   sizesMap = std::map<vk::DescriptorType, uint32_t>();
+            bindings.reserve(_reflection.descriptors[s].size());
+            for (uint32_t i = 0; i < _reflection.descriptors[s].size(); ++i) {
+                const auto & d = _reflection.descriptors[s][i];
+                if (d.empty()) continue; // skip empty descriptor
+                bindings.push_back(d.binding);
+                sizesMap[d.binding.descriptorType] += d.binding.descriptorCount;
             }
 
             // we have gone through all descriptors in the set. Now we can create descriptor set layout.
             auto ci         = vk::DescriptorSetLayoutCreateInfo();
             ci.bindingCount = (uint32_t) bindings.size();
             ci.pBindings    = bindings.data();
-            _sets[i].layout = _gi->device.createDescriptorSetLayout(ci, _gi->allocator);
+            _sets[s].layout = _gi->device.createDescriptorSetLayout(ci, _gi->allocator);
 
             // convert sizes map to array
             std::vector<vk::DescriptorPoolSize> sizes;
@@ -1776,14 +1821,17 @@ public:
 
             // Create descriptor pool
             // TODO: make the pool size configurable.
-            _sets[i].pool          = _gi->device.createDescriptorPool(vk::DescriptorPoolCreateInfo().setMaxSets(1024).setPoolSizes(sizes), _gi->allocator);
-            _sets[i].availableSets = 1024;
+            _sets[s].pool          = _gi->device.createDescriptorPool(vk::DescriptorPoolCreateInfo().setMaxSets(1024).setPoolSizes(sizes), _gi->allocator);
+            _sets[s].availableSets = 1024;
         }
 
         // create push constant array
         std::vector<vk::PushConstantRange> pc;
         pc.reserve(_reflection.constants.size());
-        for (const auto & kv : _reflection.constants) pc.push_back(kv.second);
+        for (const auto & kv : _reflection.constants) {
+            if (kv.second.empty()) continue;
+            pc.push_back({kv.first, kv.second.begin, kv.second.end - kv.second.begin});
+        }
 
         // create pipeline layout array
         std::vector<vk::DescriptorSetLayout> layouts;
@@ -1805,6 +1853,8 @@ public:
 
     vk::PipelineLayout handle() const { return _handle; }
 
+    const PipelineReflection & reflection() const { return _reflection; }
+
     bool cmdBind(vk::CommandBuffer cb, vk::PipelineBindPoint bp, const ArgumentPack & ap) { return bindDescriptors(cb, bp, ap) && bindPushConstants(cb, ap); }
 
     void onNameChanged() {
@@ -1814,11 +1864,10 @@ public:
 private:
     struct DescSet {
         vk::DescriptorSetLayout                     layout;
-        std::vector<std::vector<std::string>>       variables; // name of variables that are bound to each binding point
         std::vector<vk::DescriptorSetLayoutBinding> bindings;
         vk::DescriptorPool                          pool;
-        size_t                                      availableSets;
-        std::vector<vk::DescriptorPool>             full; // pools that are full already.
+        size_t                                      availableSets = 0; ///< number of sets that are available for allocation in the pool.
+        std::vector<vk::DescriptorPool>             full;              // pools that are full already.
 
         vk::DescriptorSet alloc(const GlobalInfo & gi) {
             if (availableSets > 0) {
@@ -1846,6 +1895,11 @@ private:
     std::vector<DescSet> _sets;
     vk::PipelineLayout   _handle;
 
+    static const Argument::Impl * findArgument(const ArgumentPack & ap, uint32_t set, uint32_t binding) {
+        auto a = ap.find({set, binding});
+        return a ? a->_impl : nullptr;
+    }
+
     bool bindDescriptors(vk::CommandBuffer cb, vk::PipelineBindPoint bindPoint, const ArgumentPack & ap) {
         auto writes     = std::vector<vk::WriteDescriptorSet>();
         auto setHandles = std::vector<vk::DescriptorSet>();
@@ -1855,40 +1909,32 @@ private:
             if (!descSet) return false;
             setHandles.push_back(descSet);
             for (uint32_t i = 0; i < s.bindings.size(); ++i) {
-                auto & v = s.variables[i];
                 auto & b = s.bindings[i];
                 auto & w = writes.emplace_back();
                 w.setDstSet(descSet);
                 w.setDstBinding(b.binding);
                 w.setDescriptorType(b.descriptorType);
 
-                // Locate the variable in the argument pack for this binding point.
-                const Argument::Impl * a = nullptr;
-                for (const auto & n : v) {
-                    if (a) {
-                        // TODO: check that all variables in the same binding point have the same type and value.
-                    } else {
-                        a = ((const ArgumentImpl *) ap.get(n))->_impl;
-                    }
-                }
+                // Locate the arugment in the pack for this binding slot.
+                const Argument::Impl * a = findArgument(ap, si, i);
                 if (!a) {
-                    RVI_LOGE("Failed to bind argument pack (%s) to pipeline layout (%s): set %u slot %u (%s) not found in the argument pack.",
-                             ap.name().c_str(), _owner.name().c_str(), si, i, v[0].c_str());
+                    RVI_LOGE("Failed to bind argument pack (%s) to pipeline layout (%s): set %u slot %u not found in the argument pack.", ap.name().c_str(),
+                             _owner.name().c_str(), si, i);
                     return false;
                 }
 
                 // verify that the argument type is compatible with the descriptor type
                 if (!a->typeCompatibleWith(b.descriptorType)) {
-                    RVI_LOGE("Failed to bind argument pack (%s) to pipeline layout (%s): set %u slot %u (%s) is of type %s, but the argument is of type %s.",
-                             ap.name().c_str(), _owner.name().c_str(), si, i, v[0].c_str(), vk::to_string(b.descriptorType).c_str(), a->type());
+                    RVI_LOGE("Failed to bind argument pack (%s) to pipeline layout (%s): set %u slot %u is of type %s, but the argument is of type %s.",
+                             ap.name().c_str(), _owner.name().c_str(), si, i, vk::to_string(b.descriptorType).c_str(), a->type());
                     return false;
                 }
 
                 // verify that there're enough descriptors in the argument.
                 if (a->count() < b.descriptorCount) {
                     RVI_LOGE(
-                        "Failed to bind argument pack (%s) to pipeline layout (%s): set %u slot %u (%s) requires %u descriptors, but the argument has only %zu.",
-                        ap.name().c_str(), _owner.name().c_str(), si, i, v[0].c_str(), b.descriptorCount, a->count());
+                        "Failed to bind argument pack (%s) to pipeline layout (%s): set %u slot %u requires %u descriptors, but the argument has only %zu.",
+                        ap.name().c_str(), _owner.name().c_str(), si, i, b.descriptorCount, a->count());
                     return false;
                 }
 
@@ -1910,31 +1956,28 @@ private:
 
     bool bindPushConstants(vk::CommandBuffer cb, const ArgumentPack & ap) {
         for (const auto & kv : _reflection.constants) {
-            const auto & n = kv.first;
-            const auto & c = kv.second;
-            const auto * a = ((const ArgumentImpl *) ap.get(n))->_impl;
-            if (!a) {
+            if (kv.second.empty()) continue;
+            auto v = ap._impl->getConstant(kv.first, kv.second.begin, kv.second.end);
+            if (v.empty()) {
                 // No warnings ehre. Push constant value is persistent within one
                 // command buffer submit. So it is not required to update all the values on every pipeline binding.
                 continue;
             }
-            auto v = std::get_if<Argument::Impl::Constants>(&a->value());
-            if (!v) {
-                RVI_LOGE("Failed to bind argument pack (%s) to pipeline layout (%s): expects push constant on variable (%s), but (%s) is provided",
-                         ap.name().c_str(), _owner.name().c_str(), n.c_str(), a->type());
-                continue;
-            }
-            cb.pushConstants(_handle, c.stageFlags, c.offset, std::min<uint32_t>(c.size, (uint32_t) v->size()), v->data());
+            for (const auto & [pcr, data] : v) cb.pushConstants(_handle, pcr.stageFlags, pcr.offset, pcr.size, data);
         }
         return true;
     }
 };
 
 PipelineLayout::PipelineLayout(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this, cp.shaders); }
-PipelineLayout::~PipelineLayout() { delete _impl; }
-vk::PipelineLayout PipelineLayout::handle() const { return _impl->handle(); }
-bool               PipelineLayout::cmdBind(vk::CommandBuffer cb, vk::PipelineBindPoint bp, const ArgumentPack & ap) const { return _impl->cmdBind(cb, bp, ap); }
-void               PipelineLayout::onNameChanged(const std::string &) { _impl->onNameChanged(); }
+PipelineLayout::~PipelineLayout() {
+    delete _impl;
+    _impl = nullptr;
+}
+auto PipelineLayout::handle() const -> vk::PipelineLayout { return _impl->handle(); }
+auto PipelineLayout::reflection() const -> const PipelineReflection & { return _impl->reflection(); }
+bool PipelineLayout::cmdBind(vk::CommandBuffer cb, vk::PipelineBindPoint bp, const ArgumentPack & ap) const { return _impl->cmdBind(cb, bp, ap); }
+void PipelineLayout::onNameChanged(const std::string &) { _impl->onNameChanged(); }
 
 // *********************************************************************************************************************
 // Pipeline
@@ -1957,7 +2000,9 @@ public:
 
     PipelineLayout & layout() const { return *_layout; }
 
-    void cmdBind(vk::CommandBuffer cb, const ArgumentPack & args) const { _layout->cmdBind(cb, bindPoint, args); }
+    void cmdBind(vk::CommandBuffer cb, const ArgumentPack & args) const {
+        if (handle) _layout->cmdBind(cb, bindPoint, args);
+    }
 
 private:
     const GlobalInfo *  _gi = nullptr;
@@ -1965,7 +2010,10 @@ private:
 };
 
 Pipeline::Pipeline(const std::string & name, vk::ArrayProxy<const Shader * const> shaders): Root({name}) { _impl = new Impl(*this, shaders); }
-Pipeline::~Pipeline() { delete _impl; }
+Pipeline::~Pipeline() {
+    delete _impl;
+    _impl = nullptr;
+}
 auto Pipeline::layout() const -> const PipelineLayout & { return _impl->layout(); }
 void Pipeline::cmdBind(vk::CommandBuffer cb, const ArgumentPack & ap) const { return _impl->cmdBind(cb, ap); }
 
@@ -1982,6 +2030,28 @@ GraphicsPipeline::GraphicsPipeline(const ConstructParameters & params): Pipeline
     if (params.fs) shaderStages.push_back({{}, vk::ShaderStageFlagBits::eFragment, params.fs->handle(), params.fs->entry().c_str()});
 
     // setup vertex input stage
+    const auto & refl = layout().reflection();
+    if (refl.vertex.size() != params.va.size()) {
+        RVI_LOGE("Failed to create graphics pipeline (%s): vertex input stage requires %zu attributes, but only %zu are provided.", params.name.c_str(),
+                 refl.vertex.size(), params.va.size());
+        return;
+    }
+    for (const auto & kv : refl.vertex) {
+        auto location = kv.first;
+        auto iter     = std::find_if(params.va.begin(), params.va.end(), [location](const auto & a) { return a.location == location; });
+        if (iter == params.va.end()) {
+            RVI_LOGE("Failed to create graphics pipeline (%s): vertex input stage requires attribute at location %u, but it is not provided.",
+                     params.name.c_str(), location);
+            return;
+        }
+        const auto & attribute = *iter;
+        auto         vbi       = std::find_if(params.vb.begin(), params.vb.end(), [attribute](const auto & b) { return b.binding == attribute.binding; });
+        if (vbi == params.vb.end()) {
+            RVI_LOGE("Failed to create graphics pipeline (%s): vertex input stage requires vertex buffer #%u, but it is not provided.", params.name.c_str(),
+                     attribute.binding);
+            return;
+        }
+    }
     auto vertex = vk::PipelineVertexInputStateCreateInfo().setVertexAttributeDescriptions(params.va).setVertexBindingDescriptions(params.vb);
 
     // setup viewport and scissor states.
@@ -2030,6 +2100,8 @@ GraphicsPipeline::GraphicsPipeline(const ConstructParameters & params): Pipeline
 }
 
 void GraphicsPipeline::cmdDraw(vk::CommandBuffer cb, const DrawParameters & dp) {
+    if (!_impl->handle) return;
+
     cb.bindPipeline(vk::PipelineBindPoint::eGraphics, _impl->handle);
 
     // bind vertex buffers
@@ -2039,7 +2111,7 @@ void GraphicsPipeline::cmdDraw(vk::CommandBuffer cb, const DrawParameters & dp) 
         vk::DeviceSize offsets[16];
         for (size_t i = 0; i < dp.vertexBuffers.size(); ++i) {
             const auto & view = dp.vertexBuffers.data()[i];
-            RVI_REQUIRE(!view.buffer, "Empty vertex buffer is not allowed.");
+            RVI_REQUIRE(view.buffer, "Empty vertex buffer is not allowed.");
             buffers[i] = view.buffer;
             offsets[i] = view.offset;
             // TODO: validate vertex buffer size on debug build.
@@ -2521,7 +2593,10 @@ private:
 // ---------------------------------------------------------------------------------------------------------------------
 //
 Swapchain::Swapchain(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this, cp); }
-Swapchain::~Swapchain() { delete _impl; }
+Swapchain::~Swapchain() {
+    delete _impl;
+    _impl = nullptr;
+}
 auto Swapchain::renderPass() const -> const RenderPass & { return _impl->renderPass(); }
 void Swapchain::cmdBeginBuiltInRenderPass(vk::CommandBuffer cb, const BeginRenderPassParameters & bp) { return _impl->cmdBeginBuiltInRenderPass(cb, bp); }
 void Swapchain::cmdEndBuiltInRenderPass(vk::CommandBuffer cb) { return _impl->cmdEndBuiltInRenderPass(cb); }

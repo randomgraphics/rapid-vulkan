@@ -1,7 +1,8 @@
 #include "../3rd-party/catch2/catch.hpp"
 #include "test-instance.h"
-#include "shader/clear-screen.vert.spv.h"
-#include "shader/clear-screen.frag.spv.h"
+#include "shader/full-screen.vert.spv.h"
+#include "shader/passthrough-2d.vert.spv.h"
+#include "shader/blue-color.frag.spv.h"
 #include "rdc.h"
 
 TEST_CASE("clear-screen") {
@@ -13,8 +14,8 @@ TEST_CASE("clear-screen") {
     auto color  = Image(Image::ConstructParameters {{"color"}, gi}.set2D(w, h).renderTarget());
     auto pass   = RenderPass(RenderPass::ConstructParameters {{"clear-screen"}, gi}.simple({color.desc().format}));
     auto fb     = Framebuffer(Framebuffer::ConstructParameters {{"clear-screen"}, gi, pass}.addImage(color));
-    auto vs     = Shader(Shader::ConstructParameters {{"clear-screen-vs"}}.setGi(gi).setSpirv(clear_screen_vert));
-    auto fs     = Shader(Shader::ConstructParameters {{"clear-screen-fs"}, gi}.setSpirv(clear_screen_frag));
+    auto vs     = Shader(Shader::ConstructParameters {{"clear-screen-vs"}}.setGi(gi).setSpirv(full_screen_vert));
+    auto fs     = Shader(Shader::ConstructParameters {{"clear-screen-fs"}, gi}.setSpirv(blue_color_frag));
     auto q      = CommandQueue({{"main"}, gi, device->graphics()->family(), device->graphics()->index()});
 
     // create the graphics pipeline
@@ -57,3 +58,32 @@ TEST_CASE("clear-screen") {
         rdc.end();
     }
 }
+
+// TEST_CASE("vertex-buffer") {
+//     using namespace rapid_vulkan;
+//     auto device = TestVulkanInstance::device.get();
+//     auto gi     = device->gi();
+//     auto w      = uint32_t(128);
+//     auto h      = uint32_t(72);
+//     auto sw     = Swapchain(Swapchain::ConstructParameters {{"vertex-buffer-test"}}.setDevice(*device).set2D(w, h));
+//     auto vs     = Shader(Shader::ConstructParameters {{"vertex-buffer-test"}}.setGi(gi).setSpirv(passthrough_2d_vert));
+//     auto fs     = Shader(Shader::ConstructParameters {{"vertex-buffer-test"}, gi}.setSpirv(blue_color_frag));
+//     auto p      = GraphicsPipeline(GraphicsPipeline::ConstructParameters {{"vertex-buffer-test"}}.setRenderPass(sw.renderPass()).setVS(&vs).setFS(&fs))
+//                  .viewports.push_back(vk::Viewport(0.f, 0.f, (float) w, (float) h, 0.f, 1.f))
+//                  .scissors.push_back(vk::Rect2D({0, 0}, {w, h}))
+//                  .addVertexAttribute(0, 0, vk::Format::eR32G32Sfloat)
+//                  .addVertexBuffer(2 * sizeof(float));
+//     auto vb     = Buffer(Buffer::ConstructParameters {{"vertex-buffer-test"}, gi}.setVertex(2 * sizeof(float)).setVertex());
+
+//     // set content of vertex buffer to a triangle that covers the lower left half of the screen.
+//     vb.setContents({-1.f, -1.f, 1.f, -1.f, -1.f, 1.f});
+
+//     // render the triangle
+//     sw.cmdBeginBuiltInRenderPass(c, Swapchain::BeginRenderPassParameters {}.setColorF(0.0f, 1.0f, 0.0f, 1.0f)); // clear to green
+//     p.cmdDraw(c, GraphicsPipeline::DrawParameters {}.setNonIndexed(3));                                         // then draw a blue triangle.
+//     sw.cmdEndBuiltInRenderPass(c);
+//     q.submit({c, {}, {frame.imageAvailable}, {frame.renderFinished}});
+//     q.wait();
+
+//     // TODO: read content of back buffer.
+// }

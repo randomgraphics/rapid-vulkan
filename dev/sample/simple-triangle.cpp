@@ -24,6 +24,9 @@ struct GLFWInit {
         if (window) glfwDestroyWindow(window), window = nullptr;
         glfwTerminate();
     }
+    void show() {
+        if (window) glfwShowWindow(window);
+    }
 };
 
 struct Options {
@@ -57,8 +60,7 @@ void entry(const Options & options) {
     }
     auto p = GraphicsPipeline(gcp);
 
-    // Endless render loop for this simple sample.
-    if (!options.headless) glfwShowWindow(glfw.window);
+    glfw.show();
     for (;;) {
         if (options.headless) {
             if (sw.currentFrame().index > 10) break; // render 10 frames in headless mode.
@@ -75,7 +77,7 @@ void entry(const Options & options) {
         q.submit({c, {}, {frame.imageAvailable}, {frame.renderFinished}});
         sw.present({});
     }
-    device.waitIdle();
+    device.waitIdle(); // don't forget to wait for the device to be idle before destroying vulkan objects.
 }
 
 } // namespace simple_triangle
