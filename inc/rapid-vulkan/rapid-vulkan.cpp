@@ -1244,6 +1244,53 @@ Shader::~Shader() { _gi->safeDestroy(_handle); }
 // Render Pass
 // *********************************************************************************************************************
 
+class RenderPass : public Root {
+public:
+    struct SubpassParameters {
+        std::vector<vk::AttachmentReference>   colors;
+        std::optional<vk::AttachmentReference> depth;
+        std::vector<vk::AttachmentReference>   inputs;
+        vk::SubpassDescriptionFlags            flags = {};
+    };
+
+    struct ConstructParameters : public Root::ConstructParameters {
+        const GlobalInfo *                     gi    = nullptr;
+        vk::RenderPassCreateFlags              flags = {};
+        std::vector<vk::AttachmentDescription> attachments {};
+        std::vector<SubpassParameters>         subpasses {};
+        std::vector<vk::SubpassDependency>     dependencies {};
+
+        /// @brief Setup a simple single pass render pass.
+        ConstructParameters & simple(vk::ArrayProxy<const vk::Format> colors, vk::Format depth = vk::Format::eUndefined, bool clear = true, bool store = true);
+    };
+
+    RenderPass(const ConstructParameters &);
+
+    ~RenderPass();
+
+    void cmdBegin(vk::CommandBuffer, vk::RenderPassBeginInfo) const;
+
+    void cmdNext(vk::CommandBuffer) const;
+
+    void cmdEnd(vk::CommandBuffer) const;
+
+    vk::RenderPass handle() const { return _handle; }
+
+    operator vk::RenderPass() const { return _handle; }
+
+    operator VkRenderPass() const { return _handle; }
+
+protected:
+    void onNameChanged(const std::string &) override;
+
+private:
+    const GlobalInfo * _gi     = nullptr;
+    vk::RenderPass     _handle = {};
+#if RAPID_VULKAN_ENABLE_DEBUG_BUILD
+    ConstructParameters _cp; // keep construct parameters around for debug purpose only.
+#endif
+};
+
 RenderPass::ConstructParameters & RenderPass::ConstructParameters::simple(vk::ArrayProxy<const vk::Format> colors, vk::Format depth, bool clear, bool store) {
     // initialize attachment array
     for (auto c : colors) {
@@ -1324,6 +1371,54 @@ void RenderPass::onNameChanged(const std::string &) {
 // *********************************************************************************************************************
 // Framebuffer
 // *********************************************************************************************************************
+
+class Framebuffer : public Root {
+public:
+    struct ConstructParameters : public Root::ConstructParameters {
+        const GlobalInfo *         gi   = nullptr;
+        vk::RenderPass             pass = {};
+        std::vector<vk::ImageView> attachments {};
+        size_t                     width  = 1;
+        size_t                     height = 1;
+        size_t                     layers = 1;
+
+        ConstructParameters & setRenderPass(vk::RenderPass v) {
+            pass = v;
+            return *this;
+        }
+
+        ConstructParameters & addImage(Image & image);
+
+        ConstructParameters & addImageView(vk::ImageView view) {
+            attachments.emplace_back(view);
+            return *this;
+        }
+
+        ConstructParameters & setExtent(size_t w, size_t h, size_t l = 1) {
+            width  = w;
+            height = h;
+            layers = l;
+            return *this;
+        }
+    };
+
+    Framebuffer(const ConstructParameters &);
+
+    ~Framebuffer();
+
+    vk::Framebuffer handle() const { return _handle; }
+
+    operator vk::Framebuffer() const { return _handle; }
+
+    operator VkFramebuffer() const { return _handle; }
+
+protected:
+    void onNameChanged(const std::string &) override;
+
+private:
+    const GlobalInfo * _gi     = nullptr;
+    vk::Framebuffer    _handle = {};
+};
 
 Framebuffer::ConstructParameters & Framebuffer::ConstructParameters::addImage(Image & image) {
     const auto & d = image.desc();
@@ -1638,6 +1733,55 @@ auto ArgumentPack::find(DescriptorIdentifier id) const -> const Argument * { ret
 // Pipeline Reflection
 // *********************************************************************************************************************
 
+/// A utility class that describes parameter layout of a pipeline object.
+struct PipelineReflection {
+    /// @brief Represents one descriptor or descriptor array.
+    struct Descriptor {
+        /// @brief names of the shader variable.
+        /// The whole structure is considered empty/invalid, if names set is empty.
+        std::set<std::string> names;
+
+        /// @brief The descriptor binding information.
+        /// If the descriptor count is empty, then the whole structure is considered empty/invalid.
+        vk::DescriptorSetLayoutBinding binding;
+
+        bool empty() const { return names.empty() || 0 == binding.descriptorCount; }
+    };
+
+    /// Collection of descriptors in one set.
+    typedef std::vector<Descriptor> DescriptorSet;
+
+    /// Collection of descriptor sets indexed by the set index.
+    typedef std::vector<DescriptorSet> DescriptorLayout;
+
+    struct Constant {
+        uint32_t begin = (uint32_t) -1;
+        uint32_t end   = 0;
+        // TODO: add push constant name information.
+
+        bool empty() const { return begin >= end; }
+    };
+
+    /// Collection of push constants for each shader stage.
+    typedef std::map<vk::ShaderStageFlagBits, Constant> ConstantLayout;
+
+    /// Properties of vertex shader input.
+    struct VertexShaderInput {
+        vk::Format  format = vk::Format::eUndefined;
+        std::string shaderVariable; ///< name of the shader variable.
+    };
+
+    /// Collection of vertex shader input. Key is input location.
+    typedef std::map<uint32_t, VertexShaderInput> VertexLayout;
+
+    std::string      name; ///< name of the program that this reflect is from. this field is for logging and debugging.
+    DescriptorLayout descriptors;
+    ConstantLayout   constants;
+    VertexLayout     vertex;
+
+    PipelineReflection() {}
+};
+
 template<typename T, typename FUNC, typename... ARGS>
 static std::vector<T *> enumerateShaderVariables(SpvReflectShaderModule & module, FUNC func, ARGS... args) {
     uint32_t count  = 0;
@@ -1791,6 +1935,35 @@ static PipelineReflection reflectShaders(const std::string & pipelineName, vk::A
 // *********************************************************************************************************************
 // PipelineLayout
 // *********************************************************************************************************************
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// A wrapper class for VkPipelineLayout
+class PipelineLayout : public Root {
+public:
+    struct ConstructParameters : public Root::ConstructParameters {
+        vk::ArrayProxy<const Shader * const> shaders;
+    };
+
+    PipelineLayout(const ConstructParameters &);
+
+    ~PipelineLayout() override;
+
+    /// @brief Returns the underlying Vulkan handle.
+    vk::PipelineLayout handle() const;
+
+    const PipelineReflection & reflection() const;
+
+    /// @brief Bind argument pack to the command buffer
+    /// After this method succeeded (returns true), it is ready to bind issue draw/dispatch commands.
+    bool cmdBind(vk::CommandBuffer, vk::PipelineBindPoint, const ArgumentPack &) const;
+
+protected:
+    void onNameChanged(const std::string &) override;
+
+private:
+    class Impl;
+    Impl * _impl = nullptr;
+};
 
 class PipelineLayout::Impl {
 public:
@@ -2021,7 +2194,6 @@ Pipeline::~Pipeline() {
     delete _impl;
     _impl = nullptr;
 }
-auto Pipeline::layout() const -> const PipelineLayout & { return _impl->layout(); }
 void Pipeline::cmdBind(vk::CommandBuffer cb, const ArgumentPack & ap) const { return _impl->cmdBind(cb, ap); }
 
 // *********************************************************************************************************************
@@ -2037,7 +2209,7 @@ GraphicsPipeline::GraphicsPipeline(const ConstructParameters & params): Pipeline
     if (params.fs) shaderStages.push_back({{}, vk::ShaderStageFlagBits::eFragment, params.fs->handle(), params.fs->entry().c_str()});
 
     // setup vertex input stage
-    const auto & refl = layout().reflection();
+    const auto & refl = _impl->layout().reflection();
     if (refl.vertex.size() != params.va.size()) {
         RVI_LOGE("Failed to create graphics pipeline (%s): vertex input stage requires %zu attributes, but only %zu are provided.", params.name.c_str(),
                  refl.vertex.size(), params.va.size());
@@ -2098,8 +2270,8 @@ GraphicsPipeline::GraphicsPipeline(const ConstructParameters & params): Pipeline
 
     // setup the create info
     auto ci = vk::GraphicsPipelineCreateInfo({}, (uint32_t) shaderStages.size(), shaderStages.data(), &vertex, &params.ia, &params.tess, &viewport,
-                                             &params.rast, &params.msaa, &params.depth, &blend, &dynamicCI, layout().handle(), params.pass, params.subpass,
-                                             params.baseHandle, params.baseIndex);
+                                             &params.rast, &params.msaa, &params.depth, &blend, &dynamicCI, _impl->layout().handle(), params.pass,
+                                             params.subpass, params.baseHandle, params.baseIndex);
 
     // create the shader.
     _impl->handle    = gi->device.createGraphicsPipeline(nullptr, ci, gi->allocator).value;
@@ -2143,7 +2315,7 @@ void GraphicsPipeline::cmdDraw(vk::CommandBuffer cb, const DrawParameters & dp) 
 ComputePipeline::ComputePipeline(const ConstructParameters & params): Pipeline(params.name, {params.cs}) {
     vk::ComputePipelineCreateInfo ci;
     ci.setStage({{}, vk::ShaderStageFlagBits::eCompute, params.cs->handle(), params.cs->entry().c_str()});
-    ci.setLayout(layout().handle());
+    ci.setLayout(_impl->layout().handle());
     auto gi          = params.cs->gi();
     _impl->handle    = gi->device.createComputePipeline(nullptr, ci, gi->allocator).value;
     _impl->bindPoint = vk::PipelineBindPoint::eCompute;
@@ -2218,8 +2390,8 @@ public:
         // cb.setScissorWithCount(1, &scissor); // FIXME: this line crashes on Ubunut. Reason unknown.
         cb.setScissor(0, 1, &scissor);
 
-        std::array cv = {vk::ClearValue().setColor(params.color), vk::ClearValue().setDepthStencil(params.depth)};
-        _renderPass->cmdBegin(cb, vk::RenderPassBeginInfo {{}, bb->fb->handle(), vk::Rect2D({0, 0}, {extent.width, extent.height})}.setClearValues(cv));
+        std::array cv = {vk::ClearValue().setColor(params.clearColor), vk::ClearValue().setDepthStencil(params.clearDepth)};
+        _renderPass->cmdBegin(cb, vk::RenderPassBeginInfo {{}, bb->framebuffer, vk::Rect2D({0, 0}, {extent.width, extent.height})}.setClearValues(cv));
     }
 
     void cmdEndBuiltInRenderPass(vk::CommandBuffer cb) {
@@ -2287,6 +2459,10 @@ private:
         Ref<Image>        headlessImage; ///< the image that is used as the backbuffer for headless swapchain.
     };
 
+    struct BackbufferImpl : public Backbuffer {
+        Ref<Framebuffer> fb {};
+    };
+
 private:
     ConstructParameters _cp;
     Ref<RenderPass>     _renderPass;
@@ -2295,10 +2471,10 @@ private:
     Ref<CommandQueue>   _graphicsQueue;
 
     // the following are data members that will be cleared and recreated when swapchain is recreated.
-    std::vector<FrameImpl>  _frames;
-    vk::SwapchainKHR        _handle;
-    std::vector<Backbuffer> _backbuffers;
-    Ref<Image>              _depthBuffer;
+    std::vector<FrameImpl>      _frames;
+    vk::SwapchainKHR            _handle;
+    std::vector<BackbufferImpl> _backbuffers;
+    Ref<Image>                  _depthBuffer;
 
     inline static constexpr BackbufferStatus DESIRED_PRESENT_STATUS = PresentParameters().backbufferStatus;
 
@@ -2475,6 +2651,7 @@ private:
                 *_renderPass);
             if (_depthBuffer) fbcp.addImageView(_depthBuffer->getView({}));
             bb.fb.reset(new Framebuffer(fbcp));
+            bb.framebuffer = bb.fb->handle();
 
             // transfer backbuffers to right layout.
             Barrier()
@@ -2563,6 +2740,7 @@ private:
                 *_renderPass);
             if (_depthBuffer) fbcp.addImageView(_depthBuffer->getView({}));
             bb.fb.reset(new Framebuffer(fbcp));
+            bb.framebuffer = bb.fb->handle();
         }
 
         // execute the command buffer to update image layout
@@ -2603,7 +2781,7 @@ Swapchain::~Swapchain() {
     delete _impl;
     _impl = nullptr;
 }
-auto Swapchain::renderPass() const -> const RenderPass & { return _impl->renderPass(); }
+auto Swapchain::renderPass() const -> vk::RenderPass { return _impl->renderPass().handle(); }
 auto Swapchain::graphics() const -> CommandQueue & { return _impl->graphics(); }
 void Swapchain::cmdBeginBuiltInRenderPass(vk::CommandBuffer cb, const BeginRenderPassParameters & bp) { return _impl->cmdBeginBuiltInRenderPass(cb, bp); }
 void Swapchain::cmdEndBuiltInRenderPass(vk::CommandBuffer cb) { return _impl->cmdEndBuiltInRenderPass(cb); }
