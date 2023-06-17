@@ -59,31 +59,46 @@ TEST_CASE("clear-screen") {
     }
 }
 
-// TEST_CASE("vertex-buffer") {
-//     using namespace rapid_vulkan;
-//     auto device = TestVulkanInstance::device.get();
-//     auto gi     = device->gi();
-//     auto w      = uint32_t(128);
-//     auto h      = uint32_t(72);
-//     auto sw     = Swapchain(Swapchain::ConstructParameters {{"vertex-buffer-test"}}.setDevice(*device).set2D(w, h));
-//     auto vs     = Shader(Shader::ConstructParameters {{"vertex-buffer-test"}}.setGi(gi).setSpirv(passthrough_2d_vert));
-//     auto fs     = Shader(Shader::ConstructParameters {{"vertex-buffer-test"}, gi}.setSpirv(blue_color_frag));
-//     auto p      = GraphicsPipeline(GraphicsPipeline::ConstructParameters {{"vertex-buffer-test"}}.setRenderPass(sw.renderPass()).setVS(&vs).setFS(&fs))
-//                  .viewports.push_back(vk::Viewport(0.f, 0.f, (float) w, (float) h, 0.f, 1.f))
-//                  .scissors.push_back(vk::Rect2D({0, 0}, {w, h}))
-//                  .addVertexAttribute(0, 0, vk::Format::eR32G32Sfloat)
-//                  .addVertexBuffer(2 * sizeof(float));
-//     auto vb     = Buffer(Buffer::ConstructParameters {{"vertex-buffer-test"}, gi}.setVertex(2 * sizeof(float)).setVertex());
+TEST_CASE("vertex-buffer") {
+    using namespace rapid_vulkan;
+    auto   device = TestVulkanInstance::device.get();
+    auto   gi     = device->gi();
+    auto   w      = uint32_t(128);
+    auto   h      = uint32_t(72);
+    auto   sw     = Swapchain(Swapchain::ConstructParameters {{"vertex-buffer-test"}}.setDevice(*device).setDimensions(w, h));
+    auto & q      = sw.graphics();
+    auto   vs     = Shader(Shader::ConstructParameters {{"vertex-buffer-test"}}.setGi(gi).setSpirv(passthrough_2d_vert));
+    auto   fs     = Shader(Shader::ConstructParameters {{"vertex-buffer-test"}, gi}.setSpirv(blue_color_frag));
+    auto   p      = GraphicsPipeline(GraphicsPipeline::ConstructParameters {{"vertex-buffer-test"}}
+                                         .setRenderPass(sw.renderPass())
+                                         .setVS(&vs)
+                                         .setFS(&fs)
+                                         .addStaticViewportAndScissor(0, 0, w, h)
+                                         .addVertexAttribute(0, 0, vk::Format::eR32G32Sfloat)
+                                         .addVertexBuffer(2 * sizeof(float)));
+    auto   vb     = Buffer(Buffer::ConstructParameters {{"vertex-buffer-test"}, gi}.setSize(6 * sizeof(float)).setVertex());
 
-//     // set content of vertex buffer to a triangle that covers the lower left half of the screen.
-//     vb.setContents({-1.f, -1.f, 1.f, -1.f, -1.f, 1.f});
+    // set content of vertex buffer to a triangle that covers the lower left half of the screen.
+    vb.setContent(Buffer::SetContentParameters {}.setQueue(q).setData<float>({-1.f, 1.f, 1.f, 1.f, -1.f, -1.f}));
 
-//     // render the triangle
-//     sw.cmdBeginBuiltInRenderPass(c, Swapchain::BeginRenderPassParameters {}.setColorF(0.0f, 1.0f, 0.0f, 1.0f)); // clear to green
-//     p.cmdDraw(c, GraphicsPipeline::DrawParameters {}.setNonIndexed(3));                                         // then draw a blue triangle.
-//     sw.cmdEndBuiltInRenderPass(c);
-//     q.submit({c, {}, {frame.imageAvailable}, {frame.renderFinished}});
-//     q.wait();
+    // render the triangle
+    RenderDocCapture rdc;
+    rdc.begin("vertex-buffer-test");
+    auto f = sw.currentFrame();
+    auto c = q.begin("vertex-buffer-test");
+    sw.cmdBeginBuiltInRenderPass(c, Swapchain::BeginRenderPassParameters {}.setColorF(0.0f, 1.0f, 0.0f, 1.0f)); // clear to green
+    p.cmdDraw(c, GraphicsPipeline::DrawParameters {}.setNonIndexed(3).setVertexBuffers({{vb}}));                // then draw a blue triangle.
+    sw.cmdEndBuiltInRenderPass(c);
+    q.submit({c, {}, {f.imageAvailable}, {f.renderFinished}});
+    q.wait();
+    rdc.end();
 
-//     // TODO: read content of back buffer.
-// }
+    // read content of back buffer.
+    auto pixels = f.backbuffer->image->readContent({});
+
+    // Since we clear the whole screen to green, then draw a blue triangle to cover the lower left half of the screen,
+    // then pixel (1, 0) should be green, and pixel (0, 1) should be blue.
+    auto ptr = (const uint32_t *) pixels.storage.data();
+    CHECK(0xFF00FF00 == ptr[1]);
+    CHECK(0xFFFF0000 == ptr[w]);
+}
