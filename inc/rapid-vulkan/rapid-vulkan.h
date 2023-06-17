@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identify the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 12
+#define RAPID_VULKAN_HEADER_REVISION 13
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -1386,55 +1386,6 @@ private:
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// VkFramebuffer wrapper class
-class RenderPass : public Root {
-public:
-    struct SubpassParameters {
-        std::vector<vk::AttachmentReference>   colors;
-        std::optional<vk::AttachmentReference> depth;
-        std::vector<vk::AttachmentReference>   inputs;
-        vk::SubpassDescriptionFlags            flags = {};
-    };
-
-    struct ConstructParameters : public Root::ConstructParameters {
-        const GlobalInfo *                     gi    = nullptr;
-        vk::RenderPassCreateFlags              flags = {};
-        std::vector<vk::AttachmentDescription> attachments {};
-        std::vector<SubpassParameters>         subpasses {};
-        std::vector<vk::SubpassDependency>     dependencies {};
-
-        /// @brief Setup a simple single pass render pass.
-        ConstructParameters & simple(vk::ArrayProxy<const vk::Format> colors, vk::Format depth = vk::Format::eUndefined, bool clear = true, bool store = true);
-    };
-
-    RenderPass(const ConstructParameters &);
-
-    ~RenderPass();
-
-    void cmdBegin(vk::CommandBuffer, vk::RenderPassBeginInfo) const;
-
-    void cmdNext(vk::CommandBuffer) const;
-
-    void cmdEnd(vk::CommandBuffer) const;
-
-    vk::RenderPass handle() const { return _handle; }
-
-    operator vk::RenderPass() const { return _handle; }
-
-    operator VkRenderPass() const { return _handle; }
-
-protected:
-    void onNameChanged(const std::string &) override;
-
-private:
-    const GlobalInfo * _gi     = nullptr;
-    vk::RenderPass     _handle = {};
-#if RAPID_VULKAN_ENABLE_DEBUG_BUILD
-    ConstructParameters _cp; // keep construct parameters around for debug purpose only.
-#endif
-};
-
-// ---------------------------------------------------------------------------------------------------------------------
-/// VkFramebuffer wrapper class
 class Framebuffer : public Root {
 public:
     struct ConstructParameters : public Root::ConstructParameters {
@@ -1617,91 +1568,10 @@ private:
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// A utility class that describes parameter layout of a pipeline object.
-struct PipelineReflection {
-    /// @brief Represents one descriptor or descriptor array.
-    struct Descriptor {
-        /// @brief names of the shader variable.
-        /// The whole structure is considered empty/invalid, if names set is empty.
-        std::set<std::string> names;
-
-        /// @brief The descriptor binding information.
-        /// If the descriptor count is empty, then the whole structure is considered empty/invalid.
-        vk::DescriptorSetLayoutBinding binding;
-
-        bool empty() const { return names.empty() || 0 == binding.descriptorCount; }
-    };
-
-    /// Collection of descriptors in one set.
-    typedef std::vector<Descriptor> DescriptorSet;
-
-    /// Collection of descriptor sets indexed by the set index.
-    typedef std::vector<DescriptorSet> DescriptorLayout;
-
-    struct Constant {
-        uint32_t begin = (uint32_t) -1;
-        uint32_t end   = 0;
-        // TODO: add push constant name information.
-
-        bool empty() const { return begin >= end; }
-    };
-
-    /// Collection of push constants for each shader stage.
-    typedef std::map<vk::ShaderStageFlagBits, Constant> ConstantLayout;
-
-    /// Properties of vertex shader input.
-    struct VertexShaderInput {
-        vk::Format  format = vk::Format::eUndefined;
-        std::string shaderVariable; ///< name of the shader variable.
-    };
-
-    /// Collection of vertex shader input. Key is input location.
-    typedef std::map<uint32_t, VertexShaderInput> VertexLayout;
-
-    std::string      name; ///< name of the program that this reflect is from. this field is for logging and debugging.
-    DescriptorLayout descriptors;
-    ConstantLayout   constants;
-    VertexLayout     vertex;
-
-    PipelineReflection() {}
-};
-
-// ---------------------------------------------------------------------------------------------------------------------
-/// A wrapper class for VkPipelineLayout
-class PipelineLayout : public Root {
-public:
-    struct ConstructParameters : public Root::ConstructParameters {
-        vk::ArrayProxy<const Shader * const> shaders;
-    };
-
-    PipelineLayout(const ConstructParameters &);
-
-    ~PipelineLayout() override;
-
-    /// @brief Returns the underlying Vulkan handle.
-    vk::PipelineLayout handle() const;
-
-    const PipelineReflection & reflection() const;
-
-    /// @brief Bind argument pack to the command buffer
-    /// After this method succeeded (returns true), it is ready to bind issue draw/dispatch commands.
-    bool cmdBind(vk::CommandBuffer, vk::PipelineBindPoint, const ArgumentPack &) const;
-
-protected:
-    void onNameChanged(const std::string &) override;
-
-private:
-    class Impl;
-    Impl * _impl = nullptr;
-};
-
-// ---------------------------------------------------------------------------------------------------------------------
 /// A wrapper class for VkPipeline
 class Pipeline : public Root {
 public:
     ~Pipeline() override;
-
-    const PipelineLayout & layout() const;
 
     void cmdBind(vk::CommandBuffer cb, const ArgumentPack & ap) const;
 
@@ -2047,10 +1917,10 @@ public:
     /// @brief Parameters to begin the built-in render pass of the swapchain.
     struct BeginRenderPassParameters {
         /// @brief Specify the clear value for color buffer.
-        vk::ClearColorValue color = vk::ClearColorValue(std::array<float, 4> {0.0f, 0.0f, 0.0f, 1.0f});
+        vk::ClearColorValue clearColor = vk::ClearColorValue(std::array<float, 4> {0.0f, 0.0f, 0.0f, 1.0f});
 
         /// @brief Specify the clear value for depth and stencil buffer.
-        vk::ClearDepthStencilValue depth = vk::ClearDepthStencilValue(1.0f, 0);
+        vk::ClearDepthStencilValue clearDepth = vk::ClearDepthStencilValue(1.0f, 0);
 
         /// @brief Specify the current status of the back buffer image.
         /// This is for the cmdBeginRenderPass() method insert proper barriers to transition the image to the desired layout for the render pass.
@@ -2058,13 +1928,14 @@ public:
         /// When built-in render pass ends, the back buffer image will be automatically transitioned into status suitable for present().
         BackbufferStatus backbufferStatus = {vk::ImageLayout::ePresentSrcKHR, vk::AccessFlagBits::eMemoryRead, vk::PipelineStageFlagBits::eBottomOfPipe};
 
-        BeginRenderPassParameters & setColorF(float r, float g, float b, float a = 1.0f) {
-            color = vk::ClearColorValue(std::array<float, 4> {r, g, b, a});
+        BeginRenderPassParameters & setClearColorF(vk::ArrayProxy<const float> color) {
+            clearColor = vk::ClearColorValue(color.size() > 0 ? color.data()[0] : 0.f, color.size() > 1 ? color.data()[1] : 0.f,
+                                             color.size() > 2 ? color.data()[2] : 0.f, color.size() > 3 ? color.data()[3] : 1.f);
             return *this;
         }
 
-        BeginRenderPassParameters & setDepth(float depth_, uint32_t stencil_ = 0) {
-            this->depth = vk::ClearDepthStencilValue(depth_, stencil_);
+        BeginRenderPassParameters & setClearDepth(float depth_, uint32_t stencil_ = 0) {
+            clearDepth = vk::ClearDepthStencilValue(depth_, stencil_);
             return *this;
         }
     };
@@ -2081,7 +1952,7 @@ public:
 
     ~Swapchain();
 
-    const RenderPass & renderPass() const;
+    vk::RenderPass renderPass() const;
 
     CommandQueue & graphics() const;
 

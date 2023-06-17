@@ -11,15 +11,13 @@ TEST_CASE("clear-screen") {
     auto gi     = device->gi();
     auto w      = uint32_t(128);
     auto h      = uint32_t(72);
-    auto color  = Image(Image::ConstructParameters {{"color"}, gi}.set2D(w, h).renderTarget());
-    auto pass   = RenderPass(RenderPass::ConstructParameters {{"clear-screen"}, gi}.simple({color.desc().format}));
-    auto fb     = Framebuffer(Framebuffer::ConstructParameters {{"clear-screen"}, gi, pass}.addImage(color));
+    auto sw     = Swapchain(Swapchain::ConstructParameters {{"vertex-buffer-test"}}.setDevice(*device).setDimensions(w, h));
     auto vs     = Shader(Shader::ConstructParameters {{"clear-screen-vs"}}.setGi(gi).setSpirv(full_screen_vert));
     auto fs     = Shader(Shader::ConstructParameters {{"clear-screen-fs"}, gi}.setSpirv(blue_color_frag));
     auto q      = CommandQueue({{"main"}, gi, device->graphics()->family(), device->graphics()->index()});
 
     // create the graphics pipeline
-    auto gcp = GraphicsPipeline::ConstructParameters {{"clear-screen"}}.setRenderPass(pass).setVS(&vs).setFS(&fs);
+    auto gcp = GraphicsPipeline::ConstructParameters {{"clear-screen"}}.setRenderPass(sw.renderPass()).setVS(&vs).setFS(&fs);
     gcp.viewports.push_back(vk::Viewport(0.f, 0.f, (float) w, (float) h, 0.f, 1.f));
     gcp.scissors.push_back(vk::Rect2D({0, 0}, {w, h}));
     auto p = GraphicsPipeline(gcp);
@@ -27,14 +25,14 @@ TEST_CASE("clear-screen") {
     auto render = [&](std::array<float, 4> clearColor, bool drawTriangle) {
         auto c = q.begin("clear-screen");
         // clear the screen to green
-        Barrier()
-            .i(color, vk::AccessFlagBits::eNone, vk::AccessFlagBits::eColorAttachmentWrite, vk::ImageLayout::eUndefined,
-               vk::ImageLayout::eColorAttachmentOptimal, vk::ImageAspectFlagBits::eColor)
-            .cmdWrite(c);
-        std::array cv = {vk::ClearValue().setColor(vk::ClearColorValue(clearColor)), vk::ClearValue().setDepthStencil({1, 0})};
-        pass.cmdBegin(c, vk::RenderPassBeginInfo {pass, fb, vk::Rect2D({0, 0}, {w, h})}.setClearValues(cv));
+        // Barrier()
+        //     .i(color, vk::AccessFlagBits::eNone, vk::AccessFlagBits::eColorAttachmentWrite, vk::ImageLayout::eUndefined,
+        //        vk::ImageLayout::eColorAttachmentOptimal, vk::ImageAspectFlagBits::eColor)
+        //     .cmdWrite(c);
+        auto bp = Swapchain::BeginRenderPassParameters {}.setClearColorF(clearColor).setClearDepth(1.f, 0);
+        sw.cmdBeginBuiltInRenderPass(c, bp);
         if (drawTriangle) p.cmdDraw(c, GraphicsPipeline::DrawParameters {}.setNonIndexed(3)); // draw a full screen blue triangle.
-        pass.cmdEnd(c);
+        sw.cmdEndBuiltInRenderPass(c);
         q.submit({c});
         q.wait();
     };
@@ -42,7 +40,7 @@ TEST_CASE("clear-screen") {
     // case 1. clear only.
     SECTION("clear-only") {
         render(std::array<float, 4> {0.f, 1.f, 0.f, 1.f}, false); // clear to green
-        auto pixels = color.readContent({});
+        auto pixels = sw.currentFrame().backbuffer->image->readContent({});
         REQUIRE(pixels.storage.size() >= 4);
         CHECK(0xFF00FF00 == *(const uint32_t *) pixels.storage.data()); // verify that the screen is green.
     }
@@ -52,7 +50,7 @@ TEST_CASE("clear-screen") {
         RenderDocCapture rdc;
         rdc.begin("clear-screen-section-2");
         render(std::array<float, 4> {1.f, 0.f, 0.f, 1.f}, true); // clear to red, then draw a full screen blue triangle.
-        auto pixels = color.readContent({});
+        auto pixels = sw.currentFrame().backbuffer->image->readContent({});
         REQUIRE(pixels.storage.size() >= 4);
         CHECK(0xFFFF0000 == *(const uint32_t *) pixels.storage.data());
         rdc.end();
@@ -86,8 +84,8 @@ TEST_CASE("vertex-buffer") {
     rdc.begin("vertex-buffer-test");
     auto f = sw.currentFrame();
     auto c = q.begin("vertex-buffer-test");
-    sw.cmdBeginBuiltInRenderPass(c, Swapchain::BeginRenderPassParameters {}.setColorF(0.0f, 1.0f, 0.0f, 1.0f)); // clear to green
-    p.cmdDraw(c, GraphicsPipeline::DrawParameters {}.setNonIndexed(3).setVertexBuffers({{vb}}));                // then draw a blue triangle.
+    sw.cmdBeginBuiltInRenderPass(c, Swapchain::BeginRenderPassParameters {}.setClearColorF({0.0f, 1.0f, 0.0f, 1.0f})); // clear to green
+    p.cmdDraw(c, GraphicsPipeline::DrawParameters {}.setNonIndexed(3).setVertexBuffers({{vb}}));                       // then draw a blue triangle.
     sw.cmdEndBuiltInRenderPass(c);
     q.submit({c, {}, {f.imageAvailable}, {f.renderFinished}});
     q.wait();

@@ -71,8 +71,8 @@ void entry(const Options & options) {
         }
         auto & frame = sw.currentFrame();
         auto   c     = q.begin("simple-triangle");
-        sw.cmdBeginBuiltInRenderPass(c, Swapchain::BeginRenderPassParameters {}.setColorF(0.0f, 1.0f, 0.0f, 1.0f)); // clear to green
-        p.cmdDraw(c, GraphicsPipeline::DrawParameters {}.setNonIndexed(3));                                         // then draw a blue triangle.
+        sw.cmdBeginBuiltInRenderPass(c, Swapchain::BeginRenderPassParameters {}.setClearColorF({0.0f, 1.0f, 0.0f, 1.0f})); // clear to green
+        p.cmdDraw(c, GraphicsPipeline::DrawParameters {}.setNonIndexed(3));                                                // then draw a blue triangle.
         sw.cmdEndBuiltInRenderPass(c);
         q.submit({c, {}, {frame.imageAvailable}, {frame.renderFinished}});
         sw.present({});

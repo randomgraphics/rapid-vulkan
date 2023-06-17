@@ -1,8 +1,11 @@
 # P0
-- Push constant support in pipeline and argument pack
-- Sample:
-  - rotating triangle with uniform value updated once every frame.
-= Pipeline and layout cache
+- A Drawable class that contains a pipline and resources (buffers, images, constants) used by the pipeline.
+- A 3D model viewer that as a complex-enough use case of the library.
+
+# P1
+- A more powerful render pass class that combined vk::RenderPass and vk::Framebuffers together.
+  - this is not a P0 task, since Swapchain's built-in render pass can handle the most common usages already.
+- Pipeline and layout cache
 
 # Resource/Descriptor Design Choices
 
