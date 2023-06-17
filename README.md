@@ -93,7 +93,7 @@ Here is an simplified example of using these classes to issue a draw command. Se
     // create argument pack
     auto args = ArgumentPack({"name"});
     args.b({0, 0}, {buffer1}); // bind buffer 1 to set 0, binding 0
-    args.i({1, 2}, {image1, image2}); // bind image1 and image2 to set 0, binding 2
+    args.i({1, 2}, {image1, image2}); // bind image1 and image2 to set 1, binding 2
 
     // issue the draw
     ...
