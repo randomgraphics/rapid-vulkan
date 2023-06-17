@@ -880,49 +880,50 @@ struct VkFormatDesc {
 
 class Image::Impl {
 public:
-    Impl(Image & o, const ConstructParameters & cp): _owner(o), _gi(cp.gi), _cp(cp) {
+    Impl(Image & o, ConstructParameters cp): _owner(o), _gi(cp.gi) {
         RVI_REQUIRE(cp.gi);
 
         // check image format.
-        auto fd = VkFormatDesc::get(_cp.info.format);
-        if (0 == fd.sizeBytes || 0 == fd.blockW || 0 == fd.blockH) { RVI_THROW("unsupported image format %d", (int) _cp.info.format); }
+        auto fd = VkFormatDesc::get(cp.info.format);
+        if (0 == fd.sizeBytes || 0 == fd.blockW || 0 == fd.blockH) { RVI_THROW("unsupported image format %d", (int) cp.info.format); }
 
         // update image usage to include transfer source and destination.
-        _cp.info.usage |= vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst;
+        cp.info.usage |= vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst;
 
         // update mipmap level count
-        uint32_t maxLevels = (uint32_t) std::floor(std::log2((double) std::max(_cp.info.extent.width, _cp.info.extent.height))) + 1;
-        if (_cp.info.mipLevels > maxLevels) {
-            RVI_LOGW("mipmap level count %u is too large, clamped to %u", _cp.info.mipLevels, maxLevels);
-            _cp.info.mipLevels = maxLevels;
-        } else if (0 == _cp.info.mipLevels) {
-            _cp.info.mipLevels = maxLevels;
+        uint32_t maxLevels = (uint32_t) std::floor(std::log2((double) std::max(cp.info.extent.width, cp.info.extent.height))) + 1;
+        if (cp.info.mipLevels > maxLevels) {
+            RVI_LOGW("mipmap level count %u is too large, clamped to %u", cp.info.mipLevels, maxLevels);
+            cp.info.mipLevels = maxLevels;
+        } else if (0 == cp.info.mipLevels) {
+            cp.info.mipLevels = maxLevels;
         }
 
         // create image handle and memory
 #if RAPID_VULKAN_ENABLE_VMA
         if (_gi->vmaAllocator) {
             VmaAllocationCreateInfo aci {};
-            aci.requiredFlags = (VkMemoryPropertyFlags) _cp.memory;
-            RVI_VK_REQUIRE(vmaCreateImage(_gi->vmaAllocator, (const VkImageCreateInfo *) &_cp.info, &aci, (VkImage *) &_handle, &_allocation, nullptr));
+            aci.requiredFlags = (VkMemoryPropertyFlags) cp.memory;
+            RVI_VK_REQUIRE(vmaCreateImage(_gi->vmaAllocator, (const VkImageCreateInfo *) &cp.info, &aci, (VkImage *) &_handle, &_allocation, nullptr));
         } else
 #endif
         {
-            _handle = _gi->device.createImage(_cp.info, _gi->allocator);
-            _memory = allocateDeviceMemory(*_gi, _gi->device.getImageMemoryRequirements(_handle), _cp.memory, _cp.alloc);
+            _handle = _gi->device.createImage(cp.info, _gi->allocator);
+            _memory = allocateDeviceMemory(*_gi, _gi->device.getImageMemoryRequirements(_handle), cp.memory, cp.alloc);
             _gi->device.bindImageMemory(_handle, _memory, 0);
         }
 
         onNameChanged();
 
         // store image description
-        _desc.handle      = _handle;
-        _desc.type        = _cp.info.imageType;
-        _desc.format      = _cp.info.format;
-        _desc.extent      = _cp.info.extent;
-        _desc.mipLevels   = _cp.info.mipLevels;
-        _desc.arrayLayers = _cp.info.arrayLayers;
-        _desc.samples     = _cp.info.samples;
+        _desc.handle         = _handle;
+        _desc.type           = cp.info.imageType;
+        _desc.format         = cp.info.format;
+        _desc.extent         = cp.info.extent;
+        _desc.mipLevels      = cp.info.mipLevels;
+        _desc.arrayLayers    = cp.info.arrayLayers;
+        _desc.samples        = cp.info.samples;
+        _desc.cubeCompatible = !!(cp.info.flags & vk::ImageCreateFlagBits::eCubeCompatible);
 
         // // create a default image view that covers the whole image
         // auto aspect          = determineImageAspect(ci.aspect, ci.format);
@@ -936,7 +937,11 @@ public:
         // setVkObjectName(g.device, view, name);
     }
 
-    Impl(Image & o, const ImportParameters & ip): _owner(o), _gi(ip.gi) {}
+    Impl(Image & o, const ImportParameters & ip): _owner(o), _gi(ip.gi) {
+        RVI_REQUIRE(ip.gi);
+        RVI_REQUIRE(ip.desc.handle);
+        _desc = ip.desc;
+    }
 
     ~Impl() {
         for (auto & kv : _views) {
@@ -963,7 +968,7 @@ public:
         p.type             = determineViewType(p.type, p.range);
         if ((int) p.type < 0) return {};
         auto & view = _views[p];
-        if (!view) view = _gi->device.createImageView(vk::ImageViewCreateInfo({}, _handle, p.type, p.format).setSubresourceRange(p.range), _gi->allocator);
+        if (!view) view = _gi->device.createImageView(vk::ImageViewCreateInfo({}, _desc.handle, p.type, p.format).setSubresourceRange(p.range), _gi->allocator);
         return view;
     }
 
@@ -1023,10 +1028,10 @@ public:
             auto r = vk::ImageSubresourceRange(aspect, params.mipLevel, 1, params.arrayLayer, 1);
             Barrier {}
                 .s(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer)
-                .i(_handle, vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead, vk::ImageLayout::eUndefined,
-                   vk::ImageLayout::eTransferDstOptimal, r)
+                .i(_desc.handle, vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead,
+                   vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, r)
                 .cmdWrite(c);
-            c.copyBufferToImage(staging, _handle, vk::ImageLayout::eTransferDstOptimal, {copyRegion});
+            c.copyBufferToImage(staging, _desc.handle, vk::ImageLayout::eTransferDstOptimal, {copyRegion});
             q.submit({c});
             q.wait(c);
         }
@@ -1075,10 +1080,10 @@ public:
             auto r = vk::ImageSubresourceRange(aspect, 0, _desc.mipLevels, 0, _desc.arrayLayers);
             Barrier {}
                 .s(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer)
-                .i(_handle, vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead, vk::ImageLayout::eUndefined,
-                   vk::ImageLayout::eTransferSrcOptimal, r)
+                .i(_desc.handle, vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead,
+                   vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferSrcOptimal, r)
                 .cmdWrite(c);
-            c.copyImageToBuffer(_handle, vk::ImageLayout::eTransferSrcOptimal, staging, copyRegions);
+            c.copyImageToBuffer(_desc.handle, vk::ImageLayout::eTransferSrcOptimal, staging, copyRegions);
             q.submit({c});
             q.wait(c);
         }
@@ -1118,14 +1123,13 @@ private:
     typedef std::map<GetViewParameters, vk::ImageView, SubresourceRangeComparison> ViewMap;
 
 private:
-    Image &             _owner;
-    const GlobalInfo *  _gi {};
-    ConstructParameters _cp;
-    Desc                _desc;
-    vk::Image           _handle {};
-    vk::DeviceMemory    _memory {};
-    VmaAllocation       _allocation {};
-    mutable ViewMap     _views;
+    Image &            _owner;
+    const GlobalInfo * _gi {};
+    Desc               _desc;
+    vk::Image          _handle {};
+    vk::DeviceMemory   _memory {};
+    VmaAllocation      _allocation {};
+    mutable ViewMap    _views;
 
 private:
     vk::ImageViewType determineViewType(vk::ImageViewType candidate, const vk::ImageSubresourceRange & range) const {
@@ -1138,7 +1142,7 @@ private:
                 return vk::ImageViewType::e1D;
         case vk::ImageType::e2D: {
             bool isArray = (_desc.arrayLayers > 1 && range.layerCount > 1);
-            bool isCube  = _cp.isCubeOrCubeArray() && (0 == range.baseArrayLayer && range.layerCount == VK_REMAINING_ARRAY_LAYERS);
+            bool isCube  = _desc.isCubeOrCubeArray() && (0 == range.baseArrayLayer && range.layerCount == VK_REMAINING_ARRAY_LAYERS);
             if (isArray)
                 return isCube ? vk::ImageViewType::eCubeArray : vk::ImageViewType::e2DArray;
             else
@@ -2190,29 +2194,32 @@ public:
 
     const RenderPass & renderPass() const { return *_renderPass; }
 
+    CommandQueue & graphics() const { return *_graphicsQueue; }
+
     void cmdBeginBuiltInRenderPass(vk::CommandBuffer cb, const BeginRenderPassParameters & params) {
         auto bb = currentFrame().backbuffer;
 
         // transition back buffer layout if necessary.
         if (params.backbufferStatus.layout != DESIRED_PRESENT_STATUS.layout) {
             Barrier()
-                .i(bb->image, params.backbufferStatus.access, DESIRED_PRESENT_STATUS.access, params.backbufferStatus.layout, DESIRED_PRESENT_STATUS.layout,
-                   vk::ImageAspectFlagBits::eColor)
+                .i(bb->image->handle(), params.backbufferStatus.access, DESIRED_PRESENT_STATUS.access, params.backbufferStatus.layout,
+                   DESIRED_PRESENT_STATUS.layout, vk::ImageAspectFlagBits::eColor)
                 .s(params.backbufferStatus.stages, DESIRED_PRESENT_STATUS.stages)
                 .cmdWrite(cb);
         }
 
         // set dynamic viewport and scissor
-        vk::Viewport vp(0, 0, (float) bb->extent.width, (float) bb->extent.height, 0, 1);
+        const auto & extent = bb->image->desc().extent;
+        vk::Viewport vp(0, 0, (float) extent.width, (float) extent.height, 0, 1);
         // cb.setViewportWithCount(1, &vp); // FIXME: this line crashes on Ubunut. Reason unknown.
         cb.setViewport(0, 1, &vp);
 
-        vk::Rect2D scissor({0, 0}, bb->extent);
+        vk::Rect2D scissor({0, 0}, {extent.width, extent.height});
         // cb.setScissorWithCount(1, &scissor); // FIXME: this line crashes on Ubunut. Reason unknown.
         cb.setScissor(0, 1, &scissor);
 
         std::array cv = {vk::ClearValue().setColor(params.color), vk::ClearValue().setDepthStencil(params.depth)};
-        _renderPass->cmdBegin(cb, vk::RenderPassBeginInfo {{}, bb->fb->handle(), vk::Rect2D({0, 0}, bb->extent)}.setClearValues(cv));
+        _renderPass->cmdBegin(cb, vk::RenderPassBeginInfo {{}, bb->fb->handle(), vk::Rect2D({0, 0}, {extent.width, extent.height})}.setClearValues(cv));
     }
 
     void cmdEndBuiltInRenderPass(vk::CommandBuffer cb) {
@@ -2231,7 +2238,7 @@ public:
         auto cb = _graphicsQueue->begin("frame end");
         if (pp.backbufferStatus.layout != DESIRED_PRESENT_STATUS.layout) {
             Barrier()
-                .i(bb->image, pp.backbufferStatus.access, DESIRED_PRESENT_STATUS.access, pp.backbufferStatus.layout, DESIRED_PRESENT_STATUS.layout,
+                .i(bb->image->handle(), pp.backbufferStatus.access, DESIRED_PRESENT_STATUS.access, pp.backbufferStatus.layout, DESIRED_PRESENT_STATUS.layout,
                    vk::ImageAspectFlagBits::eColor)
                 .s(pp.backbufferStatus.stages, DESIRED_PRESENT_STATUS.stages)
                 .cmdWrite(cb);
@@ -2362,10 +2369,7 @@ private:
     }
 
     void clearSwapchain() {
-        for (auto & bb : _backbuffers) {
-            bb.fb.clear();
-            _cp.gi->safeDestroy(bb.view);
-        }
+        for (auto & bb : _backbuffers) { bb.fb.clear(); }
         _backbuffers.clear();
         _depthBuffer.clear();
         _cp.gi->safeDestroy(_handle);
@@ -2454,15 +2458,17 @@ private:
         _backbuffers.resize(images.size());
         for (size_t i = 0; i < images.size(); ++i) {
             auto & bb = _backbuffers[i];
-            bb.extent = vk::Extent2D {w, h};
-            bb.format = swapchainCreateInfo.imageFormat;
-            bb.image  = images[i];
-            bb.view   = gi->device.createImageView(vk::ImageViewCreateInfo({}, bb.image, vk::ImageViewType::e2D, _cp.backbufferFormat)
-                                                       .setSubresourceRange({vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}),
-                                                   gi->allocator);
-            setVkObjectName(gi->device, bb.image, format("back buffer image %zu", i));
+            bb.image.reset(new Image(Image::ImportParameters {{format("back buffer image %zu", i)},
+                                                              gi,
+                                                              {
+                                                                  images[i],
+                                                                  vk::ImageType::e2D,
+                                                                  swapchainCreateInfo.imageFormat,
+                                                                  {w, h, 1},
+                                                              }}));
+            bb.view = bb.image->getView({vk::ImageViewType::e2D, swapchainCreateInfo.imageFormat});
+            setVkObjectName(gi->device, images[i], format("back buffer image %zu", i));
             setVkObjectName(gi->device, bb.view, format("back buffer view %zu", i));
-            // TODO: setup default layout.
 
             // create frame buffer
             auto fbcp = Framebuffer::ConstructParameters {{format("swapchain framebuffer %zu", i)}, gi}.addImageView(bb.view).setExtent(w, h).setRenderPass(
@@ -2472,7 +2478,7 @@ private:
 
             // transfer backbuffers to right layout.
             Barrier()
-                .i(bb.image, vk::AccessFlagBits::eNone, DESIRED_PRESENT_STATUS.access, vk::ImageLayout::eUndefined, DESIRED_PRESENT_STATUS.layout,
+                .i(bb.image->handle(), vk::AccessFlagBits::eNone, DESIRED_PRESENT_STATUS.access, vk::ImageLayout::eUndefined, DESIRED_PRESENT_STATUS.layout,
                    vk::ImageAspectFlagBits::eColor)
                 .s(vk::PipelineStageFlagBits::eAllCommands, DESIRED_PRESENT_STATUS.stages)
                 .cmdWrite(c);
@@ -2546,13 +2552,10 @@ private:
                 .cmdWrite(c);
 
             // Store the image to back buffer structure
-            bb.extent = vk::Extent2D {w, h};
-            bb.image  = f.headlessImage->handle();
+            bb.image = f.headlessImage;
 
             // create back buffer view
-            bb.view = gi->device.createImageView(vk::ImageViewCreateInfo({}, bb.image, vk::ImageViewType::e2D, _cp.backbufferFormat)
-                                                     .setSubresourceRange({vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}),
-                                                 gi->allocator);
+            bb.view = bb.image->getView({vk::ImageViewType::e2D, _cp.backbufferFormat});
             setVkObjectName(gi->device, bb.view, format("back buffer view %u", i));
 
             // create frame buffer
@@ -2601,6 +2604,7 @@ Swapchain::~Swapchain() {
     _impl = nullptr;
 }
 auto Swapchain::renderPass() const -> const RenderPass & { return _impl->renderPass(); }
+auto Swapchain::graphics() const -> CommandQueue & { return _impl->graphics(); }
 void Swapchain::cmdBeginBuiltInRenderPass(vk::CommandBuffer cb, const BeginRenderPassParameters & bp) { return _impl->cmdBeginBuiltInRenderPass(cb, bp); }
 void Swapchain::cmdEndBuiltInRenderPass(vk::CommandBuffer cb) { return _impl->cmdEndBuiltInRenderPass(cb); }
 auto Swapchain::currentFrame() const -> const Swapchain::Frame & { return _impl->currentFrame(); }

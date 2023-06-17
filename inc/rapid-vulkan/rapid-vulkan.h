@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identify the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 11
+#define RAPID_VULKAN_HEADER_REVISION 12
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -1140,26 +1140,24 @@ public:
             alloc  = alloc_;
             return *this;
         }
-
-        bool isCube() const {
-            return vk::ImageType::e2D == info.imageType && info.extent.width == info.extent.height && 1 == info.extent.depth && 6 == info.arrayLayers &&
-                   (vk::ImageCreateFlagBits::eCubeCompatible & info.flags);
-        }
-
-        bool isCubeOrCubeArray() const {
-            return vk::ImageType::e2D == info.imageType && info.extent.width == info.extent.height && 1 == info.extent.depth && 6 <= info.arrayLayers &&
-                   0 == (info.arrayLayers % 6) && (vk::ImageCreateFlagBits::eCubeCompatible & info.flags);
-        }
     };
 
     struct Desc {
-        vk::Image               handle      = {};
-        vk::ImageType           type        = vk::ImageType::e2D;
-        vk::Format              format      = vk::Format::eR8G8B8A8Unorm;
-        vk::Extent3D            extent      = {1, 1, 1};
-        uint32_t                mipLevels   = 1;
-        uint32_t                arrayLayers = 1;
-        vk::SampleCountFlagBits samples     = vk::SampleCountFlagBits::e1;
+        vk::Image               handle         = {};
+        vk::ImageType           type           = vk::ImageType::e2D;
+        vk::Format              format         = vk::Format::eR8G8B8A8Unorm;
+        vk::Extent3D            extent         = {1, 1, 1};
+        uint32_t                mipLevels      = 1;
+        uint32_t                arrayLayers    = 1;
+        vk::SampleCountFlagBits samples        = vk::SampleCountFlagBits::e1;
+        bool                    cubeCompatible = false;
+
+        bool isCube() const { return vk::ImageType::e2D == type && extent.width == extent.height && 1 == extent.depth && 6 == arrayLayers && cubeCompatible; }
+
+        bool isCubeOrCubeArray() const {
+            return vk::ImageType::e2D == type && extent.width == extent.height && 1 == extent.depth && 6 <= arrayLayers && 0 == (arrayLayers % 6) &&
+                   cubeCompatible;
+        }
     };
 
     struct ImportParameters : Root::ConstructParameters {
@@ -1796,6 +1794,13 @@ public:
             return *this;
         }
 
+        /// @brief Add a new static viewport and scissor to the pipeline.
+        ConstructParameters & addStaticViewportAndScissor(int x, int y, uint32_t w, uint32_t h) {
+            viewports.push_back({(float) x, (float) y, (float) w, (float) h, 0.0f, 1.0f});
+            scissors.push_back(vk::Rect2D(vk::Offset2D(x, y), vk::Extent2D(w, h)));
+            return *this;
+        }
+
         /// @brief Enable dyanmic viewport. Also specify the number of viewports.
         /// @param count Specify how many viewports will be used. Set to 0 to enable VK_DYNAMIC_STATE_VIEWPORT_WITH_COUNT_EXT.
         ConstructParameters & dynamicViewport(size_t count = 1) {
@@ -2010,9 +2015,7 @@ public:
     };
 
     struct Backbuffer {
-        vk::Extent2D     extent {};
-        vk::Format       format {};
-        vk::Image        image {};
+        Ref<Image>       image {};
         vk::ImageView    view {};
         Ref<Framebuffer> fb {};
         BackbufferStatus status {};
@@ -2079,6 +2082,8 @@ public:
     ~Swapchain();
 
     const RenderPass & renderPass() const;
+
+    CommandQueue & graphics() const;
 
     void cmdBeginBuiltInRenderPass(vk::CommandBuffer, const BeginRenderPassParameters &);
 
