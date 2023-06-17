@@ -75,7 +75,7 @@ This is the simplist form of an app created out of the rapid-vulkan library. It 
 # Pipeline
 VkPipeline sits at the center of Vulkan architecture that defines how GPU pipeline should be configured to render the scene. It is powerful but tediours to use. You'll have to create and manage an whole series of supporting objects, such as pipeline layout, descriptor set layout, descriptor set, descriptor pool to use it. To simplify this task, the rapid-vulkan library wraps all of them into 2 easy to use classes: **Pipeline** and **ArgumentPack**
 
-Here is an example of using these classes to issue a draw command:
+Here is an simplified example of using these classes to issue a draw command. See [pipeline-args](dev/sample/pipeline-args.cpp) for full source code.
 
 ```c++
     GlobalInfo     gi = getVulkanGlobalInfo(...); // get vulkan global information, usually from a Device object.
