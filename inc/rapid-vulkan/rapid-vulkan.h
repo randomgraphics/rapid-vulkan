@@ -1385,56 +1385,6 @@ private:
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// VkFramebuffer wrapper class
-class Framebuffer : public Root {
-public:
-    struct ConstructParameters : public Root::ConstructParameters {
-        const GlobalInfo *         gi   = nullptr;
-        vk::RenderPass             pass = {};
-        std::vector<vk::ImageView> attachments {};
-        size_t                     width  = 1;
-        size_t                     height = 1;
-        size_t                     layers = 1;
-
-        ConstructParameters & setRenderPass(vk::RenderPass v) {
-            pass = v;
-            return *this;
-        }
-
-        ConstructParameters & addImage(Image & image);
-
-        ConstructParameters & addImageView(vk::ImageView view) {
-            attachments.emplace_back(view);
-            return *this;
-        }
-
-        ConstructParameters & setExtent(size_t w, size_t h, size_t l = 1) {
-            width  = w;
-            height = h;
-            layers = l;
-            return *this;
-        }
-    };
-
-    Framebuffer(const ConstructParameters &);
-
-    ~Framebuffer();
-
-    vk::Framebuffer handle() const { return _handle; }
-
-    operator vk::Framebuffer() const { return _handle; }
-
-    operator VkFramebuffer() const { return _handle; }
-
-protected:
-    void onNameChanged(const std::string &) override;
-
-private:
-    const GlobalInfo * _gi     = nullptr;
-    vk::Framebuffer    _handle = {};
-};
-
-// ---------------------------------------------------------------------------------------------------------------------
 /// @brief View to a sub-range of a buffer.
 struct BufferView {
     vk::Buffer     buffer = {};
@@ -1887,7 +1837,7 @@ public:
     struct Backbuffer {
         Ref<Image>       image {};
         vk::ImageView    view {};
-        Ref<Framebuffer> fb {};
+        vk::Framebuffer  framebuffer {};
         BackbufferStatus status {};
     };
 

@@ -1372,6 +1372,54 @@ void RenderPass::onNameChanged(const std::string &) {
 // Framebuffer
 // *********************************************************************************************************************
 
+class Framebuffer : public Root {
+public:
+    struct ConstructParameters : public Root::ConstructParameters {
+        const GlobalInfo *         gi   = nullptr;
+        vk::RenderPass             pass = {};
+        std::vector<vk::ImageView> attachments {};
+        size_t                     width  = 1;
+        size_t                     height = 1;
+        size_t                     layers = 1;
+
+        ConstructParameters & setRenderPass(vk::RenderPass v) {
+            pass = v;
+            return *this;
+        }
+
+        ConstructParameters & addImage(Image & image);
+
+        ConstructParameters & addImageView(vk::ImageView view) {
+            attachments.emplace_back(view);
+            return *this;
+        }
+
+        ConstructParameters & setExtent(size_t w, size_t h, size_t l = 1) {
+            width  = w;
+            height = h;
+            layers = l;
+            return *this;
+        }
+    };
+
+    Framebuffer(const ConstructParameters &);
+
+    ~Framebuffer();
+
+    vk::Framebuffer handle() const { return _handle; }
+
+    operator vk::Framebuffer() const { return _handle; }
+
+    operator VkFramebuffer() const { return _handle; }
+
+protected:
+    void onNameChanged(const std::string &) override;
+
+private:
+    const GlobalInfo * _gi     = nullptr;
+    vk::Framebuffer    _handle = {};
+};
+
 Framebuffer::ConstructParameters & Framebuffer::ConstructParameters::addImage(Image & image) {
     const auto & d = image.desc();
     // Can't add 3D texture as framebuffer.
@@ -2343,7 +2391,7 @@ public:
         cb.setScissor(0, 1, &scissor);
 
         std::array cv = {vk::ClearValue().setColor(params.clearColor), vk::ClearValue().setDepthStencil(params.clearDepth)};
-        _renderPass->cmdBegin(cb, vk::RenderPassBeginInfo {{}, bb->fb->handle(), vk::Rect2D({0, 0}, {extent.width, extent.height})}.setClearValues(cv));
+        _renderPass->cmdBegin(cb, vk::RenderPassBeginInfo {{}, bb->framebuffer, vk::Rect2D({0, 0}, {extent.width, extent.height})}.setClearValues(cv));
     }
 
     void cmdEndBuiltInRenderPass(vk::CommandBuffer cb) {
@@ -2411,6 +2459,10 @@ private:
         Ref<Image>        headlessImage; ///< the image that is used as the backbuffer for headless swapchain.
     };
 
+    struct BackbufferImpl : public Backbuffer {
+        Ref<Framebuffer> fb {};
+    };
+
 private:
     ConstructParameters _cp;
     Ref<RenderPass>     _renderPass;
@@ -2419,10 +2471,10 @@ private:
     Ref<CommandQueue>   _graphicsQueue;
 
     // the following are data members that will be cleared and recreated when swapchain is recreated.
-    std::vector<FrameImpl>  _frames;
-    vk::SwapchainKHR        _handle;
-    std::vector<Backbuffer> _backbuffers;
-    Ref<Image>              _depthBuffer;
+    std::vector<FrameImpl>      _frames;
+    vk::SwapchainKHR            _handle;
+    std::vector<BackbufferImpl> _backbuffers;
+    Ref<Image>                  _depthBuffer;
 
     inline static constexpr BackbufferStatus DESIRED_PRESENT_STATUS = PresentParameters().backbufferStatus;
 
@@ -2599,6 +2651,7 @@ private:
                 *_renderPass);
             if (_depthBuffer) fbcp.addImageView(_depthBuffer->getView({}));
             bb.fb.reset(new Framebuffer(fbcp));
+            bb.framebuffer = bb.fb->handle();
 
             // transfer backbuffers to right layout.
             Barrier()
@@ -2687,6 +2740,7 @@ private:
                 *_renderPass);
             if (_depthBuffer) fbcp.addImageView(_depthBuffer->getView({}));
             bb.fb.reset(new Framebuffer(fbcp));
+            bb.framebuffer = bb.fb->handle();
         }
 
         // execute the command buffer to update image layout
