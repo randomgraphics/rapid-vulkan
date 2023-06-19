@@ -1431,23 +1431,53 @@ struct ImageSampler {
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// Unique identifier of a pipeline descriptor
-union DescriptorIdentifier {
-    uint64_t u64 = 0;
-    struct {
-        uint32_t set;
-        uint32_t binding;
+/// A utility class that describes parameter layout of a pipeline object.
+struct PipelineReflection {
+    /// @brief Represents one descriptor or descriptor array.
+    struct Descriptor {
+        /// @brief names of the shader variable.
+        /// The whole structure is considered empty/invalid, if names set is empty.
+        std::set<std::string> names;
+
+        /// @brief The descriptor binding information.
+        /// If the descriptor count is empty, then the whole structure is considered empty/invalid.
+        vk::DescriptorSetLayoutBinding binding;
+
+        bool empty() const { return names.empty() || 0 == binding.descriptorCount; }
     };
 
-    DescriptorIdentifier() = default;
+    /// Collection of descriptors in one set.
+    typedef std::vector<Descriptor> DescriptorSet;
 
-    DescriptorIdentifier(uint32_t s, uint32_t b): set(s), binding(b) {}
+    /// Collection of descriptor sets indexed by the set index.
+    typedef std::vector<DescriptorSet> DescriptorLayout;
 
-    bool operator==(const DescriptorIdentifier & rhs) const { return u64 == rhs.u64; }
+    struct Constant {
+        uint32_t begin = (uint32_t) -1;
+        uint32_t end   = 0;
+        // TODO: add push constant name information.
 
-    bool operator!=(const DescriptorIdentifier & rhs) const { return u64 != rhs.u64; }
+        bool empty() const { return begin >= end; }
+    };
 
-    bool operator<(const DescriptorIdentifier & rhs) const { return u64 < rhs.u64; }
+    /// Collection of push constants for each shader stage.
+    typedef std::map<vk::ShaderStageFlagBits, Constant> ConstantLayout;
+
+    /// Properties of vertex shader input.
+    struct VertexShaderInput {
+        vk::Format  format = vk::Format::eUndefined;
+        std::string shaderVariable; ///< name of the shader variable.
+    };
+
+    /// Collection of vertex shader input. Key is input location.
+    typedef std::map<uint32_t, VertexShaderInput> VertexLayout;
+
+    std::string      name; ///< name of the program that this reflect is from. this field is for logging and debugging.
+    DescriptorLayout descriptors;
+    ConstantLayout   constants;
+    VertexLayout     vertex;
+
+    PipelineReflection() {}
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1455,6 +1485,12 @@ union DescriptorIdentifier {
 class Pipeline : public Root {
 public:
     ~Pipeline() override;
+
+    vk::PipelineBindPoint bindPoint() const;
+
+    vk::PipelineLayout layout() const;
+
+    const PipelineReflection & reflection() const;
 
 protected:
     Pipeline(const std::string & name, vk::ArrayProxy<const Shader * const> shaders);
@@ -1591,51 +1627,18 @@ public:
         }
     };
 
-    struct IndexBuffer {
-        /// @brief Handle of the index buffer.
-        vk::Buffer buffer = VK_NULL_HANDLE;
-
-        /// @brief Byte offset of the first index. Ignored if buffer is empty.
-        vk::DeviceSize offset = 0;
-
-        /// @brief Index type;
-        vk::IndexType indexType = vk::IndexType::eUint16;
-
-        /// @brief Get size/stride of the index based on the type.
-        size_t indexStride() const {
-            switch (indexType) {
-            case vk::IndexType::eUint16:
-                return sizeof(uint16_t);
-            case vk::IndexType::eUint32:
-                return sizeof(uint32_t);
-            case vk::IndexType::eUint8EXT:
-                return 1;
-            default:
-                return 0;
-            }
-        }
-    };
-
     struct DrawParameters {
-        /// Vertex buffer list of the draw.
-        vk::ArrayProxy<const BufferView> vertexBuffers;
-
-        /// Index buffer of the draw. If empty, then the draw is considered non-indexed.
-        IndexBuffer indexBuffer;
-
         /// Instance count. Default value is 1.
         uint32_t instanceCount = 1;
 
         /// Index of the first instance. Default is 0.
         uint32_t firstInstance = 0;
 
-        union {
-            /// Index count for indexed draw.
-            uint32_t indexCount = 0;
+        /// Index count for indexed draw. Set to 0 for non-indexed draw.
+        uint32_t indexCount = 0;
 
-            /// Vertex count for non-indexed draw.
-            uint32_t vertexCount;
-        };
+        /// Vertex count for non-indexed draw. Ignored when indexCount is non-zero.
+        uint32_t vertexCount = 0;
 
         union {
             /// Index of the first vertex for non-indexed draw.
@@ -1648,22 +1651,16 @@ public:
         /// Vertex offset of indexed draw. Ignored for non-indexed draw.
         int32_t vertexOffset = 0;
 
-        DrawParameters & setVertexBuffers(vk::ArrayProxy<const BufferView> vb) {
-            vertexBuffers = vb;
-            return *this;
-        }
-
         DrawParameters & setNonIndexed(size_t vertexCount_, size_t firstVertex_ = 0) {
-            indexBuffer.buffer = VK_NULL_HANDLE;
-            vertexCount        = (uint32_t) vertexCount_;
-            firstVertex        = (uint32_t) firstVertex_;
+            indexCount  = 0;
+            vertexCount = (uint32_t) vertexCount_;
+            firstVertex = (uint32_t) firstVertex_;
             return *this;
         }
 
-        DrawParameters & setIndexed(const IndexBuffer & ib, size_t indexCount_, size_t firstIndex_ = 0, int32_t vertexOffset_ = 0) {
-            RAPID_VULKAN_ASSERT(ib.buffer, "Set indexed draw but with an empty index buffer?");
-            indexBuffer  = ib;
+        DrawParameters & setIndexed(size_t indexCount_, size_t firstIndex_ = 0, int32_t vertexOffset_ = 0) {
             indexCount   = (uint32_t) indexCount_;
+            vertexCount  = 0;
             firstIndex   = (uint32_t) firstIndex_;
             vertexOffset = vertexOffset_;
             return *this;
@@ -1702,11 +1699,56 @@ public:
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// Represent a pipeline and the full set of resources/parameters to issue a draw/dispatch call to GPU. 
+/// Unique identifier of a pipeline descriptor
+union DescriptorIdentifier {
+    uint64_t u64 = 0;
+    struct {
+        uint32_t set;
+        uint32_t binding;
+    };
+
+    DescriptorIdentifier() = default;
+
+    DescriptorIdentifier(uint32_t s, uint32_t b): set(s), binding(b) {}
+
+    bool operator==(const DescriptorIdentifier & rhs) const { return u64 == rhs.u64; }
+
+    bool operator!=(const DescriptorIdentifier & rhs) const { return u64 != rhs.u64; }
+
+    bool operator<(const DescriptorIdentifier & rhs) const { return u64 < rhs.u64; }
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// Represent a pipeline and the full set of resources/parameters to issue a draw/dispatch call to GPU.
 class Drawable : public Root {
 public:
     struct ConstructParameters : public Root::ConstructParameters {
-        Pipeline * pipeline = nullptr;
+        Ref<Pipeline> pipeline {};
+    };
+
+    struct IndexBuffer {
+        /// @brief Handle of the index buffer.
+        vk::Buffer buffer = VK_NULL_HANDLE;
+
+        /// @brief Byte offset of the first index. Ignored if buffer is empty.
+        vk::DeviceSize offset = 0;
+
+        /// @brief Index type;
+        vk::IndexType indexType = vk::IndexType::eUint16;
+
+        /// @brief Get size/stride of the index based on the type.
+        size_t indexStride() const {
+            switch (indexType) {
+            case vk::IndexType::eUint16:
+                return sizeof(uint16_t);
+            case vk::IndexType::eUint32:
+                return sizeof(uint32_t);
+            case vk::IndexType::eUint8EXT:
+                return 1;
+            default:
+                return 0;
+            }
+        }
     };
 
     Drawable(const ConstructParameters &);
@@ -1737,6 +1779,17 @@ public:
     /// @brief Set index buffer
     Drawable & i(...);
 
+    Drawable & dp(const GraphicsPipeline::DrawParameters &);
+
+    Drawable & dp(const ComputePipeline::DispatchParameters &);
+
+    struct RecordParameters {
+        Drawable * previous = nullptr;
+    };
+
+    /// @brief Issue the draw/dispatch call to the given command buffer.
+    Drawable & cmdRender(vk::CommandBuffer, const RecordParameters &);
+
     // /// @brief Get argument by ID.
     // /// The returned argument instance can be used to set value of that argument w/o paying the cost of string hashing.
     // /// If the argument has not been set before, a new argument will be created and returned.
@@ -1749,6 +1802,17 @@ private:
     class Impl;
     Impl * _impl = nullptr;
 };
+
+// class RenderQueue : public Root {
+// public:
+
+//     vk::PipelineCache pipelineCache() const;
+
+//     void upload(...);
+//     void render(const Drawable &);
+//     void flush(...);
+//     void finish(...);
+// };
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// Wrapper class of swapchain object

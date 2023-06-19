@@ -1447,6 +1447,555 @@ void Framebuffer::onNameChanged(const std::string &) {
 }
 
 // *********************************************************************************************************************
+// Pipeline Reflection
+// *********************************************************************************************************************
+
+template<typename T, typename FUNC, typename... ARGS>
+static std::vector<T *> enumerateShaderVariables(SpvReflectShaderModule & module, FUNC func, ARGS... args) {
+    uint32_t count  = 0;
+    auto     result = func(&module, args..., &count, nullptr);
+    RVI_REQUIRE(result == SPV_REFLECT_RESULT_SUCCESS);
+    std::vector<T *> v(count);
+    result = func(&module, args..., &count, v.data());
+    RVI_REQUIRE(result == SPV_REFLECT_RESULT_SUCCESS);
+    return v;
+}
+
+struct MergedDescriptorBinding {
+    SpvReflectDescriptorBinding * binding    = nullptr;
+    VkShaderStageFlags            stageFlags = 0;
+    std::set<std::string>         names;
+};
+
+struct MergedDescriptorSet {
+    std::map<uint32_t, MergedDescriptorBinding> descriptors; // key is binding location
+};
+
+static const char * getDescriptorName(const SpvReflectDescriptorBinding * d) {
+    const char * name = d->name;
+    if (name && *name) return name;
+    name = d->type_description->type_name;
+    if (name && *name) return name;
+    RVI_THROW("name is empty."); // TODO: make up a name using descriptors type and binding location.
+}
+
+static void mergeDescriptorSet(MergedDescriptorSet & merged, const SpvReflectShaderModule & module,
+                               const vk::ArrayProxy<SpvReflectDescriptorBinding *> & incoming) {
+    for (const auto & i : incoming) {
+        const char * name = getDescriptorName(i);
+        auto &       d    = merged.descriptors[i->binding];
+        if (d.binding) {
+            RVI_ASSERT(d.binding->binding == i->binding);
+            // check for possible conflict
+            if (d.binding->descriptor_type != i->descriptor_type)
+                RVI_LOGE("Shader variable %s has conflicting types: %d != %d", name, d.binding->descriptor_type, i->descriptor_type);
+            // TODO: check array.dims_count and array.dims
+        } else {
+            d.binding = i;
+        }
+        d.stageFlags |= module.shader_stage;
+        d.names.insert(name);
+    }
+}
+
+static PipelineReflection::Descriptor convertArray(const MergedDescriptorBinding & src) {
+    PipelineReflection::Descriptor dst = {};
+    dst.names                          = src.names;
+    dst.binding.binding                = src.binding->binding; // wtf, so many bindings ...
+    dst.binding.descriptorType         = static_cast<vk::DescriptorType>(src.binding->descriptor_type);
+    dst.binding.descriptorCount        = 1;
+    for (uint32_t i = 0; i < src.binding->array.dims_count; ++i) dst.binding.descriptorCount *= src.binding->array.dims[i];
+    dst.binding.stageFlags = (vk::ShaderStageFlagBits) src.stageFlags;
+    return dst;
+}
+
+static PipelineReflection::DescriptorSet convertSet(const MergedDescriptorSet & merged) {
+    PipelineReflection::DescriptorSet set;
+    for (const auto & kv : merged.descriptors) {
+        if (set.size() <= kv.first) set.resize(kv.first + 1);
+        set[kv.first] = convertArray(kv.second);
+    }
+    return set;
+}
+
+static PipelineReflection convertRefl(std::map<uint32_t, MergedDescriptorSet> & descriptors) {
+    PipelineReflection refl;
+    if (!descriptors.empty()) {
+        refl.descriptors.resize(descriptors.rbegin()->first + 1);
+        for (const auto & kv : descriptors) {
+            RVI_ASSERT(kv.first < refl.descriptors.size());
+            refl.descriptors[kv.first] = convertSet(kv.second);
+        }
+    }
+    return refl;
+}
+
+static void convertVertexInputs(PipelineReflection & refl, vk::ArrayProxy<SpvReflectInterfaceVariable *> vertexInputs) {
+    for (auto i : vertexInputs) {
+        auto name = std::string(i->name);
+        if (name.substr(0, 3) == "gl_") continue; // skip OpenGL's reserved inputs.
+        refl.vertex[i->location] = {(vk::Format) i->format, name};
+    }
+}
+
+static PipelineReflection reflectShaders(const std::string & pipelineName, vk::ArrayProxy<const Shader * const> shaders) {
+    RVI_ASSERT(!shaders.empty());
+
+    // The first uint32_t is set index. The 2nd one is shader variable name.
+    std::map<uint32_t, MergedDescriptorSet> merged;
+
+    std::vector<SpvReflectInterfaceVariable *> vertexInputs;
+
+    PipelineReflection::ConstantLayout constants;
+
+    std::vector<SpvReflectShaderModule> modules;
+
+    for (const auto & shader : shaders) {
+        // ignore null shader pointer
+        if (!shader) continue;
+
+        // Ignore shader w/o spirv code
+        auto spirv = shader->spirv();
+        if (spirv.empty()) continue;
+
+        SpvReflectShaderModule module;
+        SpvReflectResult       result = spvReflectCreateShaderModule(spirv.size() * sizeof(uint32_t), spirv.data(), &module);
+        RVI_REQUIRE(result == SPV_REFLECT_RESULT_SUCCESS);
+
+        // Extract descriptor sets from each shader, then merge together.
+        auto sets = enumerateShaderVariables<SpvReflectDescriptorSet>(module, spvReflectEnumerateEntryPointDescriptorSets, shader->entry().c_str());
+        for (const auto & set : sets) mergeDescriptorSet(merged[set->set], module, {set->binding_count, set->bindings});
+
+        // enumerate push constants
+        auto pc = enumerateShaderVariables<SpvReflectBlockVariable>(module, spvReflectEnumeratePushConstantBlocks);
+        for (const auto & c : pc) {
+            auto & sc = constants[(vk::ShaderStageFlagBits) module.shader_stage];
+            sc.begin  = std::min(sc.begin, (uint32_t) c->offset);
+            sc.end    = std::max(sc.end, (uint32_t) (c->offset + c->size));
+        }
+
+        // Enumerate vertex shader inputs
+        if (module.shader_stage == SPV_REFLECT_SHADER_STAGE_VERTEX_BIT) {
+            vertexInputs = enumerateShaderVariables<SpvReflectInterfaceVariable>(module, spvReflectEnumerateInputVariables);
+        }
+
+        // store module to module list. we can't delete it yet, because the convertRefl() function still references data in it.
+        modules.push_back(module);
+    }
+
+    // Convert program descriptors
+    auto refl = convertRefl(merged);
+
+    // Convert vertex shader inputs
+    convertVertexInputs(refl, vertexInputs);
+
+    // Store push constants
+    refl.constants = constants;
+
+    // Destroy all modules.
+    for (auto & m : modules) spvReflectDestroyShaderModule(&m);
+
+    // done
+    refl.name = pipelineName;
+    return refl;
+}
+
+// *********************************************************************************************************************
+// DescriptorPool
+// *********************************************************************************************************************
+
+class DescriptorPool : public Root {
+public:
+    struct ConstructParameters : public Root::ConstructParameters {
+        const GlobalInfo *                                gi = nullptr;
+        std::vector<const vk::DescriptorSetLayoutBinding> bindings;
+        size_t                                            maxSets = 1024;
+    };
+
+    DescriptorPool(const ConstructParameters & cp) { construct(cp); }
+    ~DescriptorPool();
+
+    vk::DescriptorSet allocate();
+
+    // void deallocate(vk::DescriptorSet);
+
+private:
+    const GlobalInfo *                          _gi;
+    std::vector<vk::DescriptorSetLayoutBinding> _bindings;
+    size_t                                      _maxSets = 0;
+    vk::DescriptorSetLayout                     _layout;
+    vk::DescriptorPool                          _pool;
+    size_t                                      _availableSets = 0; ///< number of sets that are available for allocation in the pool.
+    std::vector<vk::DescriptorPool>             _full;              ///< pools that are full already.
+
+private:
+
+    void construct(const ConstructParameters & cp) {
+        // go through all descriptors in this set. build variable and binding arrays.
+        auto sizesMap = std::map<vk::DescriptorType, uint32_t>();
+        for (uint32_t i = 0; i < cp.bindings.size(); ++i) {
+            const auto & d = cp.bindings[i];
+            if (d.empty()) continue; // skip empty descriptor
+            bindings.push_back(d.binding);
+            sizesMap[d.binding.descriptorType] += d.binding.descriptorCount;
+        }
+
+        // we have gone through all descriptors in the set. Now we can create descriptor set layout.
+        auto ci         = vk::DescriptorSetLayoutCreateInfo();
+        ci.bindingCount = (uint32_t) bindings.size();
+        ci.pBindings    = bindings.data();
+        _sets[s].layout = _gi->device.createDescriptorSetLayout(ci, _gi->allocator);
+
+        // convert sizes map to array
+        std::vector<vk::DescriptorPoolSize> sizes;
+        sizes.reserve(sizesMap.size());
+        for (const auto & kv : sizesMap) sizes.push_back({kv.first, kv.second});
+
+        // Create descriptor pool
+        // TODO: make the pool size configurable.
+        _sets[s].pool          = _gi->device.createDescriptorPool(vk::DescriptorPoolCreateInfo().setMaxSets(1024).setPoolSizes(sizes), _gi->allocator);
+        _sets[s].availableSets = 1024;
+    }
+};
+
+// *********************************************************************************************************************
+// PipelineLayout
+// *********************************************************************************************************************
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// A wrapper class for VkPipelineLayout
+class PipelineLayout : public Root {
+public:
+    struct ConstructParameters : public Root::ConstructParameters {
+        vk::ArrayProxy<const Shader * const> shaders;
+    };
+
+    PipelineLayout(const ConstructParameters &);
+
+    ~PipelineLayout() override;
+
+    /// @brief Returns the underlying Vulkan handle.
+    vk::PipelineLayout handle() const;
+
+    const PipelineReflection & reflection() const;
+
+    vk::DescriptorSet allocateDescriptorSet(size_t setIndex);
+
+    /// @brief Bind argument pack to the command buffer
+    /// After this method succeeded (returns true), it is ready to bind issue draw/dispatch commands.
+    bool cmdBind(vk::CommandBuffer, vk::PipelineBindPoint, const Drawable &) const;
+
+protected:
+    void onNameChanged(const std::string &) override;
+
+private:
+    class Impl;
+    Impl * _impl = nullptr;
+};
+
+class PipelineLayout::Impl {
+public:
+    Impl(PipelineLayout & owner, vk::ArrayProxy<const Shader * const> shaders): _owner(owner) {
+        // make sure shader array is not empty and the first shader is not null.
+        RVI_REQUIRE(shaders.size() > 0 && shaders.front());
+
+        _gi         = shaders.front()->gi();
+        _reflection = reflectShaders(owner.name(), shaders);
+
+        // create descriptor set
+        _sets.resize(_reflection.descriptors.size());
+        for (uint32_t s = 0; s < _sets.size(); ++s) {
+            // go through all descriptors in this set. build variable and binding arrays.
+            auto & bindings = _sets[s].bindings;
+            auto   sizesMap = std::map<vk::DescriptorType, uint32_t>();
+            bindings.reserve(_reflection.descriptors[s].size());
+            for (uint32_t i = 0; i < _reflection.descriptors[s].size(); ++i) {
+                const auto & d = _reflection.descriptors[s][i];
+                if (d.empty()) continue; // skip empty descriptor
+                bindings.push_back(d.binding);
+                sizesMap[d.binding.descriptorType] += d.binding.descriptorCount;
+            }
+
+            // we have gone through all descriptors in the set. Now we can create descriptor set layout.
+            auto ci         = vk::DescriptorSetLayoutCreateInfo();
+            ci.bindingCount = (uint32_t) bindings.size();
+            ci.pBindings    = bindings.data();
+            _sets[s].layout = _gi->device.createDescriptorSetLayout(ci, _gi->allocator);
+
+            // convert sizes map to array
+            std::vector<vk::DescriptorPoolSize> sizes;
+            sizes.reserve(sizesMap.size());
+            for (const auto & kv : sizesMap) sizes.push_back({kv.first, kv.second});
+
+            // Create descriptor pool
+            // TODO: make the pool size configurable.
+            _sets[s].pool          = _gi->device.createDescriptorPool(vk::DescriptorPoolCreateInfo().setMaxSets(1024).setPoolSizes(sizes), _gi->allocator);
+            _sets[s].availableSets = 1024;
+        }
+
+        // create push constant array
+        std::vector<vk::PushConstantRange> pc;
+        pc.reserve(_reflection.constants.size());
+        for (const auto & kv : _reflection.constants) {
+            if (kv.second.empty()) continue;
+            pc.push_back({kv.first, kv.second.begin, kv.second.end - kv.second.begin});
+        }
+
+        // create pipeline layout array
+        std::vector<vk::DescriptorSetLayout> layouts;
+        layouts.reserve(_sets.size());
+        for (const auto & s : _sets) layouts.push_back(s.layout);
+
+        // create pipeline layout
+        _handle = _gi->device.createPipelineLayout(vk::PipelineLayoutCreateInfo().setSetLayouts(layouts).setPushConstantRanges(pc), _gi->allocator);
+
+        // done
+        onNameChanged();
+    }
+
+    ~Impl() {
+        for (auto & s : _sets) { s.clear(*_gi); }
+        _sets.clear();
+        _gi->safeDestroy(_handle);
+    }
+
+    vk::PipelineLayout handle() const { return _handle; }
+
+    const PipelineReflection & reflection() const { return _reflection; }
+
+    vk::DescriptorSet allocateDescriptorSet(size_t setIndex) {
+        RVI_ASSERT(setIndex < _sets.size());
+        return _sets[setIndex].alloc(*_gi);
+    }
+
+    bool cmdBind(vk::CommandBuffer cb, vk::PipelineBindPoint bp, const Drawable & ap) { return bindDescriptors(cb, bp, ap) }
+
+    void onNameChanged() {
+        if (_handle) setVkObjectName(_gi->device, _handle, _owner.name());
+    }
+
+private:
+    struct DescSet {
+        vk::DescriptorSetLayout                     layout;
+        std::vector<vk::DescriptorSetLayoutBinding> bindings;
+        vk::DescriptorPool                          pool;
+        size_t                                      availableSets = 0; ///< number of sets that are available for allocation in the pool.
+        std::vector<vk::DescriptorPool>             full;              ///< pools that are full already.
+
+        void init() {}
+
+        vk::DescriptorSet alloc(const GlobalInfo & gi) {
+            if (availableSets > 0) {
+                auto s = gi.device.allocateDescriptorSets(vk::DescriptorSetAllocateInfo(pool, 1, &layout));
+                availableSets--;
+                return s[0];
+            } else {
+                RVI_LOGE("descriptor pool is out of space.");
+                return {};
+            }
+        }
+
+        void clear(const GlobalInfo & gi) {
+            gi.safeDestroy(layout);
+            gi.safeDestroy(pool);
+            for (auto & p : full) { gi.safeDestroy(p); }
+            full.clear();
+        }
+    };
+    std::vector<DescSet> _sets;
+
+private:
+    PipelineLayout &   _owner;
+    const GlobalInfo * _gi = nullptr;
+    PipelineReflection _reflection;
+    vk::PipelineLayout _handle;
+
+    static const Argument::Impl * findArgument(const Drawable & ap, uint32_t set, uint32_t binding) {
+        auto a = ap.find({set, binding});
+        return a ? a->_impl : nullptr;
+    }
+};
+
+PipelineLayout::PipelineLayout(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this, cp.shaders); }
+PipelineLayout::~PipelineLayout() {
+    delete _impl;
+    _impl = nullptr;
+}
+auto PipelineLayout::handle() const -> vk::PipelineLayout { return _impl->handle(); }
+auto PipelineLayout::reflection() const -> const PipelineReflection & { return _impl->reflection(); }
+auto PipelineLayout::allocateDescriptorSet(size_t setIndex) -> vk::DescriptorSet { return _impl->allocateDescriptorSet(setIndex); }
+
+bool PipelineLayout::cmdBind(vk::CommandBuffer cb, vk::PipelineBindPoint bp, const Drawable & ap) const { return _impl->cmdBind(cb, bp, ap); }
+void PipelineLayout::onNameChanged(const std::string &) { _impl->onNameChanged(); }
+
+// *********************************************************************************************************************
+// Pipeline
+// *********************************************************************************************************************
+
+class Pipeline::Impl {
+public:
+    vk::Pipeline          handle {};
+    vk::PipelineBindPoint bindPoint;
+
+    Impl(Pipeline & owner, vk::ArrayProxy<const Shader * const> shaders) {
+        // The first shader must be valid.
+        RVI_REQUIRE(shaders.size() > 0 && shaders.front(), "Failed to create pipeline layout: the first shader in the shader array must be valid.");
+        _gi = shaders.front()->gi();
+        // TODO: reuse layout via a cache object?
+        _layout.reset(new PipelineLayout({{owner.name()}, shaders}));
+    }
+
+    ~Impl() { _gi->device.destroy(handle); }
+
+    PipelineLayout & layout() const { return *_layout; }
+
+    void cmdBind(vk::CommandBuffer cb, const Drawable & args) const {
+        if (handle) _layout->cmdBind(cb, bindPoint, args);
+    }
+
+private:
+    const GlobalInfo *  _gi = nullptr;
+    Ref<PipelineLayout> _layout;
+};
+
+Pipeline::Pipeline(const std::string & name, vk::ArrayProxy<const Shader * const> shaders): Root({name}) { _impl = new Impl(*this, shaders); }
+Pipeline::~Pipeline() {
+    delete _impl;
+    _impl = nullptr;
+}
+void Pipeline::cmdBind(vk::CommandBuffer cb, const Drawable & ap) const { return _impl->cmdBind(cb, ap); }
+
+// *********************************************************************************************************************
+// Graphics Pipeline
+// *********************************************************************************************************************
+
+GraphicsPipeline::GraphicsPipeline(const ConstructParameters & params): Pipeline(params.name, {params.vs, params.fs}) {
+    // create shader stage array
+    RVI_REQUIRE(params.vs, "Vertex shader is required for graphics pipeline.");
+    auto gi           = params.vs->gi();
+    auto shaderStages = std::vector<vk::PipelineShaderStageCreateInfo>();
+    shaderStages.push_back({{}, vk::ShaderStageFlagBits::eVertex, params.vs->handle(), params.vs->entry().c_str()});
+    if (params.fs) shaderStages.push_back({{}, vk::ShaderStageFlagBits::eFragment, params.fs->handle(), params.fs->entry().c_str()});
+
+    // setup vertex input stage
+    const auto & refl = _impl->layout().reflection();
+    if (refl.vertex.size() != params.va.size()) {
+        RVI_LOGE("Failed to create graphics pipeline (%s): vertex input stage requires %zu attributes, but only %zu are provided.", params.name.c_str(),
+                 refl.vertex.size(), params.va.size());
+        return;
+    }
+    for (const auto & kv : refl.vertex) {
+        auto location = kv.first;
+        auto iter     = std::find_if(params.va.begin(), params.va.end(), [location](const auto & a) { return a.location == location; });
+        if (iter == params.va.end()) {
+            RVI_LOGE("Failed to create graphics pipeline (%s): vertex input stage requires attribute at location %u, but it is not provided.",
+                     params.name.c_str(), location);
+            return;
+        }
+        const auto & attribute = *iter;
+        auto         vbi       = std::find_if(params.vb.begin(), params.vb.end(), [attribute](const auto & b) { return b.binding == attribute.binding; });
+        if (vbi == params.vb.end()) {
+            RVI_LOGE("Failed to create graphics pipeline (%s): vertex input stage requires vertex buffer #%u, but it is not provided.", params.name.c_str(),
+                     attribute.binding);
+            return;
+        }
+    }
+    auto vertex = vk::PipelineVertexInputStateCreateInfo().setVertexAttributeDescriptions(params.va).setVertexBindingDescriptions(params.vb);
+
+    // setup viewport and scissor states.
+    auto viewport = vk::PipelineViewportStateCreateInfo();
+    viewport.setViewports(params.viewports);
+    viewport.setScissors(params.scissors);
+
+    // setup dynamic states
+    std::vector<vk::DynamicState> dynamicStates;
+    for (const auto & [s, v] : params.dynamic) {
+        dynamicStates.push_back(s);
+        switch (s) {
+        case vk::DynamicState::eViewport:
+            viewport.setViewportCount((uint32_t) v);
+            viewport.setPViewports(nullptr);
+            break;
+        case vk::DynamicState::eViewportWithCount:
+            viewport.setViewports({});
+            break;
+        case vk::DynamicState::eScissor:
+            viewport.setScissorCount((uint32_t) v);
+            viewport.setPScissors(nullptr);
+            break;
+        case vk::DynamicState::eScissorWithCount:
+            viewport.setScissors({});
+            break;
+        default:
+            // do nothing
+            break;
+        }
+    }
+    vk::PipelineDynamicStateCreateInfo dynamicCI({}, dynamicStates);
+
+    // setup blend stage
+    auto blend           = vk::PipelineColorBlendStateCreateInfo {}.setAttachments(params.attachments);
+    blend.blendConstants = params.blendConstants;
+
+    // setup the create info
+    auto ci = vk::GraphicsPipelineCreateInfo({}, (uint32_t) shaderStages.size(), shaderStages.data(), &vertex, &params.ia, &params.tess, &viewport,
+                                             &params.rast, &params.msaa, &params.depth, &blend, &dynamicCI, _impl->layout().handle(), params.pass,
+                                             params.subpass, params.baseHandle, params.baseIndex);
+
+    // create the shader.
+    _impl->handle    = gi->device.createGraphicsPipeline(nullptr, ci, gi->allocator).value;
+    _impl->bindPoint = vk::PipelineBindPoint::eGraphics;
+}
+
+void GraphicsPipeline::cmdDraw(vk::CommandBuffer cb, const DrawParameters & dp) {
+    if (!_impl->handle) return;
+
+    cb.bindPipeline(vk::PipelineBindPoint::eGraphics, _impl->handle);
+
+    // bind vertex buffers
+    if (dp.vertexBuffers.size() > 0) {
+        RVI_REQUIRE(dp.vertexBuffers.size() <= 16); // TODO: use a stack_array class to remove this limitation.
+        vk::Buffer     buffers[16];
+        vk::DeviceSize offsets[16];
+        for (size_t i = 0; i < dp.vertexBuffers.size(); ++i) {
+            const auto & view = dp.vertexBuffers.data()[i];
+            RVI_REQUIRE(view.buffer, "Empty vertex buffer is not allowed.");
+            buffers[i] = view.buffer;
+            offsets[i] = view.offset;
+            // TODO: validate vertex buffer size on debug build.
+        }
+        cb.bindVertexBuffers(0, (uint32_t) dp.vertexBuffers.size(), buffers, offsets);
+    }
+
+    if (dp.indexBuffer.buffer) {
+        // indexed draw
+        cb.bindIndexBuffer(dp.indexBuffer.buffer, dp.indexBuffer.offset, dp.indexBuffer.indexType);
+        cb.drawIndexed(dp.indexCount, dp.instanceCount, dp.firstIndex, dp.vertexOffset, dp.firstInstance);
+    } else {
+        // non-indexed draw
+        cb.draw(dp.vertexCount, dp.instanceCount, dp.firstVertex, dp.firstInstance);
+    }
+}
+
+// *********************************************************************************************************************
+// Compute Pipeline
+// *********************************************************************************************************************
+
+ComputePipeline::ComputePipeline(const ConstructParameters & params): Pipeline(params.name, {params.cs}) {
+    vk::ComputePipelineCreateInfo ci;
+    ci.setStage({{}, vk::ShaderStageFlagBits::eCompute, params.cs->handle(), params.cs->entry().c_str()});
+    ci.setLayout(_impl->layout().handle());
+    auto gi          = params.cs->gi();
+    _impl->handle    = gi->device.createComputePipeline(nullptr, ci, gi->allocator).value;
+    _impl->bindPoint = vk::PipelineBindPoint::eCompute;
+}
+
+void ComputePipeline::cmdDispatch(vk::CommandBuffer cb, const DispatchParameters & dp) {
+    cb.bindPipeline(vk::PipelineBindPoint::eCompute, _impl->handle);
+    cb.dispatch((uint32_t) dp.width, (uint32_t) dp.height, (uint32_t) dp.depth);
+}
+
+// *********************************************************************************************************************
 // Drawable
 // *********************************************************************************************************************
 
@@ -1471,7 +2020,6 @@ protected:
 
     friend class PipelineLayout;
 };
-
 
 class Argument::Impl {
 public:
@@ -1670,6 +2218,54 @@ public:
         _constants.back().value.assign((const uint8_t *) data, (const uint8_t *) data + size);
     }
 
+    void set(const vk::ArrayProxy<const BufferView> & vertexBuffers) { _vertexBuffers = vertexBuffers; }
+
+    void set(const IndexBuffer & ib) { _indexBuffer = ib; }
+
+    void set(const GraphicsPipeline::DrawParameters &) {
+        // TODO
+    }
+
+    void set(const ComputePipeline::DispatchParameters &) {
+        // TODO
+    }
+
+    void render(vk::CommandBuffer cb) {
+        if (!validate()) return;
+        cb.bindPipeline(_pipeline->bindPoint(), _pipeline->handle());
+        bindDescriptors(cb);
+        bindConstants(cb);
+        if (_pipeline->bindPoint() == vk::PipelineBindPoint::eGraphics) {
+            bindVertcies();
+            auto gp = (GraphicsPipeline *) _pipeline.get();
+            gp->cmdDraw(cb, _drawParameters);
+        } else {
+            RVI_ASSERT(_pipeline->bindPoint() == vk::PipelineBindPoint::eCompute);
+            auto cp = (ComputePipeline *) _pipeline.get();
+            cp->cmdDispatch(cb, _dispatchParameters);
+        }
+    }
+
+private:
+    struct ConstantArgument {
+        vk::ShaderStageFlags stages {};
+        uint32_t             offset {};
+        std::vector<uint8_t> value {};
+    };
+
+    Ref<Pipeline>                                          _pipeline;
+    std::unordered_map<DescriptorIdentifier, ArgumentImpl> _descriptors;
+    std::vector<ConstantArgument>                          _constants;
+    vk::ArrayProxy<const BufferView>                       _vertexBuffers;
+    IndexBuffer                                            _indexBuffer;
+    GraphicsPipeline::DrawParameters                       _drawParameters;
+    ComputePipeline::DispatchParameters                    _dispatchParameters;
+
+    bool                                _valid   = false;
+    bool                                _changed = true;
+    std::vector<vk::WriteDescriptorSet> _writes;
+
+private:
     Argument * get(DescriptorIdentifier id) { return &_descriptors[id]; }
 
     const Argument * find(DescriptorIdentifier id) const {
@@ -1694,392 +2290,13 @@ public:
         return v;
     }
 
-private:
-    struct ConstantArgument {
-        vk::ShaderStageFlags stages {};
-        uint32_t             offset {};
-        std::vector<uint8_t> value {};
-    };
+    bool validate() {
+        if (!_changed) return _valid;
 
-    std::unordered_map<DescriptorIdentifier, ArgumentImpl> _descriptors;
-    std::vector<ConstantArgument>                          _constants;
-};
+        _changed = false;
+        _valid   = false;
 
-Drawable::Drawable(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this); }
-Drawable::~Drawable() {
-    delete _impl;
-    _impl = nullptr;
-}
-auto Drawable::clear() -> Drawable & {
-    _impl->clear();
-    return *this;
-}
-auto Drawable::b(DescriptorIdentifier id, vk::ArrayProxy<const BufferView> v) -> Drawable & {
-    _impl->set(id, v);
-    return *this;
-}
-auto Drawable::t(DescriptorIdentifier id, vk::ArrayProxy<const ImageSampler> v) -> Drawable & {
-    _impl->set(id, v);
-    return *this;
-}
-auto Drawable::c(size_t offset, size_t size, const void * data, vk::ShaderStageFlags stages) -> Drawable & {
-    _impl->set(offset, size, data, stages);
-    return *this;
-}
-
-// *********************************************************************************************************************
-// Pipeline Reflection
-// *********************************************************************************************************************
-
-/// A utility class that describes parameter layout of a pipeline object.
-struct PipelineReflection {
-    /// @brief Represents one descriptor or descriptor array.
-    struct Descriptor {
-        /// @brief names of the shader variable.
-        /// The whole structure is considered empty/invalid, if names set is empty.
-        std::set<std::string> names;
-
-        /// @brief The descriptor binding information.
-        /// If the descriptor count is empty, then the whole structure is considered empty/invalid.
-        vk::DescriptorSetLayoutBinding binding;
-
-        bool empty() const { return names.empty() || 0 == binding.descriptorCount; }
-    };
-
-    /// Collection of descriptors in one set.
-    typedef std::vector<Descriptor> DescriptorSet;
-
-    /// Collection of descriptor sets indexed by the set index.
-    typedef std::vector<DescriptorSet> DescriptorLayout;
-
-    struct Constant {
-        uint32_t begin = (uint32_t) -1;
-        uint32_t end   = 0;
-        // TODO: add push constant name information.
-
-        bool empty() const { return begin >= end; }
-    };
-
-    /// Collection of push constants for each shader stage.
-    typedef std::map<vk::ShaderStageFlagBits, Constant> ConstantLayout;
-
-    /// Properties of vertex shader input.
-    struct VertexShaderInput {
-        vk::Format  format = vk::Format::eUndefined;
-        std::string shaderVariable; ///< name of the shader variable.
-    };
-
-    /// Collection of vertex shader input. Key is input location.
-    typedef std::map<uint32_t, VertexShaderInput> VertexLayout;
-
-    std::string      name; ///< name of the program that this reflect is from. this field is for logging and debugging.
-    DescriptorLayout descriptors;
-    ConstantLayout   constants;
-    VertexLayout     vertex;
-
-    PipelineReflection() {}
-};
-
-template<typename T, typename FUNC, typename... ARGS>
-static std::vector<T *> enumerateShaderVariables(SpvReflectShaderModule & module, FUNC func, ARGS... args) {
-    uint32_t count  = 0;
-    auto     result = func(&module, args..., &count, nullptr);
-    RVI_REQUIRE(result == SPV_REFLECT_RESULT_SUCCESS);
-    std::vector<T *> v(count);
-    result = func(&module, args..., &count, v.data());
-    RVI_REQUIRE(result == SPV_REFLECT_RESULT_SUCCESS);
-    return v;
-}
-
-struct MergedDescriptorBinding {
-    SpvReflectDescriptorBinding * binding    = nullptr;
-    VkShaderStageFlags            stageFlags = 0;
-    std::set<std::string>         names;
-};
-
-struct MergedDescriptorSet {
-    std::map<uint32_t, MergedDescriptorBinding> descriptors; // key is binding location
-};
-
-static const char * getDescriptorName(const SpvReflectDescriptorBinding * d) {
-    const char * name = d->name;
-    if (name && *name) return name;
-    name = d->type_description->type_name;
-    if (name && *name) return name;
-    RVI_THROW("name is empty."); // TODO: make up a name using descriptors type and binding location.
-}
-
-static void mergeDescriptorSet(MergedDescriptorSet & merged, const SpvReflectShaderModule & module,
-                               const vk::ArrayProxy<SpvReflectDescriptorBinding *> & incoming) {
-    for (const auto & i : incoming) {
-        const char * name = getDescriptorName(i);
-        auto &       d    = merged.descriptors[i->binding];
-        if (d.binding) {
-            RVI_ASSERT(d.binding->binding == i->binding);
-            // check for possible conflict
-            if (d.binding->descriptor_type != i->descriptor_type)
-                RVI_LOGE("Shader variable %s has conflicting types: %d != %d", name, d.binding->descriptor_type, i->descriptor_type);
-            // TODO: check array.dims_count and array.dims
-        } else {
-            d.binding = i;
-        }
-        d.stageFlags |= module.shader_stage;
-        d.names.insert(name);
-    }
-}
-
-static PipelineReflection::Descriptor convertArray(const MergedDescriptorBinding & src) {
-    PipelineReflection::Descriptor dst = {};
-    dst.names                          = src.names;
-    dst.binding.binding                = src.binding->binding; // wtf, so many bindings ...
-    dst.binding.descriptorType         = static_cast<vk::DescriptorType>(src.binding->descriptor_type);
-    dst.binding.descriptorCount        = 1;
-    for (uint32_t i = 0; i < src.binding->array.dims_count; ++i) dst.binding.descriptorCount *= src.binding->array.dims[i];
-    dst.binding.stageFlags = (vk::ShaderStageFlagBits) src.stageFlags;
-    return dst;
-}
-
-static PipelineReflection::DescriptorSet convertSet(const MergedDescriptorSet & merged) {
-    PipelineReflection::DescriptorSet set;
-    for (const auto & kv : merged.descriptors) {
-        if (set.size() <= kv.first) set.resize(kv.first + 1);
-        set[kv.first] = convertArray(kv.second);
-    }
-    return set;
-}
-
-static PipelineReflection convertRefl(std::map<uint32_t, MergedDescriptorSet> & descriptors) {
-    PipelineReflection refl;
-    if (!descriptors.empty()) {
-        refl.descriptors.resize(descriptors.rbegin()->first + 1);
-        for (const auto & kv : descriptors) {
-            RVI_ASSERT(kv.first < refl.descriptors.size());
-            refl.descriptors[kv.first] = convertSet(kv.second);
-        }
-    }
-    return refl;
-}
-
-static void convertVertexInputs(PipelineReflection & refl, vk::ArrayProxy<SpvReflectInterfaceVariable *> vertexInputs) {
-    for (auto i : vertexInputs) {
-        auto name = std::string(i->name);
-        if (name.substr(0, 3) == "gl_") continue; // skip OpenGL's reserved inputs.
-        refl.vertex[i->location] = {(vk::Format) i->format, name};
-    }
-}
-
-static PipelineReflection reflectShaders(const std::string & pipelineName, vk::ArrayProxy<const Shader * const> shaders) {
-    RVI_ASSERT(!shaders.empty());
-
-    // The first uint32_t is set index. The 2nd one is shader variable name.
-    std::map<uint32_t, MergedDescriptorSet> merged;
-
-    std::vector<SpvReflectInterfaceVariable *> vertexInputs;
-
-    PipelineReflection::ConstantLayout constants;
-
-    std::vector<SpvReflectShaderModule> modules;
-
-    for (const auto & shader : shaders) {
-        // ignore null shader pointer
-        if (!shader) continue;
-
-        // Ignore shader w/o spirv code
-        auto spirv = shader->spirv();
-        if (spirv.empty()) continue;
-
-        SpvReflectShaderModule module;
-        SpvReflectResult       result = spvReflectCreateShaderModule(spirv.size() * sizeof(uint32_t), spirv.data(), &module);
-        RVI_REQUIRE(result == SPV_REFLECT_RESULT_SUCCESS);
-
-        // Extract descriptor sets from each shader, then merge together.
-        auto sets = enumerateShaderVariables<SpvReflectDescriptorSet>(module, spvReflectEnumerateEntryPointDescriptorSets, shader->entry().c_str());
-        for (const auto & set : sets) mergeDescriptorSet(merged[set->set], module, {set->binding_count, set->bindings});
-
-        // enumerate push constants
-        auto pc = enumerateShaderVariables<SpvReflectBlockVariable>(module, spvReflectEnumeratePushConstantBlocks);
-        for (const auto & c : pc) {
-            auto & sc = constants[(vk::ShaderStageFlagBits) module.shader_stage];
-            sc.begin  = std::min(sc.begin, (uint32_t) c->offset);
-            sc.end    = std::max(sc.end, (uint32_t) (c->offset + c->size));
-        }
-
-        // Enumerate vertex shader inputs
-        if (module.shader_stage == SPV_REFLECT_SHADER_STAGE_VERTEX_BIT) {
-            vertexInputs = enumerateShaderVariables<SpvReflectInterfaceVariable>(module, spvReflectEnumerateInputVariables);
-        }
-
-        // store module to module list. we can't delete it yet, because the convertRefl() function still references data in it.
-        modules.push_back(module);
-    }
-
-    // Convert program descriptors
-    auto refl = convertRefl(merged);
-
-    // Convert vertex shader inputs
-    convertVertexInputs(refl, vertexInputs);
-
-    // Store push constants
-    refl.constants = constants;
-
-    // Destroy all modules.
-    for (auto & m : modules) spvReflectDestroyShaderModule(&m);
-
-    // done
-    refl.name = pipelineName;
-    return refl;
-}
-
-// *********************************************************************************************************************
-// PipelineLayout
-// *********************************************************************************************************************
-
-// ---------------------------------------------------------------------------------------------------------------------
-/// A wrapper class for VkPipelineLayout
-class PipelineLayout : public Root {
-public:
-    struct ConstructParameters : public Root::ConstructParameters {
-        vk::ArrayProxy<const Shader * const> shaders;
-    };
-
-    PipelineLayout(const ConstructParameters &);
-
-    ~PipelineLayout() override;
-
-    /// @brief Returns the underlying Vulkan handle.
-    vk::PipelineLayout handle() const;
-
-    const PipelineReflection & reflection() const;
-
-    /// @brief Bind argument pack to the command buffer
-    /// After this method succeeded (returns true), it is ready to bind issue draw/dispatch commands.
-    bool cmdBind(vk::CommandBuffer, vk::PipelineBindPoint, const Drawable &) const;
-
-protected:
-    void onNameChanged(const std::string &) override;
-
-private:
-    class Impl;
-    Impl * _impl = nullptr;
-};
-
-class PipelineLayout::Impl {
-public:
-    Impl(PipelineLayout & owner, vk::ArrayProxy<const Shader * const> shaders): _owner(owner) {
-        // make sure shader array is not empty and the first shader is not null.
-        RVI_REQUIRE(shaders.size() > 0 && shaders.front());
-
-        _gi         = shaders.front()->gi();
-        _reflection = reflectShaders(owner.name(), shaders);
-
-        // create descriptor set
-        _sets.resize(_reflection.descriptors.size());
-        for (uint32_t s = 0; s < _sets.size(); ++s) {
-            // go through all descriptors in this set. build variable and binding arrays.
-            auto & bindings = _sets[s].bindings;
-            auto   sizesMap = std::map<vk::DescriptorType, uint32_t>();
-            bindings.reserve(_reflection.descriptors[s].size());
-            for (uint32_t i = 0; i < _reflection.descriptors[s].size(); ++i) {
-                const auto & d = _reflection.descriptors[s][i];
-                if (d.empty()) continue; // skip empty descriptor
-                bindings.push_back(d.binding);
-                sizesMap[d.binding.descriptorType] += d.binding.descriptorCount;
-            }
-
-            // we have gone through all descriptors in the set. Now we can create descriptor set layout.
-            auto ci         = vk::DescriptorSetLayoutCreateInfo();
-            ci.bindingCount = (uint32_t) bindings.size();
-            ci.pBindings    = bindings.data();
-            _sets[s].layout = _gi->device.createDescriptorSetLayout(ci, _gi->allocator);
-
-            // convert sizes map to array
-            std::vector<vk::DescriptorPoolSize> sizes;
-            sizes.reserve(sizesMap.size());
-            for (const auto & kv : sizesMap) sizes.push_back({kv.first, kv.second});
-
-            // Create descriptor pool
-            // TODO: make the pool size configurable.
-            _sets[s].pool          = _gi->device.createDescriptorPool(vk::DescriptorPoolCreateInfo().setMaxSets(1024).setPoolSizes(sizes), _gi->allocator);
-            _sets[s].availableSets = 1024;
-        }
-
-        // create push constant array
-        std::vector<vk::PushConstantRange> pc;
-        pc.reserve(_reflection.constants.size());
-        for (const auto & kv : _reflection.constants) {
-            if (kv.second.empty()) continue;
-            pc.push_back({kv.first, kv.second.begin, kv.second.end - kv.second.begin});
-        }
-
-        // create pipeline layout array
-        std::vector<vk::DescriptorSetLayout> layouts;
-        layouts.reserve(_sets.size());
-        for (const auto & s : _sets) layouts.push_back(s.layout);
-
-        // create pipeline layout
-        _handle = _gi->device.createPipelineLayout(vk::PipelineLayoutCreateInfo().setSetLayouts(layouts).setPushConstantRanges(pc), _gi->allocator);
-
-        // done
-        onNameChanged();
-    }
-
-    ~Impl() {
-        for (auto & s : _sets) { s.clear(*_gi); }
-        _sets.clear();
-        _gi->safeDestroy(_handle);
-    }
-
-    vk::PipelineLayout handle() const { return _handle; }
-
-    const PipelineReflection & reflection() const { return _reflection; }
-
-    bool cmdBind(vk::CommandBuffer cb, vk::PipelineBindPoint bp, const Drawable & ap) { return bindDescriptors(cb, bp, ap) && bindPushConstants(cb, ap); }
-
-    void onNameChanged() {
-        if (_handle) setVkObjectName(_gi->device, _handle, _owner.name());
-    }
-
-private:
-    struct DescSet {
-        vk::DescriptorSetLayout                     layout;
-        std::vector<vk::DescriptorSetLayoutBinding> bindings;
-        vk::DescriptorPool                          pool;
-        size_t                                      availableSets = 0; ///< number of sets that are available for allocation in the pool.
-        std::vector<vk::DescriptorPool>             full;              // pools that are full already.
-
-        vk::DescriptorSet alloc(const GlobalInfo & gi) {
-            if (availableSets > 0) {
-                auto s = gi.device.allocateDescriptorSets(vk::DescriptorSetAllocateInfo(pool, 1, &layout));
-                availableSets--;
-                return s[0];
-            } else {
-                RVI_LOGE("descriptor pool is out of space.");
-                return {};
-            }
-        }
-
-        void clear(const GlobalInfo & gi) {
-            gi.safeDestroy(layout);
-            gi.safeDestroy(pool);
-            for (auto & p : full) { gi.safeDestroy(p); }
-            full.clear();
-        }
-    };
-
-private:
-    PipelineLayout &     _owner;
-    const GlobalInfo *   _gi = nullptr;
-    PipelineReflection   _reflection;
-    std::vector<DescSet> _sets;
-    vk::PipelineLayout   _handle;
-
-    static const Argument::Impl * findArgument(const Drawable & ap, uint32_t set, uint32_t binding) {
-        auto a = ap.find({set, binding});
-        return a ? a->_impl : nullptr;
-    }
-
-    bool bindDescriptors(vk::CommandBuffer cb, vk::PipelineBindPoint bindPoint, const Drawable & ap) {
-        auto writes     = std::vector<vk::WriteDescriptorSet>();
+        _writes.clear();
         auto setHandles = std::vector<vk::DescriptorSet>();
         for (uint32_t si = 0; si < _sets.size(); ++si) {
             auto & s       = _sets[si];
@@ -2129,200 +2346,98 @@ private:
         }
         _gi->device.updateDescriptorSets(writes, {});
         cb.bindDescriptorSets(bindPoint, _handle, 0, setHandles, {});
-        return true;
+
+        // done
+        _valid = true;
+        return _valid;
     }
 
-    bool bindPushConstants(vk::CommandBuffer cb, const Drawable & ap) {
-        for (const auto & kv : _reflection.constants) {
+    void bindDescriptors() {
+        RVI_ASSERT(!_changed && _valid);
+
+        // TODO
+    }
+
+    void bindConstants() const {
+        auto         layout     = _pipeline->layout();
+        const auto & reflection = _pipeline->reflection();
+        for (const auto & kv : reflection.constants) {
             if (kv.second.empty()) continue;
-            auto v = ap._impl->getConstant(kv.first, kv.second.begin, kv.second.end);
+            auto v = getConstant(kv.first, kv.second.begin, kv.second.end);
             if (v.empty()) {
                 // No warnings ehre. Push constant value is persistent within one
                 // command buffer submit. So it is not required to update all the values on every pipeline binding.
                 continue;
             }
-            for (const auto & [pcr, data] : v) cb.pushConstants(_handle, pcr.stageFlags, pcr.offset, pcr.size, data);
+            for (const auto & [pcr, data] : v) cb.pushConstants(layout, pcr.stageFlags, pcr.offset, pcr.size, data);
         }
-        return true;
+    }
+
+    void bindVertcies() const {
+        const auto & dp = _drawParameters;
+        if (_vertexBuffers.size() > 0) {
+            RVI_REQUIRE(_vertexBuffers.size() <= 16); // TODO: use a stack_array class to remove this limitation.
+            vk::Buffer     buffers[16];
+            vk::DeviceSize offsets[16];
+            for (size_t i = 0; i < _vertexBuffers.size(); ++i) {
+                const auto & view = _vertexBuffers.data()[i];
+                RVI_REQUIRE(view.buffer, "Empty vertex buffer is not allowed.");
+                buffers[i] = view.buffer;
+                offsets[i] = view.offset;
+                // TODO: validate vertex buffer size on debug build.
+            }
+            cb.bindVertexBuffers(0, (uint32_t) _vertexBuffers.size(), buffers, offsets);
+        }
+
+        if (_indexBuffer.buffer) {
+            // indexed draw
+            cb.bindIndexBuffer(_indexBuffer.buffer, _indexBuffer.offset, _indexBuffer.indexType);
+            cb.drawIndexed(dp.indexCount, dp.instanceCount, dp.firstIndex, dp.vertexOffset, dp.firstInstance);
+        } else {
+            // non-indexed draw
+            cb.draw(dp.vertexCount, dp.instanceCount, dp.firstVertex, dp.firstInstance);
+        }
     }
 };
 
-PipelineLayout::PipelineLayout(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this, cp.shaders); }
-PipelineLayout::~PipelineLayout() {
+Drawable::Drawable(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this); }
+Drawable::~Drawable() {
     delete _impl;
     _impl = nullptr;
 }
-auto PipelineLayout::handle() const -> vk::PipelineLayout { return _impl->handle(); }
-auto PipelineLayout::reflection() const -> const PipelineReflection & { return _impl->reflection(); }
-bool PipelineLayout::cmdBind(vk::CommandBuffer cb, vk::PipelineBindPoint bp, const Drawable & ap) const { return _impl->cmdBind(cb, bp, ap); }
-void PipelineLayout::onNameChanged(const std::string &) { _impl->onNameChanged(); }
-
-// *********************************************************************************************************************
-// Pipeline
-// *********************************************************************************************************************
-
-class Pipeline::Impl {
-public:
-    vk::Pipeline          handle {};
-    vk::PipelineBindPoint bindPoint;
-
-    Impl(Pipeline & owner, vk::ArrayProxy<const Shader * const> shaders) {
-        // The first shader must be valid.
-        RVI_REQUIRE(shaders.size() > 0 && shaders.front(), "Failed to create pipeline layout: the first shader in the shader array must be valid.");
-        _gi = shaders.front()->gi();
-        // TODO: reuse layout via a cache object?
-        _layout.reset(new PipelineLayout({{owner.name()}, shaders}));
-    }
-
-    ~Impl() { _gi->device.destroy(handle); }
-
-    PipelineLayout & layout() const { return *_layout; }
-
-    void cmdBind(vk::CommandBuffer cb, const Drawable & args) const {
-        if (handle) _layout->cmdBind(cb, bindPoint, args);
-    }
-
-private:
-    const GlobalInfo *  _gi = nullptr;
-    Ref<PipelineLayout> _layout;
-};
-
-Pipeline::Pipeline(const std::string & name, vk::ArrayProxy<const Shader * const> shaders): Root({name}) { _impl = new Impl(*this, shaders); }
-Pipeline::~Pipeline() {
-    delete _impl;
-    _impl = nullptr;
+auto Drawable::clear() -> Drawable & {
+    _impl->clear();
+    return *this;
 }
-void Pipeline::cmdBind(vk::CommandBuffer cb, const Drawable & ap) const { return _impl->cmdBind(cb, ap); }
-
-// *********************************************************************************************************************
-// Graphics Pipeline
-// *********************************************************************************************************************
-
-GraphicsPipeline::GraphicsPipeline(const ConstructParameters & params): Pipeline(params.name, {params.vs, params.fs}) {
-    // create shader stage array
-    RVI_REQUIRE(params.vs, "Vertex shader is required for graphics pipeline.");
-    auto gi           = params.vs->gi();
-    auto shaderStages = std::vector<vk::PipelineShaderStageCreateInfo>();
-    shaderStages.push_back({{}, vk::ShaderStageFlagBits::eVertex, params.vs->handle(), params.vs->entry().c_str()});
-    if (params.fs) shaderStages.push_back({{}, vk::ShaderStageFlagBits::eFragment, params.fs->handle(), params.fs->entry().c_str()});
-
-    // setup vertex input stage
-    const auto & refl = _impl->layout().reflection();
-    if (refl.vertex.size() != params.va.size()) {
-        RVI_LOGE("Failed to create graphics pipeline (%s): vertex input stage requires %zu attributes, but only %zu are provided.", params.name.c_str(),
-                 refl.vertex.size(), params.va.size());
-        return;
-    }
-    for (const auto & kv : refl.vertex) {
-        auto location = kv.first;
-        auto iter     = std::find_if(params.va.begin(), params.va.end(), [location](const auto & a) { return a.location == location; });
-        if (iter == params.va.end()) {
-            RVI_LOGE("Failed to create graphics pipeline (%s): vertex input stage requires attribute at location %u, but it is not provided.",
-                     params.name.c_str(), location);
-            return;
-        }
-        const auto & attribute = *iter;
-        auto         vbi       = std::find_if(params.vb.begin(), params.vb.end(), [attribute](const auto & b) { return b.binding == attribute.binding; });
-        if (vbi == params.vb.end()) {
-            RVI_LOGE("Failed to create graphics pipeline (%s): vertex input stage requires vertex buffer #%u, but it is not provided.", params.name.c_str(),
-                     attribute.binding);
-            return;
-        }
-    }
-    auto vertex = vk::PipelineVertexInputStateCreateInfo().setVertexAttributeDescriptions(params.va).setVertexBindingDescriptions(params.vb);
-
-    // setup viewport and scissor states.
-    auto viewport = vk::PipelineViewportStateCreateInfo();
-    viewport.setViewports(params.viewports);
-    viewport.setScissors(params.scissors);
-
-    // setup dynamic states
-    std::vector<vk::DynamicState> dynamicStates;
-    for (const auto & [s, v] : params.dynamic) {
-        dynamicStates.push_back(s);
-        switch (s) {
-        case vk::DynamicState::eViewport:
-            viewport.setViewportCount((uint32_t) v);
-            viewport.setPViewports(nullptr);
-            break;
-        case vk::DynamicState::eViewportWithCount:
-            viewport.setViewports({});
-            break;
-        case vk::DynamicState::eScissor:
-            viewport.setScissorCount((uint32_t) v);
-            viewport.setPScissors(nullptr);
-            break;
-        case vk::DynamicState::eScissorWithCount:
-            viewport.setScissors({});
-            break;
-        default:
-            // do nothing
-            break;
-        }
-    }
-    vk::PipelineDynamicStateCreateInfo dynamicCI({}, dynamicStates);
-
-    // setup blend stage
-    auto blend           = vk::PipelineColorBlendStateCreateInfo {}.setAttachments(params.attachments);
-    blend.blendConstants = params.blendConstants;
-
-    // setup the create info
-    auto ci = vk::GraphicsPipelineCreateInfo({}, (uint32_t) shaderStages.size(), shaderStages.data(), &vertex, &params.ia, &params.tess, &viewport,
-                                             &params.rast, &params.msaa, &params.depth, &blend, &dynamicCI, _impl->layout().handle(), params.pass,
-                                             params.subpass, params.baseHandle, params.baseIndex);
-
-    // create the shader.
-    _impl->handle    = gi->device.createGraphicsPipeline(nullptr, ci, gi->allocator).value;
-    _impl->bindPoint = vk::PipelineBindPoint::eGraphics;
+auto Drawable::b(DescriptorIdentifier id, vk::ArrayProxy<const BufferView> v) -> Drawable & {
+    _impl->set(id, v);
+    return *this;
 }
-
-void GraphicsPipeline::cmdDraw(vk::CommandBuffer cb, const DrawParameters & dp) {
-    if (!_impl->handle) return;
-
-    cb.bindPipeline(vk::PipelineBindPoint::eGraphics, _impl->handle);
-
-    // bind vertex buffers
-    if (dp.vertexBuffers.size() > 0) {
-        RVI_REQUIRE(dp.vertexBuffers.size() <= 16); // TODO: use a stack_array class to remove this limitation.
-        vk::Buffer     buffers[16];
-        vk::DeviceSize offsets[16];
-        for (size_t i = 0; i < dp.vertexBuffers.size(); ++i) {
-            const auto & view = dp.vertexBuffers.data()[i];
-            RVI_REQUIRE(view.buffer, "Empty vertex buffer is not allowed.");
-            buffers[i] = view.buffer;
-            offsets[i] = view.offset;
-            // TODO: validate vertex buffer size on debug build.
-        }
-        cb.bindVertexBuffers(0, (uint32_t) dp.vertexBuffers.size(), buffers, offsets);
-    }
-
-    if (dp.indexBuffer.buffer) {
-        // indexed draw
-        cb.bindIndexBuffer(dp.indexBuffer.buffer, dp.indexBuffer.offset, dp.indexBuffer.indexType);
-        cb.drawIndexed(dp.indexCount, dp.instanceCount, dp.firstIndex, dp.vertexOffset, dp.firstInstance);
-    } else {
-        // non-indexed draw
-        cb.draw(dp.vertexCount, dp.instanceCount, dp.firstVertex, dp.firstInstance);
-    }
+auto Drawable::t(DescriptorIdentifier id, vk::ArrayProxy<const ImageSampler> v) -> Drawable & {
+    _impl->set(id, v);
+    return *this;
 }
-
-// *********************************************************************************************************************
-// Compute Pipeline
-// *********************************************************************************************************************
-
-ComputePipeline::ComputePipeline(const ConstructParameters & params): Pipeline(params.name, {params.cs}) {
-    vk::ComputePipelineCreateInfo ci;
-    ci.setStage({{}, vk::ShaderStageFlagBits::eCompute, params.cs->handle(), params.cs->entry().c_str()});
-    ci.setLayout(_impl->layout().handle());
-    auto gi          = params.cs->gi();
-    _impl->handle    = gi->device.createComputePipeline(nullptr, ci, gi->allocator).value;
-    _impl->bindPoint = vk::PipelineBindPoint::eCompute;
+auto Drawable::c(size_t offset, size_t size, const void * data, vk::ShaderStageFlags stages) -> Drawable & {
+    _impl->set(offset, size, data, stages);
+    return *this;
 }
-
-void ComputePipeline::cmdDispatch(vk::CommandBuffer cb, const DispatchParameters & dp) {
-    cb.bindPipeline(vk::PipelineBindPoint::eCompute, _impl->handle);
-    cb.dispatch((uint32_t) dp.width, (uint32_t) dp.height, (uint32_t) dp.depth);
+auto Drawable::v(vk::ArrayProxy<const BufferView> v) -> Drawable & {
+    _impl->set(v);
+    return *this;
 }
+auto Drawable::i(const IndexBuffer & v) -> Drawable & {
+    _impl->set(v);
+    return *this;
+}
+auto Drawable::dp(const GraphicsPipeline::DrawParameters & v) -> Drawable & {
+    _impl->set(v);
+    return *this;
+}
+auto Drawable::dp(const ComputePipeline::DispatchParameters & v) -> Drawable & {
+    _impl->set(v);
+    return *this;
+}
+void Drawable::cmdRender(vk::CommandBuffer) const { return _impl->render(); }
 
 // *********************************************************************************************************************
 // Swapchain
