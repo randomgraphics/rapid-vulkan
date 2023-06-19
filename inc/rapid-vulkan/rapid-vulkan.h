@@ -1431,29 +1431,6 @@ struct ImageSampler {
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// Represent a single pipeline descriptor
-/// @todo rename to Descriptor
-class Argument {
-public:
-    RVI_NO_COPY_NO_MOVE(Argument);
-
-    /// @brief Set value of buffer argument. No effect, if the argument is not a buffer.
-    Argument & b(vk::ArrayProxy<const BufferView>);
-
-    /// @brief Set value of image/sampler argument. No effect, if the argument is not a image/sampler
-    Argument & i(vk::ArrayProxy<const ImageSampler>);
-
-protected:
-    Argument();
-    ~Argument(); // No need make this virtual, since we'll always delete it through the derived class.
-
-    class Impl;
-    Impl * _impl = nullptr;
-
-    friend class PipelineLayout;
-};
-
-// ---------------------------------------------------------------------------------------------------------------------
 /// Unique identifier of a pipeline descriptor
 union DescriptorIdentifier {
     uint64_t u64 = 0;
@@ -1474,56 +1451,10 @@ union DescriptorIdentifier {
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// Represent a full set of arguments that can be applied to a pipeline
-class ArgumentPack : public Root {
-public:
-    struct ConstructParameters : public Root::ConstructParameters {
-        // reserved for future use.
-    };
-
-    ArgumentPack(const ConstructParameters &);
-
-    ~ArgumentPack();
-
-    /// @brief clear all arguments.
-    ArgumentPack & clear();
-
-    /// @brief Set value of buffer argument. If the argument has not been set before, a new argument will be created.
-    ArgumentPack & b(DescriptorIdentifier id, vk::ArrayProxy<const BufferView>);
-
-    /// @brief Set value of image/sampler argument. If the argument has not been set before, a new argument will be created.
-    ArgumentPack & i(DescriptorIdentifier id, vk::ArrayProxy<const ImageSampler>);
-
-    /// @brief Set value of push constant.
-    ArgumentPack & c(size_t offset, size_t size, const void * data, vk::ShaderStageFlags stages = vk::ShaderStageFlagBits::eAll);
-
-    /// @brief Set value of push constant.
-    template<typename T>
-    ArgumentPack & c(size_t offset, vk::ArrayProxy<T> data, vk::ShaderStageFlags stages = vk::ShaderStageFlagBits::eAll) {
-        return c(offset, data.size() * sizeof(T), data.data(), stages);
-    }
-
-    /// @brief Get argument by ID.
-    /// The returned argument instance can be used to set value of that argument w/o paying the cost of string hashing.
-    /// If the argument has not been set before, a new argument will be created and returned.
-    Argument * get(DescriptorIdentifier);
-
-    /// @brief Retrieve an existing argument by name. Returns nullptr if the argument has not been set.
-    const Argument * find(DescriptorIdentifier) const;
-
-private:
-    friend class PipelineLayout;
-    class Impl;
-    Impl * _impl = nullptr;
-};
-
-// ---------------------------------------------------------------------------------------------------------------------
 /// A wrapper class for VkPipeline
 class Pipeline : public Root {
 public:
     ~Pipeline() override;
-
-    void cmdBind(vk::CommandBuffer cb, const ArgumentPack & ap) const;
 
 protected:
     Pipeline(const std::string & name, vk::ArrayProxy<const Shader * const> shaders);
@@ -1768,6 +1699,55 @@ public:
     ComputePipeline(const ConstructParameters &);
 
     void cmdDispatch(vk::CommandBuffer, const DispatchParameters &);
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// Represent a pipeline and the full set of resources/parameters to issue a draw/dispatch call to GPU. 
+class Drawable : public Root {
+public:
+    struct ConstructParameters : public Root::ConstructParameters {
+        Pipeline * pipeline = nullptr;
+    };
+
+    Drawable(const ConstructParameters &);
+
+    ~Drawable();
+
+    /// @brief clear all draw arguments.
+    Drawable & clear();
+
+    /// @brief Set value of buffer argument. Do nothing if the argument is not used by the pipeline.
+    Drawable & b(DescriptorIdentifier id, vk::ArrayProxy<const BufferView>);
+
+    /// @brief Set value of texture (image/sampler) argument. Do nothing if the argument is not used by the pipeline.
+    Drawable & t(DescriptorIdentifier id, vk::ArrayProxy<const ImageSampler>);
+
+    /// @brief Set value of push constant.
+    Drawable & c(size_t offset, size_t size, const void * data, vk::ShaderStageFlags stages = vk::ShaderStageFlagBits::eAll);
+
+    /// @brief Set value of push constant.
+    template<typename T>
+    Drawable & c(size_t offset, vk::ArrayProxy<T> data, vk::ShaderStageFlags stages = vk::ShaderStageFlagBits::eAll) {
+        return c(offset, data.size() * sizeof(T), data.data(), stages);
+    }
+
+    /// @brief Set vertex buffer.
+    Drawable & v(...);
+
+    /// @brief Set index buffer
+    Drawable & i(...);
+
+    // /// @brief Get argument by ID.
+    // /// The returned argument instance can be used to set value of that argument w/o paying the cost of string hashing.
+    // /// If the argument has not been set before, a new argument will be created and returned.
+    // Argument * get(DescriptorIdentifier);
+
+    // /// @brief Retrieve an existing argument by name. Returns nullptr if the argument has not been set.
+    // const Argument * find(DescriptorIdentifier) const;
+
+private:
+    class Impl;
+    Impl * _impl = nullptr;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------

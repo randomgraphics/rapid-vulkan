@@ -1447,8 +1447,31 @@ void Framebuffer::onNameChanged(const std::string &) {
 }
 
 // *********************************************************************************************************************
-// Argument and ArgumentPack
+// Drawable
 // *********************************************************************************************************************
+
+/// Represent a single pipeline descriptor (buffer/image/sampler)
+/// @todo rename to Descriptor
+class Argument {
+public:
+    RVI_NO_COPY_NO_MOVE(Argument);
+
+    /// @brief Set value of buffer argument. No effect, if the argument is not a buffer.
+    Argument & b(vk::ArrayProxy<const BufferView>);
+
+    /// @brief Set value of texture argument. No effect, if the argument is not a image/sampler
+    Argument & t(vk::ArrayProxy<const ImageSampler>);
+
+protected:
+    Argument();
+    ~Argument(); // No need make this virtual, since we'll always delete it through the derived class.
+
+    class Impl;
+    Impl * _impl = nullptr;
+
+    friend class PipelineLayout;
+};
+
 
 class Argument::Impl {
 public:
@@ -1510,7 +1533,7 @@ public:
         _timestamp.fetch_add(1);
     }
 
-    void i(vk::ArrayProxy<const ImageSampler> v) {
+    void t(vk::ArrayProxy<const ImageSampler> v) {
         auto sameValue = [&]() {
             auto p = std::get_if<ImageArgs>(&_value);
             if (!p) return false;
@@ -1549,23 +1572,6 @@ public:
         }
         _timestamp.fetch_add(1);
     }
-
-    // void c(size_t offset, size_t size, const void * data) {
-    //     auto p = std::get_if<Constants>(&_value);
-    //     if (p) {
-    //         auto sameValue = [&]() {
-    //             if (p->size() != (offset + size)) return false;
-    //             return memcmp(p->data() + offset, data, size) == 0;
-    //         };
-    //         if (sameValue()) return;
-    //         memcpy(p->data() + offset, data, size);
-    //     } else {
-    //         std::vector<uint8_t> v(offset + size, 0);
-    //         memcpy(v.data() + offset, data, size);
-    //         _value = std::move(v);
-    //     }
-    //     _timestamp.fetch_add(1);
-    // }
 
     const Value & value() const { return _value; }
 
@@ -1638,20 +1644,14 @@ Argument & Argument::b(vk::ArrayProxy<const BufferView> v) {
     _impl->b(v);
     return *this;
 }
-Argument & Argument::i(vk::ArrayProxy<const ImageSampler> v) {
-    _impl->i(v);
+Argument & Argument::t(vk::ArrayProxy<const ImageSampler> v) {
+    _impl->t(v);
     return *this;
 }
 
-class ArgumentImpl : public Argument {
+class Drawable::Impl {
 public:
-    ArgumentImpl() {}
-    ~ArgumentImpl() {}
-};
-
-class ArgumentPack::Impl {
-public:
-    Impl(ArgumentPack &) {}
+    Impl(Drawable &) {}
 
     ~Impl() {}
 
@@ -1662,7 +1662,7 @@ public:
 
     void set(DescriptorIdentifier id, vk::ArrayProxy<const BufferView> v) { _descriptors[id].b(v); }
 
-    void set(DescriptorIdentifier id, vk::ArrayProxy<const ImageSampler> v) { _descriptors[id].i(v); }
+    void set(DescriptorIdentifier id, vk::ArrayProxy<const ImageSampler> v) { _descriptors[id].t(v); }
 
     void set(size_t offset, size_t size, const void * data, vk::ShaderStageFlags stages) {
         if (0 == data || 0 == size || !stages) return; // ignore empty data.
@@ -1705,29 +1705,27 @@ private:
     std::vector<ConstantArgument>                          _constants;
 };
 
-ArgumentPack::ArgumentPack(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this); }
-ArgumentPack::~ArgumentPack() {
+Drawable::Drawable(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this); }
+Drawable::~Drawable() {
     delete _impl;
     _impl = nullptr;
 }
-auto ArgumentPack::clear() -> ArgumentPack & {
+auto Drawable::clear() -> Drawable & {
     _impl->clear();
     return *this;
 }
-auto ArgumentPack::b(DescriptorIdentifier id, vk::ArrayProxy<const BufferView> v) -> ArgumentPack & {
+auto Drawable::b(DescriptorIdentifier id, vk::ArrayProxy<const BufferView> v) -> Drawable & {
     _impl->set(id, v);
     return *this;
 }
-auto ArgumentPack::i(DescriptorIdentifier id, vk::ArrayProxy<const ImageSampler> v) -> ArgumentPack & {
+auto Drawable::t(DescriptorIdentifier id, vk::ArrayProxy<const ImageSampler> v) -> Drawable & {
     _impl->set(id, v);
     return *this;
 }
-auto ArgumentPack::c(size_t offset, size_t size, const void * data, vk::ShaderStageFlags stages) -> ArgumentPack & {
+auto Drawable::c(size_t offset, size_t size, const void * data, vk::ShaderStageFlags stages) -> Drawable & {
     _impl->set(offset, size, data, stages);
     return *this;
 }
-auto ArgumentPack::get(DescriptorIdentifier id) -> Argument * { return _impl->get(id); }
-auto ArgumentPack::find(DescriptorIdentifier id) const -> const Argument * { return _impl->find(id); }
 
 // *********************************************************************************************************************
 // Pipeline Reflection
@@ -1955,7 +1953,7 @@ public:
 
     /// @brief Bind argument pack to the command buffer
     /// After this method succeeded (returns true), it is ready to bind issue draw/dispatch commands.
-    bool cmdBind(vk::CommandBuffer, vk::PipelineBindPoint, const ArgumentPack &) const;
+    bool cmdBind(vk::CommandBuffer, vk::PipelineBindPoint, const Drawable &) const;
 
 protected:
     void onNameChanged(const std::string &) override;
@@ -2035,7 +2033,7 @@ public:
 
     const PipelineReflection & reflection() const { return _reflection; }
 
-    bool cmdBind(vk::CommandBuffer cb, vk::PipelineBindPoint bp, const ArgumentPack & ap) { return bindDescriptors(cb, bp, ap) && bindPushConstants(cb, ap); }
+    bool cmdBind(vk::CommandBuffer cb, vk::PipelineBindPoint bp, const Drawable & ap) { return bindDescriptors(cb, bp, ap) && bindPushConstants(cb, ap); }
 
     void onNameChanged() {
         if (_handle) setVkObjectName(_gi->device, _handle, _owner.name());
@@ -2075,12 +2073,12 @@ private:
     std::vector<DescSet> _sets;
     vk::PipelineLayout   _handle;
 
-    static const Argument::Impl * findArgument(const ArgumentPack & ap, uint32_t set, uint32_t binding) {
+    static const Argument::Impl * findArgument(const Drawable & ap, uint32_t set, uint32_t binding) {
         auto a = ap.find({set, binding});
         return a ? a->_impl : nullptr;
     }
 
-    bool bindDescriptors(vk::CommandBuffer cb, vk::PipelineBindPoint bindPoint, const ArgumentPack & ap) {
+    bool bindDescriptors(vk::CommandBuffer cb, vk::PipelineBindPoint bindPoint, const Drawable & ap) {
         auto writes     = std::vector<vk::WriteDescriptorSet>();
         auto setHandles = std::vector<vk::DescriptorSet>();
         for (uint32_t si = 0; si < _sets.size(); ++si) {
@@ -2134,7 +2132,7 @@ private:
         return true;
     }
 
-    bool bindPushConstants(vk::CommandBuffer cb, const ArgumentPack & ap) {
+    bool bindPushConstants(vk::CommandBuffer cb, const Drawable & ap) {
         for (const auto & kv : _reflection.constants) {
             if (kv.second.empty()) continue;
             auto v = ap._impl->getConstant(kv.first, kv.second.begin, kv.second.end);
@@ -2156,7 +2154,7 @@ PipelineLayout::~PipelineLayout() {
 }
 auto PipelineLayout::handle() const -> vk::PipelineLayout { return _impl->handle(); }
 auto PipelineLayout::reflection() const -> const PipelineReflection & { return _impl->reflection(); }
-bool PipelineLayout::cmdBind(vk::CommandBuffer cb, vk::PipelineBindPoint bp, const ArgumentPack & ap) const { return _impl->cmdBind(cb, bp, ap); }
+bool PipelineLayout::cmdBind(vk::CommandBuffer cb, vk::PipelineBindPoint bp, const Drawable & ap) const { return _impl->cmdBind(cb, bp, ap); }
 void PipelineLayout::onNameChanged(const std::string &) { _impl->onNameChanged(); }
 
 // *********************************************************************************************************************
@@ -2180,7 +2178,7 @@ public:
 
     PipelineLayout & layout() const { return *_layout; }
 
-    void cmdBind(vk::CommandBuffer cb, const ArgumentPack & args) const {
+    void cmdBind(vk::CommandBuffer cb, const Drawable & args) const {
         if (handle) _layout->cmdBind(cb, bindPoint, args);
     }
 
@@ -2194,7 +2192,7 @@ Pipeline::~Pipeline() {
     delete _impl;
     _impl = nullptr;
 }
-void Pipeline::cmdBind(vk::CommandBuffer cb, const ArgumentPack & ap) const { return _impl->cmdBind(cb, ap); }
+void Pipeline::cmdBind(vk::CommandBuffer cb, const Drawable & ap) const { return _impl->cmdBind(cb, ap); }
 
 // *********************************************************************************************************************
 // Graphics Pipeline

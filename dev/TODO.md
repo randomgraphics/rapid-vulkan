@@ -13,8 +13,7 @@
   
   ### usage #1: multiple (mostly) immutable argument packs
   create multiple instance of ArgumentPack instance, one for each draw call. Each one is bind to different resources.
-  - pros: minimal render time overhead
-  - cons: not intuitive to use.
+  - pros: minimal render time overhead. mimic's the "drwable" concept.
   ```
   // load/creation time
   auto a1 = createArgumentPack(...);
@@ -34,8 +33,7 @@
   pineline->draw()
   ```
 
-  In this case, holding a pool in each arument pack instance is not effecient. So we need another class to hold descriptor pool.
-
+  In this case, resource pool is held by the pipeline object.
 
   ### usage #2: single mutable argument pack
   Only need to create one argument pack instance. The values can change as often as needed.
