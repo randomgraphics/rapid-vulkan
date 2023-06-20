@@ -1492,6 +1492,8 @@ public:
 
     const PipelineReflection & reflection() const;
 
+    std::vector<vk::DescriptorSet> allocateDescriptorSets() const;
+
 protected:
     Pipeline(const std::string & name, vk::ArrayProxy<const Shader * const> shaders);
 
