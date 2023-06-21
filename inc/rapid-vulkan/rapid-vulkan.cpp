@@ -2276,15 +2276,15 @@ public:
     }
 
     Submission submit(const SubmitParameters & sp) {
-        auto lock           = std::lock_guard {_mutex};
-        auto s              = std::make_unique<InternalSubmission>();
-        auto commandBuffers = std::vector<vk::CommandBuffer> {};
+        auto lock    = std::lock_guard {_mutex};
+        auto s       = std::make_unique<InternalSubmission>();
+        auto handles = std::vector<vk::CommandBuffer> {};
         for (auto c : sp.commandBuffers) {
             auto p = promote(c);
             if (!p) continue;
-            if (p->end()) continue;
+            if (!p->end()) continue;
             s->commandBuffers.push_back(p);
-            commandBuffers.push_back(p->handle());
+            handles.push_back(p->handle());
         }
         if (s->commandBuffers.empty()) return {};
 
@@ -2305,7 +2305,7 @@ public:
         vk::SubmitInfo                      si;
         si.setWaitSemaphores(sp.waitSemaphores);
         si.setSignalSemaphores(sp.signalSemaphores);
-        si.setCommandBuffers(commandBuffers);
+        si.setCommandBuffers(handles);
         si.setPWaitDstStageMask(flags.data());
         _desc.handle.submit({si}, s->fence);
 
@@ -2317,6 +2317,16 @@ public:
 
         // done
         _pendings.push_back(std::move(s));
+    }
+
+    void drop(const vk::ArrayProxy<const CommandBuffer * const> & commandBuffers) {
+        auto lock = std::lock_guard {_mutex};
+        for (auto c : sp.commandBuffers) {
+            auto p = promote(c);
+            if (!p) continue;
+            if (!p->end()) continue;
+            _actives.erase(p.get());
+        }
     }
 
     void wait(Submission sid) {
@@ -2354,16 +2364,7 @@ public:
         // wait for the submission to finish.
         waitSubmission(*submission->get());
 
-        // Move all finished command buffers to the finished list.
-        for (auto s = _pendings.begin(); s != submission; ++s) {
-            // all submissions before this one are finished.
-            for (auto & cb : (*s)->commandBuffers) {
-                cb->setFinished();
-                _finished[cb.get()] = cb;
-            }
-        }
-
-        // Remove all finished submissions from the pending list.
+        // Remove all finished submissions from the pending list. This will also delete the command buffer objects.
         _pendings.erase(_pendings.begin(), submission);
     }
 
@@ -2387,7 +2388,6 @@ private:
     CommandQueue &   _owner;
     std::mutex       _mutex;
     CommandBufferSet _actives;  ///< Command buffers in recording state.
-    CommandBufferSet _finished; ///< Command buffers with GPU execution finished.
     PendingList      _pendings; ///< Pending submission list.
     Desc             _desc;
     uint64_t         _nextSubmissionId {};
