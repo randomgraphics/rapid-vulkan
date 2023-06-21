@@ -661,85 +661,6 @@ private:
     T * _ptr = nullptr;
 };
 
-// // ---------------------------------------------------------------------------------------------------------------------
-// /// A wrapper class for VkCommandBuffer
-// class CommandBuffer : public Root {
-// public:
-//     vk::CommandBuffer handle() const { return _handle; }
-
-// protected:
-//     CommandBuffer(const Root::ConstructParameters & cp): Root(cp) {}
-//     ~CommandBuffer() override = default;
-
-//     vk::CommandBuffer      _handle {};
-//     vk::CommandBufferLevel _level = vk::CommandBufferLevel::ePrimary;
-// };
-
-class Device;
-
-// ---------------------------------------------------------------------------------------------------------------------
-/// A wrapper class for VkQueue
-class CommandQueue : public Root {
-public:
-    struct ConstructParameters : public Root::ConstructParameters {
-        const GlobalInfo * gi     = nullptr;
-        uint32_t           family = 0; ///< queue family index
-        uint32_t           index  = 0; ///< queue index within family
-    };
-
-    struct Desc {
-        const GlobalInfo * gi     = nullptr;
-        vk::Queue          handle = {};
-        uint32_t           family = 0; ///< queue family index
-        uint32_t           index  = 0; ///< queue index within family
-    };
-
-    struct SubmitParameters {
-        /// @brief The command buffers to submit. The command buffer must be allocated out of this queue class.
-        /// @todo Submit array of command buffers together.
-        const vk::CommandBuffer commands {};
-
-        /// The (optional) fence object to signal once the command buffers have completed execution.
-        vk::Fence signalFence = {};
-
-        /// @brief List of semaphores to wait for before executing the command buffers.
-        vk::ArrayProxy<const vk::Semaphore> waitSemaphores {};
-
-        /// @brief List of semaphores to signal once the command buffers have completed execution.
-        vk::ArrayProxy<const vk::Semaphore> signalSemaphores {};
-    };
-
-    CommandQueue(const ConstructParameters &);
-    ~CommandQueue() override;
-
-    auto desc() const -> const Desc &;
-
-    /// @brief Begin recording a command buffer.
-    /// @todo should return a custom CommandBuffer class.
-    auto begin(const char * purpose, vk::CommandBufferLevel level = vk::CommandBufferLevel::ePrimary) -> vk::CommandBuffer;
-
-    /// @brief End recording a command buffer. Submit it to the queue for asynchronous processing.
-    void submit(const SubmitParameters &);
-
-    /// @brief Wait for the queue to finish processing submitted commands.
-    /// @param cb The command buffer to wait for. It must be allocated out of this queue via the begin() call.
-    ///           Passing in empty command buffer handle is allowed though. In this case, the function will wait for all
-    ///           submitted command buffers to finish.
-    void wait(vk::CommandBuffer cb = {});
-
-    auto gi() const -> const GlobalInfo * { return desc().gi; }
-    auto family() const -> uint32_t { return desc().family; }
-    auto index() const -> uint32_t { return desc().index; }
-    auto handle() const -> vk::Queue { return desc().handle; }
-
-protected:
-    void onNameChanged(const std::string &) override;
-
-private:
-    class Impl;
-    Impl * _impl = nullptr;
-};
-
 // ---------------------------------------------------------------------------------------------------------------------
 /// A helper function to insert resource/memory barriers to command buffer
 struct Barrier {
@@ -824,6 +745,8 @@ struct Barrier {
     }
 };
 
+class CommandQueue;
+
 // ---------------------------------------------------------------------------------------------------------------------
 /// A wrapper class for VkBuffer
 class Buffer : public Root {
@@ -907,9 +830,9 @@ public:
         vk::DeviceSize size        = 0; ///< size of the data to be written, in bytes.
         vk::DeviceSize offset      = 0; ///< byte offset of the destination buffer where the data will be written to.
 
-        SetContentParameters & setQueue(CommandQueue & q) {
-            queueFamily = q.family();
-            queueIndex  = q.index();
+        SetContentParameters & setQueue(uint32_t family, uint32_t index) {
+            queueFamily = family;
+            queueIndex  = index;
             return *this;
         }
 
@@ -939,9 +862,9 @@ public:
         vk::DeviceSize offset      = 0;                  ///< byte offset of the source buffer where the data will be read from.
         vk::DeviceSize size        = vk::DeviceSize(-1); ///< size of the data to be read, in bytes.
 
-        ReadParameters & setQueue(CommandQueue & q) {
-            queueFamily = q.family();
-            queueIndex  = q.index();
+        ReadParameters & setQueue(uint32_t family, uint32_t index) {
+            queueFamily = family;
+            queueIndex  = index;
             return *this;
         }
 
@@ -1204,9 +1127,9 @@ public:
         size_t       pitch       = 0; ///< size in byte of a pixel block rows. This is multiple scan line of pixels for compressed texture.
         const void * pixels      = nullptr;
 
-        SetContentParameters & setQueue(CommandQueue & q) {
-            queueFamily = q.family();
-            queueIndex  = q.index();
+        SetContentParameters & setQueue(uint32_t family, uint32_t index) {
+            queueFamily = family;
+            queueIndex  = index;
             return *this;
         }
 
@@ -1220,9 +1143,9 @@ public:
         uint32_t queueFamily = 0;
         uint32_t queueIndex  = 0;
 
-        ReadContentParameters & setQueue(CommandQueue & q) {
-            queueFamily = q.family();
-            queueIndex  = q.index();
+        ReadContentParameters & setQueue(uint32_t family, uint32_t index) {
+            queueFamily = family;
+            queueIndex  = index;
             return *this;
         }
     };
@@ -1785,36 +1708,116 @@ public:
 
     Drawable & dp(const ComputePipeline::DispatchParameters &);
 
-    struct RecordParameters {
-        Drawable * previous = nullptr;
+private:
+    class Impl;
+    Impl * _impl = nullptr;
+    friend class CommandBuffer;
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// A wrapper class for VkCommandBuffer
+class CommandBuffer {
+public:
+    struct SubmitParameters {
+        /// The (optional) fence object to signal once the command buffers have completed execution.
+        vk::Fence signalFence = {};
+
+        /// @brief List of semaphores to wait for before executing the command buffers.
+        vk::ArrayProxy<const vk::Semaphore> waitSemaphores {};
+
+        /// @brief List of semaphores to signal once the command buffers have completed execution.
+        vk::ArrayProxy<const vk::Semaphore> signalSemaphores {};
     };
 
-    /// @brief Issue the draw/dispatch call to the given command buffer.
-    Drawable & cmdRender(vk::CommandBuffer, const RecordParameters &);
+    const std::string & name() const;
 
-    // /// @brief Get argument by ID.
-    // /// The returned argument instance can be used to set value of that argument w/o paying the cost of string hashing.
-    // /// If the argument has not been set before, a new argument will be created and returned.
-    // Argument * get(DescriptorIdentifier);
+    /// @brief Enqueue a drawable object to the queue to be rendered later.
+    /// The drawable and the associated resources are considered in-use until the command buffer is dropped or finished executing on GPU.
+    /// Deleting the drawable object before the command buffer is dropped or finished executing on GPU will result in undefined behavior.
+    void enqueue(const Drawable &);
 
-    // /// @brief Retrieve an existing argument by name. Returns nullptr if the argument has not been set.
-    // const Argument * find(DescriptorIdentifier) const;
+protected:
+    CommandBuffer()  = default;
+    ~CommandBuffer() = default;
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// A wrapper class for VkQueue
+class CommandQueue : public Root {
+public:
+    struct ConstructParameters : public Root::ConstructParameters {
+        const GlobalInfo * gi     = nullptr;
+        uint32_t           family = 0; ///< queue family index
+        uint32_t           index  = 0; ///< queue index within family
+    };
+
+    struct Desc {
+        const GlobalInfo * gi     = nullptr;
+        vk::Queue          handle = {};
+        uint32_t           family = 0; ///< queue family index
+        uint32_t           index  = 0; ///< queue index within family
+    };
+
+    struct SubmitParameters {
+        /// @brief The command buffers to submit. The command buffers must be allocated out of this queue class.
+        vk::ArrayProxy<const CommandBuffer * const> commandBuffers {};
+
+        /// The (optional) fence object to signal once the command buffers have completed execution.
+        vk::Fence signalFence = {};
+
+        /// @brief List of semaphores to wait for before executing the command buffers.
+        vk::ArrayProxy<const vk::Semaphore> waitSemaphores {};
+
+        /// @brief List of semaphores to signal once the command buffers have completed execution.
+        vk::ArrayProxy<const vk::Semaphore> signalSemaphores {};
+    };
+
+    struct Submission {
+        intptr_t queue = 0;
+        uint64_t id    = 0;
+
+        bool empty() const { return !queue || 0 == id; }
+    };
+
+    CommandQueue(const ConstructParameters &);
+
+    ~CommandQueue() override;
+
+    auto desc() const -> const Desc &;
+
+    /// @brief Begin recording a command buffer.
+    /// @todo should return a custom CommandBuffer class.
+    auto begin(const char * name, vk::CommandBufferLevel level = vk::CommandBufferLevel::ePrimary) -> CommandBuffer *;
+
+    /// @brief Submit command buffers to the queue for asynchronous processing.
+    /// After this call, all command buffer poiners are inaccessable. The caller should not use them anymore.
+    /// @return A submission handle that later to check/wait for the completion of the submission. Return an empty
+    /// handle on failure.
+    Submission submit(const SubmitParameters &);
+
+    /// @brief Drop command buffers. Discard all contents of them.
+    /// After this call, the command buffer poiners are inaccessable. The caller should not use them anymore.
+    void drop(vk::ArrayProxy<const CommandBuffer * const>);
+
+    /// @brief Wait for the queue to finish processing submitted commands.
+    /// @param submission The submission handle to wait for. It must be returned by the submit() call of the same queue.
+    /// Passing in empty submission handle is allowed. In that case, the function will wait for all submissions to finish.
+    void wait(Submission = {});
+
+    auto gi() const -> const GlobalInfo * { return desc().gi; }
+    auto family() const -> uint32_t { return desc().family; }
+    auto index() const -> uint32_t { return desc().index; }
+    auto handle() const -> vk::Queue { return desc().handle; }
+
+protected:
+    void onNameChanged(const std::string &) override;
 
 private:
     class Impl;
     Impl * _impl = nullptr;
 };
 
-// class RenderQueue : public Root {
-// public:
-
-//     vk::PipelineCache pipelineCache() const;
-
-//     void upload(...);
-//     void render(const Drawable &);
-//     void flush(...);
-//     void finish(...);
-// };
+class Device;
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// Wrapper class of swapchain object

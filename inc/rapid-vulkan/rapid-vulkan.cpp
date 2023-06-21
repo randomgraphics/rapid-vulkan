@@ -64,7 +64,9 @@ SOFTWARE.
 #include <unordered_map>
 #include <list>
 #include <set>
+#include <deque>
 #include <signal.h>
+#include <inttypes.h>
 
 #if RAPID_VULKAN_ENABLE_LOADER
 // implement the default dynamic dispatcher storage. Has to use this macro outside of any namespace.
@@ -120,242 +122,6 @@ void threadSafeWaitForDeviceIdle(vk::Device device) {
     auto              lock = std::lock_guard {mutex};
     device.waitIdle();
 }
-
-// *********************************************************************************************************************
-// Command Buffer/Pool/Queue
-// *********************************************************************************************************************
-
-class CommandBuffer {
-public:
-    enum State {
-        RECORDING,
-        ENDED,
-        EXECUTING,
-        FINISHED,
-    };
-
-    std::list<CommandBuffer *>::iterator pending = {};
-
-    CommandBuffer(const GlobalInfo * gi, uint32_t family, const std::string & name_, vk::CommandBufferLevel level): _gi(gi), _name(name_) {
-        RVI_ASSERT(_gi);
-        _pool = _gi->device.createCommandPool(vk::CommandPoolCreateInfo().setQueueFamilyIndex(family), _gi->allocator);
-
-        vk::CommandBufferAllocateInfo info;
-        info.commandPool        = _pool;
-        info.level              = level;
-        info.commandBufferCount = 1;
-        _handle                 = _gi->device.allocateCommandBuffers(info)[0];
-        _level                  = level;
-        setVkObjectName(_gi->device, _handle, name_);
-        _handle.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
-    }
-
-    virtual ~CommandBuffer() {
-        _gi->safeDestroy(_handle, _pool);
-        _gi->safeDestroy(_semaphore);
-        _gi->safeDestroy(_pool);
-    }
-
-    const GlobalInfo * gi() const { return _gi; }
-
-    const std::string & name() const { return _name; }
-
-    vk::CommandBuffer handle() const { return _handle; }
-
-    State state() const { return _state; }
-
-    bool submit(vk::Queue queue, const CommandQueue::SubmitParameters & sp) {
-        // verify the command buffer state
-        if (_state == RECORDING) {
-            // end the command buffer
-            _handle.end();
-            _state = ENDED;
-        } else if (_state != ENDED) {
-            RVI_LOGE("[ERROR] Command buffer %s is not in RECORDING or ENDED state!", _name.c_str());
-            return false;
-        }
-
-        // setup signal fence
-        RVI_ASSERT(!_builtInSubmissionFence);
-        auto fence = sp.signalFence;
-        if (!fence) {
-            _builtInSubmissionFence = _gi->device.createFenceUnique({});
-            setVkObjectName(_gi->device, _builtInSubmissionFence.get(), _name);
-            fence = _builtInSubmissionFence.get();
-        }
-
-        // setup signal semaphore
-        RVI_ASSERT(!_semaphore);
-        auto semaphore = _gi->device.createSemaphoreUnique({});
-        setVkObjectName(_gi->device, semaphore.get(), _name);
-        std::vector<vk::Semaphore> signalSemaphores(sp.signalSemaphores.begin(), sp.signalSemaphores.end());
-        signalSemaphores.push_back(semaphore.get());
-
-        // setup wait semaphore flag array
-        std::vector<vk::PipelineStageFlags> flags(sp.waitSemaphores.size(), vk::PipelineStageFlagBits::eBottomOfPipe);
-
-        // submit the command buffer
-        vk::SubmitInfo si;
-        si.setWaitSemaphores(sp.waitSemaphores);
-        si.setSignalSemaphores(signalSemaphores);
-        si.setCommandBufferCount(1);
-        si.setPCommandBuffers(&_handle);
-        si.setPWaitDstStageMask(flags.data());
-        queue.submit({si}, fence);
-
-        // done
-        _state          = EXECUTING;
-        _effectiveFence = fence; // store the fence handle (could be user provided or built-in)
-        _semaphore      = semaphore.release();
-        return true;
-    }
-
-    // wait for the command buffer to finish executing on GPU.
-    void finish() {
-        if (EXECUTING == _state) {
-            RVI_ASSERT(_effectiveFence);
-            auto result = _gi->device.waitForFences({_effectiveFence}, true, UINT64_MAX);
-            if (result != vk::Result::eSuccess) { RVI_LOGE("[ERROR] Command buffer %s failed to wait for fence!", _name.c_str()); }
-            _state = FINISHED;
-        }
-    }
-
-    /// Only called on pending command buffers and unconditionally mark it as finished.
-    /// Should only be called on a pending or already finished command buffer.
-    void setFinished() {
-        RVI_ASSERT(_state == EXECUTING || _state == FINISHED);
-        _state = FINISHED;
-    }
-
-private:
-    const GlobalInfo *     _gi;
-    std::string            _name;
-    vk::CommandPool        _pool; // one pool for each command buffer for simplicity for now.
-    vk::CommandBuffer      _handle {};
-    vk::CommandBufferLevel _level = vk::CommandBufferLevel::ePrimary;
-    State                  _state = RECORDING;
-    vk::UniqueFence        _builtInSubmissionFence;
-    vk::Fence              _effectiveFence = nullptr;
-    vk::Semaphore          _semaphore      = nullptr;
-};
-
-class CommandQueue::Impl {
-public:
-    Impl(const ConstructParameters & params) {
-        _desc.gi     = params.gi;
-        _desc.family = params.family;
-        _desc.index  = params.index;
-        _desc.handle = params.gi->device.getQueue(params.family, params.index);
-    }
-
-    ~Impl() {}
-
-    const Desc & desc() const { return _desc; }
-
-    vk::CommandBuffer begin(const char * name, vk::CommandBufferLevel level) {
-        auto lock = std::lock_guard {_mutex};
-        auto p    = std::make_unique<CommandBuffer>(_desc.gi, _desc.family, name, level);
-        auto h    = p->handle();
-        _all[h]   = std::move(p);
-        return h;
-    }
-
-    void submit(const SubmitParameters & sp) {
-        auto lock = std::lock_guard {_mutex};
-
-        // check the incoming pointer
-        auto p = promote(sp.commands);
-        RVI_REQUIRE(p, "The submitted command buffer is not created by this queue!");
-
-        RVI_REQUIRE(p->submit(_desc.handle, sp));
-
-        // Done. add the command buffer to the pending list.
-        p->pending = _pendings.insert(_pendings.end(), p);
-    }
-
-    void wait(vk::CommandBuffer cb) {
-        auto lock = std::lock_guard {_mutex};
-        if (!cb) {
-            waitIdle();
-            return;
-        }
-        auto p = promote(cb, true); // could be null if the command buffer is already finished.
-        if (!p) return;
-        finish(p);
-    }
-
-    void setName(const std::string & name) {
-        auto lock = std::lock_guard {_mutex};
-        setVkObjectName(_desc.gi->device, _desc.handle, name.c_str());
-    }
-
-private:
-    typedef std::unordered_map<VkCommandBuffer, std::unique_ptr<CommandBuffer>> CommandBufferSet;
-    typedef std::list<CommandBuffer *>                                          PendingList;
-
-private:
-    std::mutex       _mutex;
-    CommandBufferSet _all;      /// All command buffers ever created. This is used to validate the incoming command buffer pointers.
-    PendingList      _pendings; /// Command buffers that are currently being executed, sorted in order of submission.
-    Desc             _desc;
-
-private:
-    CommandBuffer * promote(vk::CommandBuffer cb, bool expectedNull = false) const {
-        if (!cb) return nullptr;
-        auto it = _all.find(cb);
-        if (it == _all.end()) {
-            if (!expectedNull) RVI_LOGE("Invalid command buffer handle.");
-            return nullptr;
-        }
-        return it->second.get();
-    }
-
-    void finish(CommandBuffer * p) {
-        if (p) {
-            p->finish();
-            if (CommandBuffer::FINISHED != p->state()) {
-                RVI_LOGE("Can't finish command buffer %s: buffer was not in EXECUTING or FINISHED state.", p->name().c_str());
-                return;
-            }
-            RAPID_VULKAN_ASSERT(std::find(_pendings.begin(), _pendings.end(), p) != _pendings.end());
-        }
-
-        // Mark this command buffer and all command buffers submitted before it as finished.
-        auto end = p ? p->pending : _pendings.end();
-        if (p) end++;
-        for (auto iter = _pendings.begin(); iter != end; ++iter) {
-            auto cb = *iter;
-            cb->setFinished();
-            // TODO: move the command buffer to the finished list.
-            // _finished.push_back(std::move(*iter));
-
-            // Remove from all list, which will automatically delete the command buffer instance.
-            _all.erase(_all.find(cb->handle()));
-        }
-        // Then remove them from the pending list.
-        _pendings.erase(_pendings.begin(), end);
-    }
-
-    void waitIdle() {
-        try {
-            _desc.handle.waitIdle();
-        } catch (vk::SystemError & error) { RVI_LOGE("%s", error.what()); }
-
-        // then mark all command buffers as finished.
-        finish(nullptr);
-    }
-};
-
-CommandQueue::CommandQueue(const ConstructParameters & params): Root(params), _impl(new Impl(params)) { _impl->setName(name()); }
-CommandQueue::~CommandQueue() {
-    delete _impl;
-    _impl = nullptr;
-}
-auto CommandQueue::desc() const -> const Desc & { return _impl->desc(); }
-auto CommandQueue::begin(const char * purpose, vk::CommandBufferLevel level) -> vk::CommandBuffer { return _impl->begin(purpose, level); }
-void CommandQueue::submit(const SubmitParameters & sp) { _impl->submit(sp); }
-void CommandQueue::wait(vk::CommandBuffer cb) { _impl->wait(cb); }
-void CommandQueue::onNameChanged(const std::string &) { _impl->setName(name()); }
 
 // *********************************************************************************************************************
 // Buffer
@@ -1728,7 +1494,7 @@ public:
         _sets.resize(_reflection.descriptors.size());
         for (uint32_t s = 0; s < _sets.size(); ++s) {
             std::vector<vk::DescriptorSetLayoutBinding> bindings;
-            for(const auto & d : _reflection.descriptors[s]) {
+            for (const auto & d : _reflection.descriptors[s]) {
                 if (d.empty()) continue; // skip empty descriptor
                 bindings.push_back(d.binding);
             }
@@ -1982,7 +1748,7 @@ protected:
     class Impl;
     Impl * _impl = nullptr;
 
-    friend class PipelineLayout;
+    friend class Drawable;
 };
 
 class Argument::Impl {
@@ -2163,7 +1929,7 @@ Argument & Argument::t(vk::ArrayProxy<const ImageSampler> v) {
 
 class Drawable::Impl {
 public:
-    Impl(Drawable &) {}
+    Impl(Drawable & o): _owner(o) {}
 
     ~Impl() {}
 
@@ -2217,13 +1983,14 @@ private:
         std::vector<uint8_t> value {};
     };
 
-    Ref<Pipeline>                                          _pipeline;
-    std::unordered_map<DescriptorIdentifier, ArgumentImpl> _descriptors;
-    std::vector<ConstantArgument>                          _constants;
-    vk::ArrayProxy<const BufferView>                       _vertexBuffers;
-    IndexBuffer                                            _indexBuffer;
-    GraphicsPipeline::DrawParameters                       _drawParameters;
-    ComputePipeline::DispatchParameters                    _dispatchParameters;
+    Drawable &                                           _owner;
+    Ref<Pipeline>                                        _pipeline;
+    std::unordered_map<DescriptorIdentifier, Argument *> _descriptors;
+    std::vector<ConstantArgument>                        _constants;
+    vk::ArrayProxy<const BufferView>                     _vertexBuffers;
+    IndexBuffer                                          _indexBuffer;
+    GraphicsPipeline::DrawParameters                     _drawParameters;
+    ComputePipeline::DispatchParameters                  _dispatchParameters;
 
     bool                                _valid   = false;
     bool                                _changed = true;
@@ -2232,9 +1999,9 @@ private:
 private:
     Argument * get(DescriptorIdentifier id) { return &_descriptors[id]; }
 
-    const Argument * find(DescriptorIdentifier id) const {
+    const Argument::Impl * find(DescriptorIdentifier id) const {
         auto iter = _descriptors.find(id);
-        return iter == _descriptors.end() ? nullptr : &iter->second;
+        return iter == _descriptors.end() ? nullptr : iter->second->_impl;
     }
 
     std::vector<std::tuple<vk::PushConstantRange, const void *>> getConstant(vk::ShaderStageFlags stages, uint32_t begin, uint32_t end) const {
@@ -2261,36 +2028,35 @@ private:
         _valid   = false;
 
         // create descriptor writes
-        auto numberOfSets = _pipeline->refection().descriptors.size();
+        const auto & refl = _pipeline->reflection();
         _writes.clear();
-        for (uint32_t si = 0; si < numberOfSets; ++si) {
-            for (uint32_t i = 0; i < s.bindings.size(); ++i) {
-                auto & b = s.bindings[i];
-                auto & w = writes.emplace_back();
-                w.setDstSet((VkDescriptorSet)si);
+        for (uint32_t si = 0; si < refl.descriptors.size(); ++si) {
+            const auto & s = refl.descriptors[si];
+            for (uint32_t i = 0; i < s.size(); ++i) {
+                const auto & b = s[i].binding;
+                auto &       w = _writes.emplace_back();
+                w.setDstSet((VkDescriptorSet) si);
                 w.setDstBinding(b.binding);
                 w.setDescriptorType(b.descriptorType);
 
-                // Locate the arugment in the pack for this binding slot.
-                const Argument::Impl * a = findArgument(ap, si, i);
+                // Locate the arugment for this binding slot.
+                auto a = find({si, i});
                 if (!a) {
-                    RVI_LOGE("Failed to bind argument pack (%s) to pipeline layout (%s): set %u slot %u not found in the argument pack.", ap.name().c_str(),
-                             _owner.name().c_str(), si, i);
+                    RVI_LOGE("Drawable (%s) validation error: set %u slot %u is not set.", _owner.name().c_str(), si, i);
                     return false;
                 }
 
                 // verify that the argument type is compatible with the descriptor type
                 if (!a->typeCompatibleWith(b.descriptorType)) {
-                    RVI_LOGE("Failed to bind argument pack (%s) to pipeline layout (%s): set %u slot %u is of type %s, but the argument is of type %s.",
-                             ap.name().c_str(), _owner.name().c_str(), si, i, vk::to_string(b.descriptorType).c_str(), a->type());
+                    RVI_LOGE("Drawable (%s) validation error: : set %u slot %u is of type %s, but the argument is of type %s.", _owner.name().c_str(), si, i,
+                             vk::to_string(b.descriptorType).c_str(), a->type());
                     return false;
                 }
 
                 // verify that there're enough descriptors in the argument.
                 if (a->count() < b.descriptorCount) {
-                    RVI_LOGE(
-                        "Failed to bind argument pack (%s) to pipeline layout (%s): set %u slot %u requires %u descriptors, but the argument has only %zu.",
-                        ap.name().c_str(), _owner.name().c_str(), si, i, b.descriptorCount, a->count());
+                    RVI_LOGE("Drawable (%s) validation error: : set %u slot %u requires %u descriptors, but the argument has only %zu.", _owner.name().c_str(),
+                             si, i, b.descriptorCount, a->count());
                     return false;
                 }
 
@@ -2318,8 +2084,8 @@ private:
         // allocate new descriptor sets
         auto sets = _pipeline->allocateDescriptorSets();
         if (sets.empty()) return;
-        for(auto & w : _writes) {
-            uint32_t setIndex = (uint32_t)w.dstSet;
+        for (auto & w : _writes) {
+            uint32_t setIndex = (uint32_t) w.dstSet;
             RVI_ASSERT(setIndex < sets.size());
             w.setDstSet(sets[setIndex]);
         }
@@ -2408,7 +2174,295 @@ auto Drawable::dp(const ComputePipeline::DispatchParameters & v) -> Drawable & {
     _impl->set(v);
     return *this;
 }
-void Drawable::cmdRender(vk::CommandBuffer) const { return _impl->render(); }
+
+// *********************************************************************************************************************
+// Command Buffer/Pool/Queue
+// *********************************************************************************************************************
+
+class CommandBufferImpl : public CommandBuffer {
+public:
+    enum State {
+        RECORDING,
+        ENDED,
+        EXECUTING,
+        FINISHED,
+    };
+
+    CommandBufferImpl(CommandQueue & queue, const GlobalInfo * gi, uint32_t family, const std::string & name_, vk::CommandBufferLevel level)
+        : _queue(queue), _gi(gi), _name(name_) {
+        RVI_ASSERT(_gi);
+        _pool = _gi->device.createCommandPool(vk::CommandPoolCreateInfo().setQueueFamilyIndex(family), _gi->allocator);
+
+        vk::CommandBufferAllocateInfo info;
+        info.commandPool        = _pool;
+        info.level              = level;
+        info.commandBufferCount = 1;
+        _handle                 = _gi->device.allocateCommandBuffers(info)[0];
+        _level                  = level;
+        setVkObjectName(_gi->device, _handle, name_);
+        _handle.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+    }
+
+    ~CommandBufferImpl() {
+        _gi->safeDestroy(_handle, _pool);
+        _gi->safeDestroy(_pool);
+    }
+
+    void enqueue(const Drawable &) {
+        //
+    }
+
+    const std::string & name() const { return _name; }
+
+    vk::CommandBuffer handle() const { return _handle; }
+
+    bool end() {
+        if (_state == RECORDING) {
+            // end the command buffer
+            _handle.end();
+            _state = ENDED;
+        } else if (_state != ENDED) {
+            RVI_LOGE("[ERROR] Command buffer %s is not in RECORDING or ENDED state!", _name.c_str());
+            return false;
+        }
+    }
+
+    void setPending(void *) {
+        RVI_ASSERT(_state == ENDED);
+        _state = EXECUTING;
+    }
+
+    /// Only called on pending command buffers and unconditionally mark it as finished.
+    /// Should only be called on a pending or already finished command buffer.
+    void setFinished() {
+        RVI_ASSERT(_state == EXECUTING);
+        _state = FINISHED;
+    }
+
+private:
+    CommandQueue &         _queue;
+    const GlobalInfo *     _gi;
+    std::string            _name;
+    vk::CommandPool        _pool; // one pool for each command buffer for simplicity for now.
+    vk::CommandBuffer      _handle {};
+    vk::CommandBufferLevel _level = vk::CommandBufferLevel::ePrimary;
+    State                  _state = RECORDING;
+};
+
+auto CommandBuffer::name() const -> const std::string & { return ((CommandBufferImpl *) this)->name(); }
+void CommandBuffer::enqueue(const Drawable & d) { return ((CommandBufferImpl *) this)->enqueue(d); }
+
+class CommandQueue::Impl {
+public:
+    Impl(CommandQueue & owner, const ConstructParameters & params): _owner(owner) {
+        _desc.gi     = params.gi;
+        _desc.family = params.family;
+        _desc.index  = params.index;
+        _desc.handle = params.gi->device.getQueue(params.family, params.index);
+    }
+
+    ~Impl() {}
+
+    const Desc & desc() const { return _desc; }
+
+    const std::string & name() const { return _owner.name(); }
+
+    CommandBuffer * begin(const char * name, vk::CommandBufferLevel level) {
+        auto lock    = std::lock_guard {_mutex};
+        auto p       = std::make_unique<CommandBufferImpl>(_owner, _desc.gi, _desc.family, name, level);
+        auto cb      = p.get();
+        _actives[cb] = std::move(p);
+        return cb;
+    }
+
+    Submission submit(const SubmitParameters & sp) {
+        auto lock           = std::lock_guard {_mutex};
+        auto s              = std::make_unique<InternalSubmission>();
+        auto commandBuffers = std::vector<vk::CommandBuffer> {};
+        for (auto c : sp.commandBuffers) {
+            auto p = promote(c);
+            if (!p) continue;
+            if (p->end()) continue;
+            s->commandBuffers.push_back(p);
+            commandBuffers.push_back(p->handle());
+        }
+        if (s->commandBuffers.empty()) return {};
+
+        // set sumission id
+        s->id = ++_nextSubmissionId;
+        if (0 == s->id) s->id = ++_nextSubmissionId;
+
+        // set fence
+        s->fence = sp.signalFence;
+        if (!s->fence) {
+            s->builtInFence = _desc.gi->device.createFenceUnique({});
+            setVkObjectName(_desc.gi->device, s->builtInFence.get(), name());
+            s->fence = s->builtInFence.get();
+        }
+
+        // submit the command buffer
+        std::vector<vk::PipelineStageFlags> flags(sp.waitSemaphores.size(), vk::PipelineStageFlagBits::eBottomOfPipe);
+        vk::SubmitInfo                      si;
+        si.setWaitSemaphores(sp.waitSemaphores);
+        si.setSignalSemaphores(sp.signalSemaphores);
+        si.setCommandBuffers(commandBuffers);
+        si.setPWaitDstStageMask(flags.data());
+        _desc.handle.submit({si}, s->fence);
+
+        // Mark the command buffers as pending. remove them from the active list.
+        for (auto cb : s->commandBuffers) {
+            cb->setPending(s.get());
+            _actives.erase(cb.get());
+        }
+
+        // done
+        _pendings.push_back(std::move(s));
+    }
+
+    void wait(Submission sid) {
+        auto lock = std::lock_guard {_mutex};
+
+        // submission id -> submission iterator
+        PendingIterator submission;
+        if (sid.empty()) {
+            // wait for all pending submissions to finish.
+            submission = _pendings.end();
+        } else {
+            if (sid.queue != (intptr_t) this) {
+                RVI_LOGE("Submission %" PRIu64 " is not from queue %s!", sid.id, name().c_str());
+                return;
+            }
+            auto oldest = _pendings.front()->id;
+            if (sid.id < oldest) {
+                // the workload has finished already.
+                return;
+            }
+            auto newest = _pendings.back()->id;
+            if (sid.id > newest) {
+                RVI_LOGE("Submission %" PRIu64 " is invalid since it is newer than the newest submission %" PRIu64 "!", sid.id, newest);
+                return;
+            }
+
+            // wait for the specified submission to finish.
+            submission = findSubmission(sid.id);
+            if (submission == _pendings.end()) {
+                RVI_LOGE("Submission %" PRIu64 " is invalid since it is not found in the pending list!", sid.id);
+                return;
+            }
+        }
+
+        // wait for the submission to finish.
+        waitSubmission(*submission->get());
+
+        // Move all finished command buffers to the finished list.
+        for (auto s = _pendings.begin(); s != submission; ++s) {
+            // all submissions before this one are finished.
+            for (auto & cb : (*s)->commandBuffers) {
+                cb->setFinished();
+                _finished[cb.get()] = cb;
+            }
+        }
+
+        // Remove all finished submissions from the pending list.
+        _pendings.erase(_pendings.begin(), submission);
+    }
+
+    void setName(const std::string & name) {
+        auto lock = std::lock_guard {_mutex};
+        setVkObjectName(_desc.gi->device, _desc.handle, name.c_str());
+    }
+
+private:
+    struct InternalSubmission {
+        uint64_t                                        id {};
+        std::vector<std::shared_ptr<CommandBufferImpl>> commandBuffers {};
+        vk::Fence                                       fence {};
+        vk::UniqueFence                                 builtInFence {};
+    };
+
+    typedef std::unordered_map<CommandBuffer *, std::shared_ptr<CommandBufferImpl>> CommandBufferSet;
+    typedef std::deque<std::shared_ptr<InternalSubmission>>                         PendingList;
+    typedef PendingList::iterator                                                   PendingIterator;
+
+    CommandQueue &   _owner;
+    std::mutex       _mutex;
+    CommandBufferSet _actives;  ///< Command buffers in recording state.
+    CommandBufferSet _finished; ///< Command buffers with GPU execution finished.
+    PendingList      _pendings; ///< Pending submission list.
+    Desc             _desc;
+    uint64_t         _nextSubmissionId {};
+
+private:
+    std::shared_ptr<CommandBufferImpl> promote(const CommandBuffer * cb, bool expectedNull = false) const {
+        if (!cb) {
+            if (!expectedNull) RVI_LOGE("Null command buffer pointer.");
+            return {};
+        }
+        auto it = _actives.find(cb);
+        if (it == _actives.end()) {
+            if (!expectedNull) RVI_LOGE("Command buffer pointer %p is not created by queue (%s).", cb, cb->name().c_str(), name().c_str());
+            return {};
+        }
+        return it->second;
+    }
+
+    PendingIterator findSubmission(uint64_t id) const {
+        return std::find_if(_pendings.begin(), _pendings.end(), [id](const auto & s) { return s->id == id; });
+    }
+
+    void waitSubmission(InternalSubmission & s) {
+        RVI_ASSERT(s.fence);
+        auto result = _desc.gi->device.waitForFences({s.fence}, true, UINT64_MAX);
+        if (result != vk::Result::eSuccess) { RVI_LOGE("Submission %" PRIu64 " failed to wait for finish!", s.id); }
+    }
+
+    // void finish(CommandBuffer * p) {
+    //     if (p) {
+    //         p->finish();
+    //         if (CommandBuffer::FINISHED != p->state()) {
+    //             RVI_LOGE("Can't finish command buffer %s: buffer was not in EXECUTING or FINISHED state.", p->name().c_str());
+    //             return;
+    //         }
+    //         RAPID_VULKAN_ASSERT(std::find(_pendings.begin(), _pendings.end(), p) != _pendings.end());
+    //     }
+
+    //     // Mark this command buffer and all command buffers submitted before it as finished.
+    //     auto end = p ? p->pending : _pendings.end();
+    //     if (p) end++;
+    //     for (auto iter = _pendings.begin(); iter != end; ++iter) {
+    //         auto cb = *iter;
+    //         cb->setFinished();
+    //         // TODO: move the command buffer to the finished list.
+    //         // _finished.push_back(std::move(*iter));
+
+    //         // Remove from all list, which will automatically delete the command buffer instance.
+    //         _all.erase(_all.find(cb->handle()));
+    //     }
+    //     // Then remove them from the pending list.
+    //     _pendings.erase(_pendings.begin(), end);
+    // }
+
+    // void waitIdle() {
+    //     try {
+    //         _desc.handle.waitIdle();
+    //     } catch (vk::SystemError & error) { RVI_LOGE("%s", error.what()); }
+
+    //     // then mark all command buffers as finished.
+    //     finish(nullptr);
+    // }
+};
+
+CommandQueue::CommandQueue(const ConstructParameters & params): Root(params), _impl(new Impl(params)) { _impl->setName(name()); }
+CommandQueue::~CommandQueue() {
+    delete _impl;
+    _impl = nullptr;
+}
+auto CommandQueue::desc() const -> const Desc & { return _impl->desc(); }
+auto CommandQueue::begin(const char * purpose, vk::CommandBufferLevel level) -> CommandBuffer * { return _impl->begin(purpose, level); }
+auto CommandQueue::submit(const SubmitParameters & sp) -> Submission { _impl->submit(sp); }
+void CommandQueue::drop(vk::ArrayProxy<const CommandBuffer * const> commandBuffers) { _impl->drop(commandBuffers); }
+void CommandQueue::wait(Submission s) { _impl->wait(s); }
+void CommandQueue::onNameChanged(const std::string &) { _impl->setName(name()); }
 
 // *********************************************************************************************************************
 // Swapchain
