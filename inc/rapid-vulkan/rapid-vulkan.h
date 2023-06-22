@@ -390,7 +390,7 @@ inline T clampRange2(T & srcOffset, T & dstOffset, T & length, const T & srcCapa
 // ---------------------------------------------------------------------------------------------------------------------
 /// Helper function to set Vulkan opaque handle's name (VK_EXT_debug_utils).
 template<typename T>
-inline void setVkObjectName(vk::Device device, T handle, const char * name) {
+inline void setVkHandleName(vk::Device device, T handle, const char * name) {
 #if VULKAN_HPP_DISPATCH_LOADER_DYNAMIC == 1
     if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkSetDebugUtilsObjectNameEXT) return;
 #else
@@ -412,8 +412,8 @@ inline void setVkObjectName(vk::Device device, T handle, const char * name) {
 // ---------------------------------------------------------------------------------------------------------------------
 /// Helper function to set Vulkan opaque handle's name (VK_EXT_debug_utils).
 template<typename T>
-inline void setVkObjectName(vk::Device device, T handle, std::string name) {
-    setVkObjectName(device, handle, name.c_str());
+inline void setVkHandleName(vk::Device device, T handle, std::string name) {
+    setVkHandleName(device, handle, name.c_str());
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -485,7 +485,7 @@ public:
         std::string name = "<no-name>"s;
     };
 
-    virtual ~Root() = default;
+    virtual ~Root() { RVI_ASSERT(_ref == 0); }
 
     /// Name of the object. For debug and log only. Can be any value.
     const std::string & name() const { return _name; }
@@ -542,8 +542,8 @@ protected:
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// Reference counter of any class inherited from Root. This class is more efficient on both memory and performance,
-/// than std::shared_ptr
+/// Reference counter of any class inherited from Root. Because it relies on the intrinsic counter variable in the Root
+/// class, it is much more efficient and memory friendly than thd std::shared_ptr.
 template<typename T>
 class Ref : public RefBase {
 public:
@@ -1247,7 +1247,7 @@ public:
 
 protected:
     void onNameChanged(const std::string &) override {
-        if (_handle) setVkObjectName(_gi->device, _handle, name());
+        if (_handle) setVkHandleName(_gi->device, _handle, name());
     }
 
 private:
@@ -1641,46 +1641,51 @@ struct DrawPack {
 
     std::vector<ConstantArgument> constants;
 
-    std::vector<BufferView> vertexBuffers;
+    std::vector<vk::Buffer>     vertexBuffers;
+    std::vector<vk::DeviceSize> vertexOffsets;
 
     BufferView    indexBuffer;                        ///< Index buffer. Set to null for non-indexed draw.
     vk::IndexType indexType = vk::IndexType::eUint16; ///< Type of index. Ignored for non-indexed draw.
 
-    void cmdRender(vk::Device device, vk::CommandBuffer cb, std::function<vk::DesctiporSet(const Pipeline &, uint32_t setIndex)> descriptorSetAllocator) const
+    union {
+        GraphicsPipeline::DrawParameters    draw;     ///< Draw parameters for graphics pipeline.
+        ComputePipeline::DispatchParameters dispatch; ///< Dispatch parameters for compute pipeline.
+    };
+
+    void cmdRender(vk::Device device, vk::CommandBuffer cb,
+                   std::function<vk::DescriptorSet(const Pipeline &, uint32_t setIndex)> descriptorSetAllocator) const {
         auto layout = pipeline->layout();
+        auto bp     = pipeline->bindPoint();
 
-        for(uint32_t s = 0; s < descriptors.size(); ++s) {
+        for (uint32_t s = 0; s < descriptors.size(); ++s) {
             auto & w = descriptors[s];
-            if(w.empty()) continue;
+            if (w.empty()) continue;
             auto set = descriptorSetAllocator(*pipeline, s);
-            for(auto & d : w) const_cast<vk::WriteDescriptorSet&>(d).dstSet = set;
+            for (auto & d : w) const_cast<vk::WriteDescriptorSet &>(d).dstSet = set;
             device.updateDescriptorSets(w, {});
-            cb.bindDescriptorSets(pipeline->bindpoint(), layout, 1, &set, {});
+            cb.bindDescriptorSets(bp, layout, s, 1, &set, 0, nullptr);
         }
 
-        for (const auto & c : constants) cb.pushConstants(layout, c.stageFlags, c.offset, (uint32_t)c.value.size(), c.value.data());
+        for (const auto & c : constants) cb.pushConstants(layout, c.stages, c.offset, (uint32_t) c.value.size(), c.value.data());
 
-        if (!_vertexBuffers.empty()) {
-            RVI_REQUIRE(_vertexBuffers.size() <= 16); // TODO: use a stack_array class to remove this limitation.
-            vk::Buffer     buffers[16];
-            vk::DeviceSize offsets[16];
-            for (size_t i = 0; i < _vertexBuffers.size(); ++i) {
-                const auto & view = _vertexBuffers.data()[i];
-                RVI_REQUIRE(view.buffer, "Empty vertex buffer is not allowed.");
-                buffers[i] = view.buffer;
-                offsets[i] = view.offset;
-                // TODO: validate vertex buffer size on debug build.
+        if (vk::PipelineBindPoint::eGraphics == bp) {
+            if (!vertexBuffers.empty()) {
+                RVI_ASSERT(vertexBuffers.size() == vertexOffsets.size());
+                cb.bindVertexBuffers(0, (uint32_t) vertexBuffers.size(), vertexBuffers.data(), vertexOffsets.data());
             }
-            cb.bindVertexBuffers(0, (uint32_t) _vertexBuffers.size(), buffers, offsets);
-        }
 
-        if (_indexBuffer.buffer) {
-            // indexed draw
-            cb.bindIndexBuffer(_indexBuffer.buffer, _indexBuffer.offset, _indexBuffer.indexType);
-            cb.drawIndexed(dp.indexCount, dp.instanceCount, dp.firstIndex, dp.vertexOffset, dp.firstInstance);
+            if (indexBuffer.buffer) {
+                // indexed draw
+                cb.bindIndexBuffer(indexBuffer.buffer, indexBuffer.offset, indexType);
+                cb.drawIndexed(draw.indexCount, draw.instanceCount, draw.firstIndex, draw.vertexOffset, draw.firstInstance);
+            } else {
+                // non-indexed draw
+                cb.draw(draw.vertexCount, draw.instanceCount, draw.firstVertex, draw.firstInstance);
+            }
+        } else if (vk::PipelineBindPoint::eCompute == bp) {
+            cb.dispatch((uint32_t) dispatch.width, (uint32_t) dispatch.height, (uint32_t) dispatch.depth);
         } else {
-            // non-indexed draw
-            cb.draw(dp.vertexCount, dp.instanceCount, dp.firstVertex, dp.firstInstance);
+            RVI_THROW("Invalid pipeline bind point");
         }
     }
 };
@@ -1762,10 +1767,10 @@ public:
     }
 
     /// @brief Set vertex buffer.
-    Drawable & v(...);
+    Drawable & v(vk::ArrayProxy<const BufferView>);
 
     /// @brief Set index buffer
-    Drawable & i(...);
+    Drawable & i(const IndexBuffer &);
 
     Drawable & dp(const GraphicsPipeline::DrawParameters &);
 
@@ -1777,7 +1782,6 @@ public:
 private:
     class Impl;
     Impl * _impl = nullptr;
-    friend class CommandBuffer;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1797,10 +1801,16 @@ public:
 
     const std::string & name() const;
 
+    vk::CommandBuffer handle() const;
+
     /// @brief Enqueue a draw pack to the queue to be rendered later.
     /// The drawable and the associated resources are considered in-use until the command buffer is dropped or finished executing on GPU.
     /// Deleting the drawable object before the command buffer is dropped or finished executing on GPU will result in undefined behavior.
     void enqueue(const DrawPack &);
+
+    operator vk::CommandBuffer() const { return handle(); }
+
+    operator VkCommandBuffer() const { return handle(); }    
 
 protected:
     CommandBuffer()  = default;
@@ -1840,10 +1850,10 @@ public:
 
     /// @brief unique identifier of a GPU submission
     struct SubmissionID {
-        uint64_t queue = 0;
-        uint64_t index = 0;
+        uint64_t queue {};
+        uint64_t index {};
 
-        bool empty() const { return !queue || 0 == id; }
+        bool empty() const { return !queue || 0 == index; }
     };
 
     CommandQueue(const ConstructParameters &);
@@ -1860,7 +1870,7 @@ public:
     /// After this call, all command buffer poiners are inaccessable. The caller should not use them anymore.
     /// @return A submission ID that later to check/wait for the completion of the submission. Return an empty
     /// handle on failure.
-    void submit(const SubmitParameters &);
+    SubmissionID submit(const SubmitParameters &);
 
     /// @brief Drop command buffers. Discard all contents of them.
     /// After this call, the command buffer poiners are inaccessable. The caller should not use them anymore.
@@ -1869,7 +1879,7 @@ public:
     /// @brief Wait for the queue to finish processing submitted commands.
     /// @param SubmissionID The submission handle to wait for. It must be returned by the submit() call of the same queue.
     /// Passing in empty submission handle is allowed. In that case, the function will wait for all submissions to finish.
-    void wait(SubmissionID = {});
+    void wait(SubmissionID sid);
 
     auto gi() const -> const GlobalInfo * { return desc().gi; }
     auto family() const -> uint32_t { return desc().family; }

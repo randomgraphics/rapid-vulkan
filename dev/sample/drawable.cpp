@@ -1,5 +1,5 @@
 /*
-    This file demonstrates the basic usage of feeding data to graphics pipeline via ArgumentPack class.
+    This file demonstrates the basic usage of the Drawable class.
 */
 #include "../rv.h"
 #include <iostream>
@@ -57,13 +57,14 @@ void entry(const Options & options) {
                                          .dynamicScissor()
                                          .dynamicViewport()
                                          .addVertexAttribute(0, 0, vk::Format::eR32G32Sfloat)
-                                         .addVertexBuffer(2 * sizeof(float)));
+                                         .addVertexBuffer(2 * sizeof(float)))
+                 .markAsNotDeleteable(); // this line is to make it work with Ref<>
 
     // This part is what this sample is about. We create 2 uniform buffers and bind them to the pipeline via ArgumentPack.
-    auto u0   = Buffer(Buffer::ConstructParameters {{"ub0"}, gi}.setUniform().setSize(sizeof(float) * 2));
-    auto u1   = Buffer(Buffer::ConstructParameters {{"ub1"}, gi}.setUniform().setSize(sizeof(float) * 3));
-    auto args = ArgumentPack({});
-    args.b({0, 0}, {{u0.handle()}}).b({0, 1}, {{u1.handle()}});
+    auto u0 = Buffer(Buffer::ConstructParameters {{"ub0"}, gi}.setUniform().setSize(sizeof(float) * 2));
+    auto u1 = Buffer(Buffer::ConstructParameters {{"ub1"}, gi}.setUniform().setSize(sizeof(float) * 3));
+    auto dr = Drawable({p});
+    dr.b({0, 0}, {{u0.handle()}}).b({0, 1}, {{u1.handle()}}).v({{vb.handle()}}).dp(Graphics::DrawParameters {}.setNonIndexed(3));
 
     // We also need a vertex buffer to draw the triangle.
     auto bc = Buffer::SetContentParameters {}.setQueue(*device.graphics());
@@ -92,11 +93,8 @@ void entry(const Options & options) {
         // begin the render pass
         sw.cmdBeginBuiltInRenderPass(c, Swapchain::BeginRenderPassParameters {}.setClearColorF({0.0f, 1.0f, 0.0f, 1.0f})); // clear to green
 
-        // bind the arguments to the pipeline
-        p.cmdBind(c, args);
-
-        // draw the triangle using the vertex buffer we created.
-        p.cmdDraw(c, GraphicsPipeline::DrawParameters {}.setVertexBuffers({{vb.handle()}}).setNonIndexed(3));
+        // enqueue the draw command
+        c->enqueue(dr.compile());
 
         // end render pass
         sw.cmdEndBuiltInRenderPass(c);
