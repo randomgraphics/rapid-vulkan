@@ -2282,6 +2282,9 @@ auto CommandBuffer::name() const -> const std::string & {
     static const std::string emptyName = ""s;
     return _impl ? _impl->name() : emptyName;
 }
+auto CommandBuffer::handle() const -> vk::CommandBuffer {
+    return _impl ? _impl->handle() : vk::CommandBuffer{};
+}
 auto CommandBuffer::render(const DrawPack & d) const -> const CommandBuffer & {
     if (_impl) _impl->render(d);
     return *this;
