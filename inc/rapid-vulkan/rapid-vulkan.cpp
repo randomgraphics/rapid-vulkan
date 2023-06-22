@@ -2150,13 +2150,33 @@ public:
     CommandBufferImpl(CommandQueue & queue, const GlobalInfo * gi, uint32_t family, const std::string & name_, vk::CommandBufferLevel level)
         : _queue(queue), _gi(gi), _family(family), _name(name_), _level(level) {
         RVI_ASSERT(_gi);
-        reset();
+        wakeup();
     }
 
     ~CommandBufferImpl() {
         if (!_gi) return;
-        _gi->safeDestroy(_handle, _pool);
-        _gi->safeDestroy(_pool);
+        clear();
+    }
+
+    void wakeup() {
+        clear();
+
+        _state = RECORDING;
+
+        _pool = _gi->device.createCommandPool(vk::CommandPoolCreateInfo().setQueueFamilyIndex(_family), _gi->allocator);
+
+        vk::CommandBufferAllocateInfo info;
+        info.commandPool        = _pool;
+        info.level              = _level;
+        info.commandBufferCount = 1;
+        _handle                 = _gi->device.allocateCommandBuffers(info)[0];
+        setVkHandleName(_gi->device, _handle, _name);
+        _handle.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+    }
+
+    void hibernate() {
+        _state = FINISHED;
+        clear();
     }
 
     void enqueue(const DrawPack & d) {
@@ -2191,12 +2211,6 @@ public:
         _state = EXECUTING;
     }
 
-    void setFinished() {
-        RVI_ASSERT(_state == EXECUTING);
-        _state = FINISHED;
-        reset();
-    }
-
 private:
     enum State {
         RECORDING,
@@ -2222,21 +2236,9 @@ private:
     };
     typedef std::map<DescriptorPoolKey, vk::DescriptorPool> DescriptorPoolMap;
 
-    void reset() {
-        _state = RECORDING;
-
+    void clear() {
         _gi->safeDestroy(_handle, _pool);
         _gi->safeDestroy(_pool);
-
-        _pool = _gi->device.createCommandPool(vk::CommandPoolCreateInfo().setQueueFamilyIndex(_family), _gi->allocator);
-
-        vk::CommandBufferAllocateInfo info;
-        info.commandPool        = _pool;
-        info.level              = _level;
-        info.commandBufferCount = 1;
-        _handle                 = _gi->device.allocateCommandBuffers(info)[0];
-        setVkHandleName(_gi->device, _handle, _name);
-        _handle.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
     }
 
     vk::DescriptorSet allocateDescriptorSet(const Pipeline &, uint32_t) {
@@ -2264,18 +2266,30 @@ public:
     const std::string & name() const { return _owner.name(); }
 
     CommandBuffer * begin(const char * name, vk::CommandBufferLevel level) {
-        auto lock    = std::lock_guard {_mutex};
-        auto p       = std::make_unique<CommandBufferImpl>(_owner, _desc.gi, _desc.family, name, level);
-        auto cb      = p.get();
-        _actives[cb] = std::move(p);
+        auto lock   = std::lock_guard {_mutex};
+        std::shared_ptr<CommandBufferImpl> p;
+        if (_finished.empty()) {
+            p = std::make_unique<CommandBufferImpl>(_owner, _desc.gi, _desc.family, name, level);
+        } else {
+            p = _finished.begin()->second;
+            _finished.erase(_finished.begin());
+            p->wakeup();
+        }
+        auto cb     = p.get();
+        _active[cb] = std::move(p);
         return cb;
     }
 
     SubmissionID submit(const SubmitParameters & sp) {
+        // remove duplicated command buffers
+        std::vector<const CommandBuffer*> uniqueCommandBuffers;
+        uniqueCommandBuffers.reserve(sp.commandBuffers.size());
+        std::unique_copy(sp.commandBuffers.begin(), sp.commandBuffers.end(), std::back_inserter(uniqueCommandBuffers));
+
         auto lock    = std::lock_guard {_mutex};
         auto s       = std::make_unique<InternalSubmission>();
         auto handles = std::vector<vk::CommandBuffer> {};
-        for (auto c : sp.commandBuffers) {
+        for (auto c : uniqueCommandBuffers) {
             auto p = promote(c);
             if (!p) continue;
             if (!p->end()) continue;
@@ -2284,9 +2298,9 @@ public:
         }
         if (s->commandBuffers.empty()) return {};
 
-        // set sumission id
-        s->id = ++_nextSubmissionId;
-        if (0 == s->id) s->id = ++_nextSubmissionId;
+        // set submission index
+        s->index = ++_nextSubmissionId;
+        if (0 == s->index) s->index = ++_nextSubmissionId;
 
         // set fence
         s->fence = sp.signalFence;
@@ -2307,64 +2321,87 @@ public:
 
         // Mark the command buffers as pending. remove them from the active list.
         for (auto cb : s->commandBuffers) {
-            cb->setPending(s.get());
-            _actives.erase(cb.get());
+            cb->setPending();
+            _active.erase(cb.get());
         }
 
         // done
-        _pendings.push_back(std::move(s));
+        _pending.push_back(std::move(s));
     }
 
     void drop(const vk::ArrayProxy<const CommandBuffer * const> & commandBuffers) {
+        // remove duplicated command buffers
+        std::vector<const CommandBuffer*> uniqueCommandBuffers;
+        uniqueCommandBuffers.reserve(commandBuffers.size());
+        std::unique_copy(commandBuffers.begin(), commandBuffers.end(), std::back_inserter(uniqueCommandBuffers));
+
         auto lock = std::lock_guard {_mutex};
-        for (auto c : sp.commandBuffers) {
+        for (auto c : commandBuffers) {
             auto p = promote(c);
             if (!p) continue;
-            if (!p->end()) continue;
-            _actives.erase(p.get());
+            p->hibernate();
+            _active.erase(p.get());
+            _finished[p.get()] = p;
         }
     }
 
-    void wait(SubmissionID sid) {
+    void wait(const vk::ArrayProxy<const SubmissionID> & submissions) {
         auto lock = std::lock_guard {_mutex};
 
-        // submission id -> submission iterator
+        // find the submission to wait for.
         PendingIterator submission;
-        if (sid.empty()) {
+        if (submissions.empty()) {
             // wait for all pending submissions to finish.
-            submission = _pendings.end();
+            submission = _pending.end();
         } else {
-            if (sid.queue != (intptr_t) this) {
-                RVI_LOGE("Submission %" PRIu64 " is not from queue %s!", sid.id, name().c_str());
-                return;
+            // if the submission array is not empty, then find the one with the largest index.
+            std::vector<PendingIterator> candidates;
+            for(const auto & sid : submissions) {
+                if (sid.queue != (int64_t)(intptr_t) this) {
+                    RVI_LOGE("Submission %" PRIi64 " is not from queue %s!", sid.index, name().c_str());
+                    continue;
+                }
+                auto oldest = _pending.front()->index;
+                if (sid.olderThan(oldest)) {
+                    // the workload has finished already.
+                    continue;
+                }
+                auto newest = _pending.back()->index;
+                if (sid.newerThan(newest)) {
+                    RVI_LOGE("Submission %" PRIi64 " is invalid since it is newer than the newest submission %" PRIi64 "!", sid.index, newest);
+                    continue;
+                }
+
+                // this is an valid pending submission.
+                if (candidates.empty()) {
+                    candidates.push_back(_pending.begin());
+                } else if (sid.newerThan(candidates[0]->index)) {
+                    candidates[0] = sid;
+                }
             }
-            auto oldest = _pendings.front()->id;
-            if (sid.id < oldest) {
-                // the workload has finished already.
-                return;
-            }
-            auto newest = _pendings.back()->id;
-            if (sid.id > newest) {
-                RVI_LOGE("Submission %" PRIu64 " is invalid since it is newer than the newest submission %" PRIu64 "!", sid.id, newest);
-                return;
-            }
+            if (candidates.empty()) return;
 
             // wait for the specified submission to finish.
-            submission = findSubmission(sid.id);
-            if (submission == _pendings.end()) {
-                RVI_LOGE("Submission %" PRIu64 " is invalid since it is not found in the pending list!", sid.id);
+            submission = findSubmission(sid.index);
+            if (submission == _pending.end()) {
+                RVI_LOGE("Submission %" PRIi64 " is invalid since it is not found in the pending list!", sid.index);
                 return;
             }
         }
 
         // wait for the submission to finish.
-        waitSubmission(*submission->get());
+        waitSubmission(submission);
 
-        // Mark all command buffers in the submission as finished.
-        for (auto cb : submission->commandBuffers) { cb->setFinished(); }
+        // Move all finished command buffers to finished list.
+        for(auto s = _pending.begin(); s != submission; ++s) {
+            for (auto cb : (*s)->commandBuffers) {
+                cb->hibernate();
+                _finished[cb.get()] = cb;
+            }
+        }
 
         // Remove all finished submissions from the pending list. This will also delete the command buffer objects.
-        _pendings.erase(_pendings.begin(), submission);
+        _pending.erase(_pending.begin(), submission);
     }
 
     void setName(const std::string & name) {
@@ -2374,22 +2411,23 @@ public:
 
 private:
     struct InternalSubmission {
-        uint64_t                                        id {};
+        int64_t                                         index {};
         std::vector<std::shared_ptr<CommandBufferImpl>> commandBuffers {};
         vk::Fence                                       fence {};
         vk::UniqueFence                                 builtInFence {};
     };
 
-    typedef std::unordered_map<CommandBuffer *, std::shared_ptr<CommandBufferImpl>> CommandBufferSet;
+    typedef std::unordered_map<const CommandBuffer *, std::shared_ptr<CommandBufferImpl>> CommandBufferMap;
     typedef std::deque<std::shared_ptr<InternalSubmission>>                         PendingList;
     typedef PendingList::iterator                                                   PendingIterator;
 
     CommandQueue &   _owner;
     std::mutex       _mutex;
-    CommandBufferSet _actives;  ///< Command buffers in recording state.
-    PendingList      _pendings; ///< Pending submission list.
+    CommandBufferMap _active;   ///< Command buffers in recording state.
+    PendingList      _pending;  ///< Pending submission list.
+    CommandBufferMap _finished; ///< list of finished command buffers. ready for reuse.
     Desc             _desc;
-    uint64_t         _nextSubmissionId {};
+    int64_t          _nextSubmissionId {};
 
 private:
     std::shared_ptr<CommandBufferImpl> promote(const CommandBuffer * cb, bool expectedNull = false) const {
@@ -2397,22 +2435,22 @@ private:
             if (!expectedNull) RVI_LOGE("Null command buffer pointer.");
             return {};
         }
-        auto it = _actives.find(cb);
-        if (it == _actives.end()) {
+        auto it = _active.find(cb);
+        if (it == _active.end()) {
             if (!expectedNull) RVI_LOGE("Command buffer pointer %p is not created by queue (%s).", cb, cb->name().c_str(), name().c_str());
             return {};
         }
         return it->second;
     }
 
-    PendingIterator findSubmission(uint64_t id) const {
-        return std::find_if(_pendings.begin(), _pendings.end(), [id](const auto & s) { return s->id == id; });
+    PendingIterator findSubmission(uint64_t index) {
+        return std::find_if(_pending.begin(), _pending.end(), [index](const auto & s) { return s->index == index; });
     }
 
     void waitSubmission(InternalSubmission & s) {
         RVI_ASSERT(s.fence);
         auto result = _desc.gi->device.waitForFences({s.fence}, true, UINT64_MAX);
-        if (result != vk::Result::eSuccess) { RVI_LOGE("Submission %" PRIu64 " failed to wait for finish!", s.id); }
+        if (result != vk::Result::eSuccess) { RVI_LOGE("Submission %" PRIi64 " failed to wait for finish!", s.index); }
     }
 
     // void finish(CommandBuffer * p) {
@@ -2451,16 +2489,16 @@ private:
     // }
 };
 
-CommandQueue::CommandQueue(const ConstructParameters & params): Root(params), _impl(new Impl(params)) { _impl->setName(name()); }
+CommandQueue::CommandQueue(const ConstructParameters & params): Root(params), _impl(new Impl(*this, params)) { _impl->setName(name()); }
 CommandQueue::~CommandQueue() {
     delete _impl;
     _impl = nullptr;
 }
 auto CommandQueue::desc() const -> const Desc & { return _impl->desc(); }
 auto CommandQueue::begin(const char * purpose, vk::CommandBufferLevel level) -> CommandBuffer * { return _impl->begin(purpose, level); }
-auto CommandQueue::submit(const SubmitParameters & sp) -> Submission { _impl->submit(sp); }
+auto CommandQueue::submit(const SubmitParameters & sp) -> SubmissionID { return _impl->submit(sp); }
 void CommandQueue::drop(vk::ArrayProxy<const CommandBuffer * const> commandBuffers) { _impl->drop(commandBuffers); }
-void CommandQueue::wait(Submission s) { _impl->wait(s); }
+void CommandQueue::wait(const vk::ArrayProxy<const SubmissionID> & s) { _impl->wait(s); }
 void CommandQueue::onNameChanged(const std::string &) { _impl->setName(name()); }
 
 // *********************************************************************************************************************

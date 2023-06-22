@@ -1851,10 +1851,24 @@ public:
 
     /// @brief unique identifier of a GPU submission
     struct SubmissionID {
-        uint64_t queue {};
-        uint64_t index {};
+        int64_t queue {};
+        int64_t index {};
 
         bool empty() const { return !queue || 0 == index; }
+
+        bool newerThan(int64_t other) const {
+            return index - other > 0;
+        }
+
+        bool olderThan(int64_t other) const {
+            return index - other < 0;
+        }
+
+        void wait() const {
+            if (empty()) return;
+            auto q = (CommandQueue*)(intptr_t)queue;
+            q->wait(*this);
+        }
     };
 
     CommandQueue(const ConstructParameters &);
@@ -1880,12 +1894,17 @@ public:
     /// @brief Wait for the queue to finish processing submitted commands.
     /// @param SubmissionID The submission handle to wait for. It must be returned by the submit() call of the same queue.
     /// Passing in empty submission handle is allowed. In that case, the function will wait for all submissions to finish.
-    void wait(SubmissionID sid);
+    void wait(const vk::ArrayProxy<const SubmissionID> & = {});
 
     auto gi() const -> const GlobalInfo * { return desc().gi; }
     auto family() const -> uint32_t { return desc().family; }
     auto index() const -> uint32_t { return desc().index; }
     auto handle() const -> vk::Queue { return desc().handle; }
+
+    /// @brief Create another queue object that shares the same underlying queue handle.
+    CommandQueue clone(const std::string & newName = {}) const {
+        return CommandQueue{ConstructParameters{{newName.empty() ? name() : newName}, gi(), family(), index()}};
+    }
 
 protected:
     void onNameChanged(const std::string &) override;
