@@ -1373,16 +1373,14 @@ static PipelineReflection reflectShaders(const std::string & pipelineName, vk::A
 class DescriptorPool : public Root {
 public:
     struct ConstructParameters : public Root::ConstructParameters {
-        const GlobalInfo *                                gi = nullptr;
-        std::vector<const vk::DescriptorSetLayoutBinding> bindings;
-        size_t                                            maxSets = 1024;
+        const GlobalInfo *                                   gi = nullptr;
+        vk::ArrayProxy<const vk::DescriptorSetLayoutBinding> bindings {};
+        size_t                                               maxSets = 1024;
     };
 
     DescriptorPool(const ConstructParameters & cp) { construct(cp); }
 
     ~DescriptorPool() { destruct(); }
-
-    vk::DescriptorSetLayout layout() const { return _layout; }
 
     vk::DescriptorSet allocate() {
         if (_availableSets == 0) {
@@ -1394,50 +1392,44 @@ public:
             _pool              = _gi->device.createDescriptorPool(info);
             _availableSets     = _maxSets;
         }
-        // TODO: retire pools that are full and not used anymore.
         --_availableSets;
         return _gi->device.allocateDescriptorSets({_pool, 1, &_layout})[0];
     }
 
-    // void deallocate(vk::DescriptorSet);
-
 private:
-    const GlobalInfo *                          _gi {};
-    size_t                                      _maxSets {};
-    std::vector<vk::DescriptorSetLayoutBinding> _bindings;
-    vk::DescriptorSetLayout                     _layout {};
-    vk::DescriptorPool                          _pool {};
-    size_t                                      _availableSets {}; ///< number of sets that are available for allocation in the pool.
-    std::vector<vk::DescriptorPool>             _full;             ///< pools that are full already.
+    const GlobalInfo *              _gi {};
+    size_t                          _maxSets {};
+    vk::DescriptorSetLayout         _layout {};
+    vk::DescriptorPool              _pool {};
+    size_t                          _availableSets {}; ///< number of sets that are available for allocation in the pool.
+    std::vector<vk::DescriptorPool> _full;             ///< pools that are full already.
 
 private:
     void construct(const ConstructParameters & cp) {
-        _gi = cp.gi;
-        RVI_REQUIRE(_gi);
+        RVI_REQUIRE(cp.gi);
+        RVI_REQUIRE(!cp.bindings.empty());
+        RVI_REQUIRE(cp.maxSets > 0);
 
+        _gi      = cp.gi;
         _maxSets = cp.maxSets;
-        RVI_REQUIRE(_maxSets > 0);
 
-        // go through all descriptors in this set. build binding arrays.
-        auto sizesMap = std::map<vk::DescriptorType, uint32_t>();
-        for (uint32_t i = 0; i < cp.bindings.size(); ++i) {
-            const auto & d = cp.bindings[i];
-            if (d.descriptorCount) continue; // skip empty descriptor
-            _bindings.push_back(d.binding);
-            sizesMap[d.binding.descriptorType] += d.binding.descriptorCount;
+        auto bindings = std::vector<vk::DescriptorSetLayoutBinding>;
+        auto sizeMap  = std::map<vk::DescriptorType, uint32_t>;
+        for (const auto & b : cp.bindings[s]) {
+            if (0 == b.descriptorCount) continue; // skip empty descriptor
+            bindings.push_back(b);
+            sizesMap[d.binding.descriptorType] += b.descriptorCount;
         }
-        if (_bindings.empty()) return; // no descriptors in this set.
+        if (bindings.empty()) return; // no descriptor to allocate
 
-        // we have gone through all descriptors in the set. Now we can create descriptor set layout.
-        auto ci         = vk::DescriptorSetLayoutCreateInfo();
-        ci.bindingCount = (uint32_t) bindings.size();
-        ci.pBindings    = bindings.data();
-        _layout         = _gi->device.createDescriptorSetLayout(ci, _gi->allocator);
+        // create set layout
+        _layout = _gi->device.createDescriptorSetLayout(vk::DescriptorSetLayoutCreateInfo {}.setBindings(bindings), _gi->allocator);
 
-        // convert sizes map to array
+        // create pool
         std::vector<vk::DescriptorPoolSize> sizes;
         sizes.reserve(sizesMap.size());
         for (const auto & kv : sizesMap) sizes.push_back({kv.first, kv.second});
+        _pool = _gi->device.createDescriptorPool(vk::DescriptorPoolCreateInfo().setPoolSizes(sizes), _gi->allocator);
     }
 
     void destruct() {
@@ -1471,7 +1463,12 @@ public:
 
     const PipelineReflection & reflection() const;
 
-    vk::DescriptorSet allocateDescriptorSet(size_t setIndex);
+    /// @brief Allocate a descriptor set from the pool.
+    /// @param setIndex Index of the set.
+    /// @param submissionID ID of the submission that the descriptor set is allocated for. Set this to empty for a permanent allocation.
+    vk::DescriptorSet allocateDescriptorSet(size_t setIndex, Ref<SubmissionID> submissionID);
+
+    void recycleDescriptorSet(uint64_t queue, uint64_t safeIndex);
 
 protected:
     void onNameChanged(const std::string &) override;
@@ -1490,7 +1487,7 @@ public:
         _gi         = shaders.front()->gi();
         _reflection = reflectShaders(owner.name(), shaders);
 
-        // create descriptor set
+        // create descriptor set layouts
         _sets.resize(_reflection.descriptors.size());
         for (uint32_t s = 0; s < _sets.size(); ++s) {
             std::vector<vk::DescriptorSetLayoutBinding> bindings;
@@ -1498,7 +1495,7 @@ public:
                 if (d.empty()) continue; // skip empty descriptor
                 bindings.push_back(d.binding);
             }
-            _sets[i].reset(new DescriptorSet(_gi, bindings));
+            _sets[i].layout = _gi->device.createDescriptorSetLayout(vk::DescriptorSetLayoutCreateInfo {}.setBindings(bindings), _gi->allocator);
         }
 
         // create push constant array
@@ -1531,21 +1528,29 @@ public:
 
     const PipelineReflection & reflection() const { return _reflection; }
 
-    vk::DescriptorSet allocateDescriptorSet(size_t setIndex) {
-        RVI_ASSERT(setIndex < _sets.size());
-        return _sets[setIndex]->allocate();
-    }
+    vk::ArrayProxy<vk::DescriptorSetLayoutBinding> bindings(size_t setIndex) const { return _sets[setIndex].bindings; }
 
     void onNameChanged() {
         if (_handle) setVkObjectName(_gi->device, _handle, _owner.name());
     }
 
 private:
-    PipelineLayout &                 _owner;
-    const GlobalInfo *               _gi = nullptr;
-    PipelineReflection               _reflection;
-    vk::PipelineLayout               _handle;
-    std::vector<Ref<DescriptorPool>> _sets;
+    struct DescriptorSet {
+        vk::DescriptorSetLayout layout {};
+        Ref<DescriptorPool>     pool;
+
+        void clear(GlobalInfo & gi) {
+            bindings.clear();
+            gi.safeDestroy(layout);
+            pool.reset();
+        }
+    };
+
+    PipelineLayout &           _owner;
+    const GlobalInfo *         _gi = nullptr;
+    PipelineReflection         _reflection;
+    vk::PipelineLayout         _handle;
+    std::vector<DescriptorSet> _sets;
 };
 
 PipelineLayout::PipelineLayout(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this, cp.shaders); }
@@ -1555,7 +1560,7 @@ PipelineLayout::~PipelineLayout() {
 }
 auto PipelineLayout::handle() const -> vk::PipelineLayout { return _impl->handle(); }
 auto PipelineLayout::reflection() const -> const PipelineReflection & { return _impl->reflection(); }
-auto PipelineLayout::allocateDescriptorSet(size_t setIndex) -> vk::DescriptorSet { return _impl->allocateDescriptorSet(setIndex); }
+auto PipelineLayout::sizeMap(size_t setIndex) -> DescriptorSizeMap { return _impl->sizeMap(setIndex); }
 void PipelineLayout::onNameChanged(const std::string &) { _impl->onNameChanged(); }
 
 // *********************************************************************************************************************
@@ -1960,29 +1965,23 @@ public:
         // TODO
     }
 
-    void render(vk::CommandBuffer cb) {
-        if (!validate()) return;
-        cb.bindPipeline(_pipeline->bindPoint(), _pipeline->handle());
-        bindDescriptors(cb);
-        bindConstants(cb);
-        if (_pipeline->bindPoint() == vk::PipelineBindPoint::eGraphics) {
-            bindVertcies();
-            auto gp = (GraphicsPipeline *) _pipeline.get();
-            gp->cmdDraw(cb, _drawParameters);
-        } else {
-            RVI_ASSERT(_pipeline->bindPoint() == vk::PipelineBindPoint::eCompute);
-            auto cp = (ComputePipeline *) _pipeline.get();
-            cp->cmdDispatch(cb, _dispatchParameters);
-        }
-    }
+    // void render(vk::CommandBuffer cb, Ref<SubmissionID> submission) {
+    //     if (!validate(submission)) return;
+    //     cb.bindPipeline(_pipeline->bindPoint(), _pipeline->handle());
+    //     bindDescriptors(cb);
+    //     bindConstants(cb);
+    //     if (_pipeline->bindPoint() == vk::PipelineBindPoint::eGraphics) {
+    //         bindVertcies();
+    //         auto gp = (GraphicsPipeline *) _pipeline.get();
+    //         gp->cmdDraw(cb, _drawParameters);
+    //     } else {
+    //         RVI_ASSERT(_pipeline->bindPoint() == vk::PipelineBindPoint::eCompute);
+    //         auto cp = (ComputePipeline *) _pipeline.get();
+    //         cp->cmdDispatch(cb, _dispatchParameters);
+    //     }
+    // }
 
 private:
-    struct ConstantArgument {
-        vk::ShaderStageFlags stages {};
-        uint32_t             offset {};
-        std::vector<uint8_t> value {};
-    };
-
     Drawable &                                           _owner;
     Ref<Pipeline>                                        _pipeline;
     std::unordered_map<DescriptorIdentifier, Argument *> _descriptors;
@@ -2021,120 +2020,105 @@ private:
         return v;
     }
 
-    bool validate() {
-        if (!_changed) return _valid;
+    DrawPack compile() {
+        return {};
+        // const auto & refl = _pipeline->reflection();
+        // _writes.clear();
+        // for (uint32_t si = 0; si < refl.descriptors.size(); ++si) {
+        //     const auto & s = refl.descriptors[si];
+        //     for (uint32_t i = 0; i < s.size(); ++i) {
+        //         const auto & b = s[i].binding;
+        //         auto &       w = _writes.emplace_back();
+        //         w.setDstSet(sets->at(setIndex));
+        //         w.setDstBinding(b.binding);
+        //         w.setDescriptorType(b.descriptorType);
 
-        _changed = false;
-        _valid   = false;
+        //         // Locate the arugment for this binding slot.
+        //         auto a = find({si, i});
+        //         if (!a) {
+        //             RVI_LOGE("Drawable (%s) validation error: set %u slot %u is not set.", _owner.name().c_str(), si, i);
+        //             return false;
+        //         }
 
-        // create descriptor writes
-        const auto & refl = _pipeline->reflection();
-        _writes.clear();
-        for (uint32_t si = 0; si < refl.descriptors.size(); ++si) {
-            const auto & s = refl.descriptors[si];
-            for (uint32_t i = 0; i < s.size(); ++i) {
-                const auto & b = s[i].binding;
-                auto &       w = _writes.emplace_back();
-                w.setDstSet((VkDescriptorSet) si);
-                w.setDstBinding(b.binding);
-                w.setDescriptorType(b.descriptorType);
+        //         // verify that the argument type is compatible with the descriptor type
+        //         if (!a->typeCompatibleWith(b.descriptorType)) {
+        //             RVI_LOGE("Drawable (%s) validation error: : set %u slot %u is of type %s, but the argument is of type %s.", _owner.name().c_str(), si, i,
+        //                      vk::to_string(b.descriptorType).c_str(), a->type());
+        //             return false;
+        //         }
 
-                // Locate the arugment for this binding slot.
-                auto a = find({si, i});
-                if (!a) {
-                    RVI_LOGE("Drawable (%s) validation error: set %u slot %u is not set.", _owner.name().c_str(), si, i);
-                    return false;
-                }
+        //         // verify that there're enough descriptors in the argument.
+        //         if (a->count() < b.descriptorCount) {
+        //             RVI_LOGE("Drawable (%s) validation error: : set %u slot %u requires %u descriptors, but the argument has only %zu.", _owner.name().c_str(),
+        //                      si, i, b.descriptorCount, a->count());
+        //             return false;
+        //         }
 
-                // verify that the argument type is compatible with the descriptor type
-                if (!a->typeCompatibleWith(b.descriptorType)) {
-                    RVI_LOGE("Drawable (%s) validation error: : set %u slot %u is of type %s, but the argument is of type %s.", _owner.name().c_str(), si, i,
-                             vk::to_string(b.descriptorType).c_str(), a->type());
-                    return false;
-                }
+        //         auto & value = a->value();
+        //         if (auto buf = std::get_if<Argument::Impl::BufferArgs>(&value))
+        //             w.setBufferInfo(buf->infos);
+        //         else if (auto img = std::get_if<Argument::Impl::ImageArgs>(&value))
+        //             w.setImageInfo(img->infos);
+        //         else {
+        //             // we should not reach here, since we have already checked the type compatibility.
+        //             RAPID_VULKAN_ASSERT(false, "should never reach here.");
+        //         }
+        //     }
+        // }
+        // if (_writes.empty()) return true;
 
-                // verify that there're enough descriptors in the argument.
-                if (a->count() < b.descriptorCount) {
-                    RVI_LOGE("Drawable (%s) validation error: : set %u slot %u requires %u descriptors, but the argument has only %zu.", _owner.name().c_str(),
-                             si, i, b.descriptorCount, a->count());
-                    return false;
-                }
-
-                auto & value = a->value();
-                if (auto buf = std::get_if<Argument::Impl::BufferArgs>(&value))
-                    w.setBufferInfo(buf->infos);
-                else if (auto img = std::get_if<Argument::Impl::ImageArgs>(&value))
-                    w.setImageInfo(img->infos);
-                else {
-                    // we should not reach here, since we have already checked the type compatibility.
-                    RAPID_VULKAN_ASSERT(false, "should never reach here.");
-                }
-            }
-        }
-
-        // done
-        _valid = true;
-        return _valid;
+        // // done
+        // _valid = true;
+        // return _valid;
     }
 
-    void bindDescriptors(vk::CommandBuffer cb) {
-        RVI_ASSERT(!_changed && _valid);
-        if (_writes.empty()) return;
+    // void bindDescriptors(vk::CommandBuffer cb, Ref<SubmissionID> & submission) {
+    //     RVI_ASSERT(!_changed && _valid);
+    //     if (_writes.empty()) return;
+    //     cb.bindDescriptorSets(bindPoint, _pipeline->layout(), 0, sets, {});
+    // }
 
-        // allocate new descriptor sets
-        auto sets = _pipeline->allocateDescriptorSets();
-        if (sets.empty()) return;
-        for (auto & w : _writes) {
-            uint32_t setIndex = (uint32_t) w.dstSet;
-            RVI_ASSERT(setIndex < sets.size());
-            w.setDstSet(sets[setIndex]);
-        }
+    // void bindConstants(vk::CommandBuffer cb) const {
+    //     RVI_ASSERT(!_changed && _valid);
+    //     auto         layout     = _pipeline->layout();
+    //     const auto & reflection = _pipeline->reflection();
+    //     for (const auto & kv : reflection.constants) {
+    //         if (kv.second.empty()) continue;
+    //         auto v = getConstant(kv.first, kv.second.begin, kv.second.end);
+    //         if (v.empty()) {
+    //             // No warnings ehre. Push constant value is persistent within one
+    //             // command buffer submit. So it is not required to update all the values on every pipeline binding.
+    //             continue;
+    //         }
+    //         for (const auto & [pcr, data] : v) cb.pushConstants(layout, pcr.stageFlags, pcr.offset, pcr.size, data);
+    //     }
+    // }
 
-        _gi->device.updateDescriptorSets(writes, {});
-        cb.bindDescriptorSets(bindPoint, _pipeline->layout(), 0, sets, {});
-    }
+    // void bindVertcies() const {
+    //     const auto & dp = _drawParameters;
+    //     if (_vertexBuffers.size() > 0) {
+    //         RVI_REQUIRE(_vertexBuffers.size() <= 16); // TODO: use a stack_array class to remove this limitation.
+    //         vk::Buffer     buffers[16];
+    //         vk::DeviceSize offsets[16];
+    //         for (size_t i = 0; i < _vertexBuffers.size(); ++i) {
+    //             const auto & view = _vertexBuffers.data()[i];
+    //             RVI_REQUIRE(view.buffer, "Empty vertex buffer is not allowed.");
+    //             buffers[i] = view.buffer;
+    //             offsets[i] = view.offset;
+    //             // TODO: validate vertex buffer size on debug build.
+    //         }
+    //         cb.bindVertexBuffers(0, (uint32_t) _vertexBuffers.size(), buffers, offsets);
+    //     }
 
-    void bindConstants(vk::CommandBuffer cb) const {
-        RVI_ASSERT(!_changed && _valid);
-        auto         layout     = _pipeline->layout();
-        const auto & reflection = _pipeline->reflection();
-        for (const auto & kv : reflection.constants) {
-            if (kv.second.empty()) continue;
-            auto v = getConstant(kv.first, kv.second.begin, kv.second.end);
-            if (v.empty()) {
-                // No warnings ehre. Push constant value is persistent within one
-                // command buffer submit. So it is not required to update all the values on every pipeline binding.
-                continue;
-            }
-            for (const auto & [pcr, data] : v) cb.pushConstants(layout, pcr.stageFlags, pcr.offset, pcr.size, data);
-        }
-    }
-
-    void bindVertcies() const {
-        const auto & dp = _drawParameters;
-        if (_vertexBuffers.size() > 0) {
-            RVI_REQUIRE(_vertexBuffers.size() <= 16); // TODO: use a stack_array class to remove this limitation.
-            vk::Buffer     buffers[16];
-            vk::DeviceSize offsets[16];
-            for (size_t i = 0; i < _vertexBuffers.size(); ++i) {
-                const auto & view = _vertexBuffers.data()[i];
-                RVI_REQUIRE(view.buffer, "Empty vertex buffer is not allowed.");
-                buffers[i] = view.buffer;
-                offsets[i] = view.offset;
-                // TODO: validate vertex buffer size on debug build.
-            }
-            cb.bindVertexBuffers(0, (uint32_t) _vertexBuffers.size(), buffers, offsets);
-        }
-
-        if (_indexBuffer.buffer) {
-            // indexed draw
-            cb.bindIndexBuffer(_indexBuffer.buffer, _indexBuffer.offset, _indexBuffer.indexType);
-            cb.drawIndexed(dp.indexCount, dp.instanceCount, dp.firstIndex, dp.vertexOffset, dp.firstInstance);
-        } else {
-            // non-indexed draw
-            cb.draw(dp.vertexCount, dp.instanceCount, dp.firstVertex, dp.firstInstance);
-        }
-    }
+    //     if (_indexBuffer.buffer) {
+    //         // indexed draw
+    //         cb.bindIndexBuffer(_indexBuffer.buffer, _indexBuffer.offset, _indexBuffer.indexType);
+    //         cb.drawIndexed(dp.indexCount, dp.instanceCount, dp.firstIndex, dp.vertexOffset, dp.firstInstance);
+    //     } else {
+    //         // non-indexed draw
+    //         cb.draw(dp.vertexCount, dp.instanceCount, dp.firstVertex, dp.firstInstance);
+    //     }
+    // }
 };
 
 Drawable::Drawable(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this); }
@@ -2174,6 +2158,7 @@ auto Drawable::dp(const ComputePipeline::DispatchParameters & v) -> Drawable & {
     _impl->set(v);
     return *this;
 }
+auto Drawable::compile() const { return _impl->compile(); };
 
 // *********************************************************************************************************************
 // Command Buffer/Pool/Queue
@@ -2181,35 +2166,27 @@ auto Drawable::dp(const ComputePipeline::DispatchParameters & v) -> Drawable & {
 
 class CommandBufferImpl : public CommandBuffer {
 public:
-    enum State {
-        RECORDING,
-        ENDED,
-        EXECUTING,
-        FINISHED,
-    };
-
     CommandBufferImpl(CommandQueue & queue, const GlobalInfo * gi, uint32_t family, const std::string & name_, vk::CommandBufferLevel level)
         : _queue(queue), _gi(gi), _name(name_) {
         RVI_ASSERT(_gi);
-        _pool = _gi->device.createCommandPool(vk::CommandPoolCreateInfo().setQueueFamilyIndex(family), _gi->allocator);
-
-        vk::CommandBufferAllocateInfo info;
-        info.commandPool        = _pool;
-        info.level              = level;
-        info.commandBufferCount = 1;
-        _handle                 = _gi->device.allocateCommandBuffers(info)[0];
-        _level                  = level;
-        setVkObjectName(_gi->device, _handle, name_);
-        _handle.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
     }
 
     ~CommandBufferImpl() {
+        if (!_gi) return;
         _gi->safeDestroy(_handle, _pool);
         _gi->safeDestroy(_pool);
     }
 
-    void enqueue(const Drawable &) {
-        //
+    void enqueue(const Drawable & d) {
+        if (RECORDING != _state) {
+            RVI_LOGE("Failed to enqueue drawable: command buffer %s is not in RECORDING state!", _name.c_str());
+            return;
+        }
+
+        // TODO: calculate diff to minimize the number of pipeline bindings and descriptor set bindings/updates.
+
+        // render the draw pack
+        d.cmdRender(_gi->device, _handle, [&](const Pipeline & p, uint32_t i) { return allocateDescriptorSet(p, i); });
     }
 
     const std::string & name() const { return _name; }
@@ -2222,31 +2199,68 @@ public:
             _handle.end();
             _state = ENDED;
         } else if (_state != ENDED) {
-            RVI_LOGE("[ERROR] Command buffer %s is not in RECORDING or ENDED state!", _name.c_str());
+            RVI_LOGE("Command buffer %s is not in RECORDING or ENDED state!", _name.c_str());
             return false;
         }
     }
 
-    void setPending(void *) {
+    void setPending() {
         RVI_ASSERT(_state == ENDED);
         _state = EXECUTING;
     }
 
-    /// Only called on pending command buffers and unconditionally mark it as finished.
-    /// Should only be called on a pending or already finished command buffer.
     void setFinished() {
         RVI_ASSERT(_state == EXECUTING);
         _state = FINISHED;
+        reset();
     }
 
 private:
+    enum State {
+        RECORDING,
+        ENDED,
+        EXECUTING,
+        FINISHED,
+    };
+
     CommandQueue &         _queue;
-    const GlobalInfo *     _gi;
+    const GlobalInfo *     _gi = nullptr;
     std::string            _name;
-    vk::CommandPool        _pool; // one pool for each command buffer for simplicity for now.
+    vk::CommandPool        _pool; // one pool for each command buffer for simplicity and for multithread safety.
     vk::CommandBuffer      _handle {};
     vk::CommandBufferLevel _level = vk::CommandBufferLevel::ePrimary;
+    Ref<SubmissionID>      _submission;
     State                  _state = RECORDING;
+
+private:
+    struct DescriptorPoolKey {
+        std::vector<vk::DescriptorSetLayoutBinding> bindings;
+        bool                                        operator<(const DescriptorPoolKey & rhs) const { return bindings < rhs.bindings; }
+    };
+    typedef std::map<DescriptorPoolKey, vk::DescriptorPool> DescriptorPoolMap;
+
+    void reset() {
+        _state = RECORDING;
+
+        _gi->safeDestroy(_handle, _pool);
+        _gi->safeDestroy(_pool);
+
+        _pool = _gi->device.createCommandPool(vk::CommandPoolCreateInfo().setQueueFamilyIndex(family), _gi->allocator);
+
+        vk::CommandBufferAllocateInfo info;
+        info.commandPool        = _pool;
+        info.level              = level;
+        info.commandBufferCount = 1;
+        _handle                 = _gi->device.allocateCommandBuffers(info)[0];
+        _level                  = level;
+        setVkObjectName(_gi->device, _handle, name_);
+        _handle.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+    }
+
+    vk::DescriptorSet allocateDescriptorSet(const Pipeline &, uint32_t) {
+        //
+        return {};
+    }
 };
 
 auto CommandBuffer::name() const -> const std::string & { return ((CommandBufferImpl *) this)->name(); }
@@ -2363,6 +2377,9 @@ public:
 
         // wait for the submission to finish.
         waitSubmission(*submission->get());
+
+        // Mark all command buffers in the submission as finished.
+        for (auto cb : submission->commandBuffers) { cb->setFinished(); }
 
         // Remove all finished submissions from the pending list. This will also delete the command buffer objects.
         _pendings.erase(_pendings.begin(), submission);

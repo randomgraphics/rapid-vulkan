@@ -479,6 +479,8 @@ inline vk::UniqueSurfaceKHR createGLFWSurface(vk::Instance instance, GLFWwindow 
 /// The root class of most of the other public classes in this library.
 class Root {
 public:
+    RVI_NO_COPY_NO_MOVE(Root);
+
     struct ConstructParameters {
         std::string name = "<no-name>"s;
     };
@@ -1404,7 +1406,7 @@ struct PipelineReflection {
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// A wrapper class for VkPipeline
+/// A wrapper class for VkPipeline. Immutable after being created. Safe to visit from multiple threads.
 class Pipeline : public Root {
 public:
     ~Pipeline() override;
@@ -1415,8 +1417,6 @@ public:
 
     const PipelineReflection & reflection() const;
 
-    std::vector<vk::DescriptorSet> allocateDescriptorSets() const;
-
 protected:
     Pipeline(const std::string & name, vk::ArrayProxy<const Shader * const> shaders);
 
@@ -1425,7 +1425,7 @@ protected:
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// Wrapper of graphics pipeline object
+/// Wrapper of graphics pipeline object.
 class GraphicsPipeline : public Pipeline {
 public:
     struct ConstructParameters : public Root::ConstructParameters {
@@ -1600,7 +1600,7 @@ public:
 
     GraphicsPipeline(const ConstructParameters &);
 
-    void cmdDraw(vk::CommandBuffer, const DrawParameters &);
+    void cmdDraw(vk::CommandBuffer, const DrawParameters &) const;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1620,7 +1620,69 @@ public:
 
     ComputePipeline(const ConstructParameters &);
 
-    void cmdDispatch(vk::CommandBuffer, const DispatchParameters &);
+    void cmdDispatch(vk::CommandBuffer, const DispatchParameters &) const;
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// @brief A compact snapshot of the drawable object.
+struct DrawPack {
+    struct ConstantArgument {
+        vk::ShaderStageFlags stages {};
+        uint32_t             offset {};
+        std::vector<uint8_t> value {};
+    };
+
+    Ref<const Pipeline>             pipeline;
+    std::vector<Ref<const Buffer>>  buffers;
+    std::vector<Ref<const Image>>   images;
+    std::vector<Ref<const Sampler>> samplers;
+
+    std::vector<std::vector<vk::WriteDescriptorSet>> descriptors;
+
+    std::vector<ConstantArgument> constants;
+
+    std::vector<BufferView> vertexBuffers;
+
+    BufferView    indexBuffer;                        ///< Index buffer. Set to null for non-indexed draw.
+    vk::IndexType indexType = vk::IndexType::eUint16; ///< Type of index. Ignored for non-indexed draw.
+
+    void cmdRender(vk::Device device, vk::CommandBuffer cb, std::function<vk::DesctiporSet(const Pipeline &, uint32_t setIndex)> descriptorSetAllocator) const
+        auto layout = pipeline->layout();
+
+        for(uint32_t s = 0; s < descriptors.size(); ++s) {
+            auto & w = descriptors[s];
+            if(w.empty()) continue;
+            auto set = descriptorSetAllocator(*pipeline, s);
+            for(auto & d : w) const_cast<vk::WriteDescriptorSet&>(d).dstSet = set;
+            device.updateDescriptorSets(w, {});
+            cb.bindDescriptorSets(pipeline->bindpoint(), layout, 1, &set, {});
+        }
+
+        for (const auto & c : constants) cb.pushConstants(layout, c.stageFlags, c.offset, (uint32_t)c.value.size(), c.value.data());
+
+        if (!_vertexBuffers.empty()) {
+            RVI_REQUIRE(_vertexBuffers.size() <= 16); // TODO: use a stack_array class to remove this limitation.
+            vk::Buffer     buffers[16];
+            vk::DeviceSize offsets[16];
+            for (size_t i = 0; i < _vertexBuffers.size(); ++i) {
+                const auto & view = _vertexBuffers.data()[i];
+                RVI_REQUIRE(view.buffer, "Empty vertex buffer is not allowed.");
+                buffers[i] = view.buffer;
+                offsets[i] = view.offset;
+                // TODO: validate vertex buffer size on debug build.
+            }
+            cb.bindVertexBuffers(0, (uint32_t) _vertexBuffers.size(), buffers, offsets);
+        }
+
+        if (_indexBuffer.buffer) {
+            // indexed draw
+            cb.bindIndexBuffer(_indexBuffer.buffer, _indexBuffer.offset, _indexBuffer.indexType);
+            cb.drawIndexed(dp.indexCount, dp.instanceCount, dp.firstIndex, dp.vertexOffset, dp.firstInstance);
+        } else {
+            // non-indexed draw
+            cb.draw(dp.vertexCount, dp.instanceCount, dp.firstVertex, dp.firstInstance);
+        }
+    }
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1644,7 +1706,8 @@ union DescriptorIdentifier {
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// Represent a pipeline and the full set of resources/parameters to issue a draw/dispatch call to GPU.
+/// @brief Represent a pipeline and the full set of resources/parameters to issue a draw/dispatch call to GPU.
+/// The object is not thread safe. The methods can only be used in strictly sequential manner.
 class Drawable : public Root {
 public:
     struct ConstructParameters : public Root::ConstructParameters {
@@ -1708,6 +1771,9 @@ public:
 
     Drawable & dp(const ComputePipeline::DispatchParameters &);
 
+    /// @brief Create a compat snapshot of the drawable.
+    DrawPack compile() const;
+
 private:
     class Impl;
     Impl * _impl = nullptr;
@@ -1731,10 +1797,10 @@ public:
 
     const std::string & name() const;
 
-    /// @brief Enqueue a drawable object to the queue to be rendered later.
+    /// @brief Enqueue a draw pack to the queue to be rendered later.
     /// The drawable and the associated resources are considered in-use until the command buffer is dropped or finished executing on GPU.
     /// Deleting the drawable object before the command buffer is dropped or finished executing on GPU will result in undefined behavior.
-    void enqueue(const Drawable &);
+    void enqueue(const DrawPack &);
 
 protected:
     CommandBuffer()  = default;
@@ -1772,9 +1838,10 @@ public:
         vk::ArrayProxy<const vk::Semaphore> signalSemaphores {};
     };
 
-    struct Submission {
-        intptr_t queue = 0;
-        uint64_t id    = 0;
+    /// @brief unique identifier of a GPU submission
+    struct SubmissionID {
+        uint64_t queue = 0;
+        uint64_t index = 0;
 
         bool empty() const { return !queue || 0 == id; }
     };
@@ -1791,18 +1858,18 @@ public:
 
     /// @brief Submit command buffers to the queue for asynchronous processing.
     /// After this call, all command buffer poiners are inaccessable. The caller should not use them anymore.
-    /// @return A submission handle that later to check/wait for the completion of the submission. Return an empty
+    /// @return A submission ID that later to check/wait for the completion of the submission. Return an empty
     /// handle on failure.
-    Submission submit(const SubmitParameters &);
+    void submit(const SubmitParameters &);
 
     /// @brief Drop command buffers. Discard all contents of them.
     /// After this call, the command buffer poiners are inaccessable. The caller should not use them anymore.
     void drop(vk::ArrayProxy<const CommandBuffer * const>);
 
     /// @brief Wait for the queue to finish processing submitted commands.
-    /// @param submission The submission handle to wait for. It must be returned by the submit() call of the same queue.
+    /// @param SubmissionID The submission handle to wait for. It must be returned by the submit() call of the same queue.
     /// Passing in empty submission handle is allowed. In that case, the function will wait for all submissions to finish.
-    void wait(Submission = {});
+    void wait(SubmissionID = {});
 
     auto gi() const -> const GlobalInfo * { return desc().gi; }
     auto family() const -> uint32_t { return desc().family; }
