@@ -251,7 +251,7 @@ public:
         // copy to the target buffer.
         auto queue = CommandQueue({{_owner.name()}, _gi, params.queueFamily, params.queueIndex});
         if (auto cb = queue.begin(_owner.name().c_str(), vk::CommandBufferLevel::ePrimary)) {
-            staging.cmdCopy({*cb, _owner.handle(), _desc.size, dstOffset, 0, size});
+            staging.cmdCopy({cb, _owner.handle(), _desc.size, dstOffset, 0, size});
             queue.wait(queue.submit({{cb}}));
         }
     }
@@ -269,7 +269,7 @@ public:
         auto staging = Buffer(Buffer::ConstructParameters {{_owner.name()}, _gi, size}.setStaging());
         auto queue   = CommandQueue({{_owner.name()}, _gi, params.queueFamily, params.queueIndex});
         if (auto cb = queue.begin(_owner.name().c_str(), vk::CommandBufferLevel::ePrimary)) {
-            cmdCopy({*cb, staging.handle(), size, 0, offset});
+            cmdCopy({cb, staging.handle(), size, 0, offset});
             queue.wait(queue.submit({cb}));
         } else {
             return {};
@@ -349,6 +349,16 @@ private:
     bool imported() const { return _desc.handle && !_handle; }
 };
 
+Buffer::SetContentParameters & Buffer::SetContentParameters::setQueue(const CommandQueue & q) {
+    queueFamily = q.family();
+    queueIndex  = q.index();
+    return *this;
+}
+Buffer::ReadParameters & Buffer::ReadParameters::setQueue(const CommandQueue & q) {
+    queueFamily = q.family();
+    queueIndex  = q.index();
+    return *this;
+}
 Buffer::Buffer(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this, cp); }
 Buffer::Buffer(const ImportParameters & cp): Root(cp) { _impl = new Impl(*this, cp); }
 Buffer::~Buffer() {
@@ -795,8 +805,8 @@ public:
                 .s(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer)
                 .i(_desc.handle, vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead,
                    vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, r)
-                .cmdWrite(*c);
-            c->handle().copyBufferToImage(staging, _desc.handle, vk::ImageLayout::eTransferDstOptimal, {copyRegion});
+                .cmdWrite(c);
+            c.handle().copyBufferToImage(staging, _desc.handle, vk::ImageLayout::eTransferDstOptimal, {copyRegion});
             q.wait(q.submit({{c}}));
         }
     }
@@ -846,8 +856,8 @@ public:
                 .s(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer)
                 .i(_desc.handle, vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead,
                    vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferSrcOptimal, r)
-                .cmdWrite(c->handle());
-            c->handle().copyImageToBuffer(_desc.handle, vk::ImageLayout::eTransferSrcOptimal, staging, copyRegions);
+                .cmdWrite(c);
+            c.handle().copyImageToBuffer(_desc.handle, vk::ImageLayout::eTransferSrcOptimal, staging, copyRegions);
             q.wait(q.submit({c}));
         }
 
@@ -948,6 +958,16 @@ private:
     }
 };
 
+Image::SetContentParameters & Image::SetContentParameters::setQueue(const CommandQueue & queue) {
+    queueFamily = queue.family();
+    queueIndex = queue.index();
+    return *this;
+}
+Image::ReadContentParameters & Image::ReadContentParameters::setQueue(const CommandQueue & queue) {
+    queueFamily = queue.family();
+    queueIndex = queue.index();
+    return *this;
+}
 vk::ImageAspectFlags Image::determineImageAspect(vk::Format format, vk::ImageAspectFlags aspect) {
     switch (format) {
     // depth only format
@@ -976,7 +996,6 @@ vk::ImageAspectFlags Image::determineImageAspect(vk::Format format, vk::ImageAsp
         return vk::ImageAspectFlagBits::eColor;
     }
 }
-
 Image::Image(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this, cp); }
 Image::Image(const ImportParameters & cp): Root(cp) { _impl = new Impl(*this, cp); }
 Image::~Image() {
@@ -2146,15 +2165,15 @@ auto Drawable::compile() const -> DrawPack { return _impl->compile(); };
 // Command Buffer/Pool/Queue
 // *********************************************************************************************************************
 
-class CommandBufferImpl : public CommandBuffer {
+class CommandBuffer::Impl : public CommandBuffer {
 public:
-    CommandBufferImpl(CommandQueue & queue, const GlobalInfo * gi, uint32_t family, const std::string & name_, vk::CommandBufferLevel level)
+    Impl(CommandQueue & queue, const GlobalInfo * gi, uint32_t family, const std::string & name_, vk::CommandBufferLevel level)
         : _queue(queue), _gi(gi), _family(family), _name(name_), _level(level) {
         RVI_ASSERT(_gi);
         wakeup();
     }
 
-    ~CommandBufferImpl() {
+    ~Impl() {
         if (!_gi) return;
         clear();
     }
@@ -2180,7 +2199,7 @@ public:
         clear();
     }
 
-    void enqueue(const DrawPack & d) {
+    void render(const DrawPack & d) {
         if (RECORDING != _state) {
             RVI_LOGE("Failed to enqueue drawable: command buffer %s is not in RECORDING state!", _name.c_str());
             return;
@@ -2205,6 +2224,7 @@ public:
             RVI_LOGE("Command buffer %s is not in RECORDING or ENDED state!", _name.c_str());
             return false;
         }
+        return true;
     }
 
     void setPending() {
@@ -2232,7 +2252,18 @@ private:
 private:
     struct DescriptorPoolKey {
         std::vector<vk::DescriptorSetLayoutBinding> bindings;
-        bool                                        operator<(const DescriptorPoolKey & rhs) const { return bindings < rhs.bindings; }
+        bool                                        operator<(const DescriptorPoolKey & rhs) const {
+            if (bindings.size() != rhs.bindings.size()) return bindings.size() < rhs.bindings.size();
+            for (size_t i = 0; i < bindings.size(); ++i) {
+                const auto & a = bindings[i];
+                const auto & b = rhs.bindings[i];
+                if (a.binding != b.binding) return a.binding < b.binding;
+                if (a.descriptorType != b.descriptorType) return a.descriptorType < b.descriptorType;
+                if (a.descriptorCount != b.descriptorCount) return a.descriptorCount < b.descriptorCount;
+                return a.stageFlags < b.stageFlags;
+            }
+            return false;
+        }
     };
     typedef std::map<DescriptorPoolKey, vk::DescriptorPool> DescriptorPoolMap;
 
@@ -2247,8 +2278,18 @@ private:
     }
 };
 
-auto CommandBuffer::name() const -> const std::string & { return ((CommandBufferImpl *) this)->name(); }
-void CommandBuffer::enqueue(const DrawPack & d) { return ((CommandBufferImpl *) this)->enqueue(d); }
+auto CommandBuffer::name() const -> const std::string & {
+    static const std::string emptyName = ""s;
+    return _impl ? _impl->name() : emptyName;
+}
+auto CommandBuffer::render(const DrawPack & d) const -> const CommandBuffer & {
+    if (_impl) _impl->render(d);
+    return *this;
+}
+auto CommandBuffer::render(const DrawPack & d) -> CommandBuffer & {
+    if (_impl) _impl->render(d);
+    return *this;
+}
 
 class CommandQueue::Impl {
 public:
@@ -2265,11 +2306,11 @@ public:
 
     const std::string & name() const { return _owner.name(); }
 
-    CommandBuffer * begin(const char * name, vk::CommandBufferLevel level) {
-        auto                               lock = std::lock_guard {_mutex};
-        std::shared_ptr<CommandBufferImpl> p;
+    CommandBuffer begin(const char * name, vk::CommandBufferLevel level) {
+        auto                                 lock = std::lock_guard {_mutex};
+        std::shared_ptr<CommandBuffer::Impl> p;
         if (_finished.empty()) {
-            p = std::make_unique<CommandBufferImpl>(_owner, _desc.gi, _desc.family, name, level);
+            p = std::make_unique<CommandBuffer::Impl>(_owner, _desc.gi, _desc.family, name, level);
         } else {
             p = _finished.begin()->second;
             _finished.erase(_finished.begin());
@@ -2282,9 +2323,7 @@ public:
 
     SubmissionID submit(const SubmitParameters & sp) {
         // remove duplicated command buffers
-        std::vector<const CommandBuffer *> uniqueCommandBuffers;
-        uniqueCommandBuffers.reserve(sp.commandBuffers.size());
-        std::unique_copy(sp.commandBuffers.begin(), sp.commandBuffers.end(), std::back_inserter(uniqueCommandBuffers));
+        auto uniqueCommandBuffers = unique(sp.commandBuffers);
 
         auto lock    = std::lock_guard {_mutex};
         auto s       = std::make_unique<InternalSubmission>();
@@ -2325,15 +2364,16 @@ public:
             _active.erase(cb.get());
         }
 
-        // done
+        // add to pending list
         _pending.push_back(std::move(s));
+
+        // done
+        return {(intptr_t) this, _nextSubmissionId};
     }
 
-    void drop(const vk::ArrayProxy<const CommandBuffer * const> & commandBuffers) {
+    void drop(const vk::ArrayProxy<const CommandBuffer> & commandBuffers) {
         // remove duplicated command buffers
-        std::vector<const CommandBuffer *> uniqueCommandBuffers;
-        uniqueCommandBuffers.reserve(commandBuffers.size());
-        std::unique_copy(commandBuffers.begin(), commandBuffers.end(), std::back_inserter(uniqueCommandBuffers));
+        auto uniqueCommandBuffers = unique(commandBuffers);
 
         auto lock = std::lock_guard {_mutex};
         for (auto c : commandBuffers) {
@@ -2419,15 +2459,15 @@ public:
 
 private:
     struct InternalSubmission {
-        int64_t                                         index {};
-        std::vector<std::shared_ptr<CommandBufferImpl>> commandBuffers {};
-        vk::Fence                                       fence {};
-        vk::UniqueFence                                 builtInFence {};
+        int64_t                                           index {};
+        std::vector<std::shared_ptr<CommandBuffer::Impl>> commandBuffers {};
+        vk::Fence                                         fence {};
+        vk::UniqueFence                                   builtInFence {};
     };
 
-    typedef std::unordered_map<const CommandBuffer *, std::shared_ptr<CommandBufferImpl>> CommandBufferMap;
-    typedef std::deque<std::shared_ptr<InternalSubmission>>                               PendingList;
-    typedef PendingList::iterator                                                         PendingIterator;
+    typedef std::unordered_map<CommandBuffer::Impl *, std::shared_ptr<CommandBuffer::Impl>> CommandBufferMap;
+    typedef std::deque<std::shared_ptr<InternalSubmission>>                                 PendingList;
+    typedef PendingList::iterator                                                           PendingIterator;
 
     CommandQueue &   _owner;
     std::mutex       _mutex;
@@ -2438,14 +2478,21 @@ private:
     int64_t          _nextSubmissionId {};
 
 private:
-    std::shared_ptr<CommandBufferImpl> promote(const CommandBuffer * cb, bool expectedNull = false) const {
+    static std::vector<CommandBuffer> unique(const vk::ArrayProxy<const CommandBuffer> & commandBuffers) {
+        std::vector<CommandBuffer> uniqueCommandBuffers;
+        uniqueCommandBuffers.reserve(commandBuffers.size());
+        std::unique_copy(commandBuffers.begin(), commandBuffers.end(), std::back_inserter(uniqueCommandBuffers));
+        return uniqueCommandBuffers;
+    }
+
+    std::shared_ptr<CommandBuffer::Impl> promote(const CommandBuffer & cb, bool expectedNull = false) const {
         if (!cb) {
-            if (!expectedNull) RVI_LOGE("Null command buffer pointer.");
+            if (!expectedNull) RVI_LOGE("Null command buffer.");
             return {};
         }
-        auto it = _active.find(cb);
+        auto it = _active.find(cb.impl());
         if (it == _active.end()) {
-            if (!expectedNull) RVI_LOGE("Command buffer pointer %p is not created by queue (%s).", cb, cb->name().c_str(), name().c_str());
+            if (!expectedNull) RVI_LOGE("Command buffer pointer %p is not created by queue (%s).", cb, cb.name().c_str(), name().c_str());
             return {};
         }
         return it->second;
@@ -2503,9 +2550,9 @@ CommandQueue::~CommandQueue() {
     _impl = nullptr;
 }
 auto CommandQueue::desc() const -> const Desc & { return _impl->desc(); }
-auto CommandQueue::begin(const char * purpose, vk::CommandBufferLevel level) -> CommandBuffer * { return _impl->begin(purpose, level); }
+auto CommandQueue::begin(const char * purpose, vk::CommandBufferLevel level) -> CommandBuffer { return _impl->begin(purpose, level); }
 auto CommandQueue::submit(const SubmitParameters & sp) -> SubmissionID { return _impl->submit(sp); }
-void CommandQueue::drop(vk::ArrayProxy<const CommandBuffer * const> commandBuffers) { _impl->drop(commandBuffers); }
+void CommandQueue::drop(vk::ArrayProxy<const CommandBuffer> commandBuffers) { _impl->drop(commandBuffers); }
 void CommandQueue::wait(const vk::ArrayProxy<const SubmissionID> & s) { _impl->wait(s); }
 void CommandQueue::onNameChanged(const std::string &) { _impl->setName(name()); }
 
@@ -2596,7 +2643,7 @@ public:
                 .i(bb->image->handle(), pp.backbufferStatus.access, DESIRED_PRESENT_STATUS.access, pp.backbufferStatus.layout, DESIRED_PRESENT_STATUS.layout,
                    vk::ImageAspectFlagBits::eColor)
                 .s(pp.backbufferStatus.stages, DESIRED_PRESENT_STATUS.stages)
-                .cmdWrite(*cb);
+                .cmdWrite(cb);
             bb->status = DESIRED_PRESENT_STATUS;
         } else {
             bb->status = pp.backbufferStatus;
@@ -2807,7 +2854,7 @@ private:
             Barrier()
                 .i(_depthBuffer->handle(), vk::AccessFlagBits::eNone, vk::AccessFlagBits::eNone, vk::ImageLayout::eUndefined,
                    vk::ImageLayout::eDepthStencilAttachmentOptimal, vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil)
-                .cmdWrite(c->handle());
+                .cmdWrite(c);
         }
 
         // initialize back buffer array.
@@ -2838,7 +2885,7 @@ private:
                 .i(bb.image->handle(), vk::AccessFlagBits::eNone, DESIRED_PRESENT_STATUS.access, vk::ImageLayout::eUndefined, DESIRED_PRESENT_STATUS.layout,
                    vk::ImageAspectFlagBits::eColor)
                 .s(vk::PipelineStageFlagBits::eAllCommands, DESIRED_PRESENT_STATUS.stages)
-                .cmdWrite(c->handle());
+                .cmdWrite(c);
         }
 
         // execute the command buffer to update image layout
@@ -2876,7 +2923,7 @@ private:
             Barrier()
                 .i(_depthBuffer->handle(), vk::AccessFlagBits::eNone, vk::AccessFlagBits::eNone, vk::ImageLayout::eUndefined,
                    vk::ImageLayout::eDepthStencilAttachmentOptimal, vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil)
-                .cmdWrite(c->handle());
+                .cmdWrite(c);
         }
 
         // create back buffer and frame array.
@@ -2905,7 +2952,7 @@ private:
                 .i(f.headlessImage->handle(), vk::AccessFlagBits::eNone, DESIRED_PRESENT_STATUS.access, vk::ImageLayout::eUndefined,
                    DESIRED_PRESENT_STATUS.layout, vk::ImageAspectFlagBits::eColor)
                 .s(vk::PipelineStageFlagBits::eAllCommands, DESIRED_PRESENT_STATUS.stages)
-                .cmdWrite(c->handle());
+                .cmdWrite(c);
 
             // Store the image to back buffer structure
             bb.image = f.headlessImage;

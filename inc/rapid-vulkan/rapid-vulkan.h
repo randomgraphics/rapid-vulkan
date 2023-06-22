@@ -548,6 +548,12 @@ protected:
 template<typename T>
 class Ref : public RefBase {
 public:
+    /// @brief Create a Ref instance from an object instance allocated on stack.
+    static Ref fromStack(T & t) {
+        t.markAsNotDeleteable();
+        return Ref(t);
+    }
+
     constexpr Ref() = default;
 
     Ref(T & t) {
@@ -839,6 +845,8 @@ public:
             return *this;
         }
 
+        SetContentParameters & setQueue(const CommandQueue &);
+
         SetContentParameters & setData(const void * data_, vk::DeviceSize size_) {
             data = data_;
             size = size_;
@@ -870,6 +878,8 @@ public:
             queueIndex  = index;
             return *this;
         }
+
+        ReadParameters & setQueue(const CommandQueue &);
 
         ReadParameters & setRange(vk::DeviceSize o, vk::DeviceSize s = vk::DeviceSize(-1)) {
             offset = o;
@@ -1136,6 +1146,8 @@ public:
             return *this;
         }
 
+        SetContentParameters & setQueue(const CommandQueue &);
+
         SetContentParameters & setPixels(const void * p) {
             pixels = p;
             return *this;
@@ -1151,6 +1163,8 @@ public:
             queueIndex  = index;
             return *this;
         }
+
+        ReadContentParameters & setQueue(const CommandQueue &);
     };
 
     struct SubresourceContent {
@@ -1789,6 +1803,8 @@ private:
 /// A wrapper class for VkCommandBuffer
 class CommandBuffer {
 public:
+    class Impl;
+
     struct SubmitParameters {
         /// The (optional) fence object to signal once the command buffers have completed execution.
         vk::Fence signalFence = {};
@@ -1800,22 +1816,45 @@ public:
         vk::ArrayProxy<const vk::Semaphore> signalSemaphores {};
     };
 
+    CommandBuffer(Impl * impl = nullptr): _impl(impl) {}
+    CommandBuffer(const CommandBuffer & o): _impl(o._impl) {}
+    ~CommandBuffer() = default;
+
+    bool empty() const { return _impl == nullptr; }
+
     const std::string & name() const;
 
     vk::CommandBuffer handle() const;
 
+    Impl * impl() const { return _impl; }
+
     /// @brief Enqueue a draw pack to the queue to be rendered later.
     /// The drawable and the associated resources are considered in-use until the command buffer is dropped or finished executing on GPU.
     /// Deleting the drawable object before the command buffer is dropped or finished executing on GPU will result in undefined behavior.
-    void enqueue(const DrawPack &);
+    const CommandBuffer & render(const DrawPack &) const;
+
+    /// @brief Enqueue a draw pack to the queue to be rendered later.
+    CommandBuffer & render(const DrawPack &);
+
+    CommandBuffer & operator=(const CommandBuffer & o) {
+        _impl = o._impl;
+        return *this;
+    }
+
+    bool operator<(const CommandBuffer & o) const { return _impl < o._impl; }
+
+    bool operator==(const CommandBuffer & o) const { return _impl == o._impl; }
+
+    bool operator!=(const CommandBuffer & o) const { return _impl != o._impl; }
 
     operator vk::CommandBuffer() const { return handle(); }
 
-    operator VkCommandBuffer() const { return handle(); }    
+    operator VkCommandBuffer() const { return handle(); }
 
-protected:
-    CommandBuffer()  = default;
-    ~CommandBuffer() = default;
+    operator bool() const { return _impl != nullptr; }
+
+private:
+    Impl * _impl = nullptr;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1837,7 +1876,7 @@ public:
 
     struct SubmitParameters {
         /// @brief The command buffers to submit. The command buffers must be allocated out of this queue class.
-        vk::ArrayProxy<const CommandBuffer * const> commandBuffers {};
+        vk::ArrayProxy<const CommandBuffer> commandBuffers {};
 
         /// The (optional) fence object to signal once the command buffers have completed execution.
         vk::Fence signalFence = {};
@@ -1856,17 +1895,13 @@ public:
 
         bool empty() const { return !queue || 0 == index; }
 
-        bool newerThan(int64_t other) const {
-            return index - other > 0;
-        }
+        bool newerThan(int64_t other) const { return index - other > 0; }
 
-        bool olderThan(int64_t other) const {
-            return index - other < 0;
-        }
+        bool olderThan(int64_t other) const { return index - other < 0; }
 
         void wait() const {
             if (empty()) return;
-            auto q = (CommandQueue*)(intptr_t)queue;
+            auto q = (CommandQueue *) (intptr_t) queue;
             q->wait(*this);
         }
 
@@ -1881,17 +1916,17 @@ public:
 
     /// @brief Begin recording a command buffer.
     /// @todo should return a custom CommandBuffer class.
-    auto begin(const char * name, vk::CommandBufferLevel level = vk::CommandBufferLevel::ePrimary) -> CommandBuffer *;
+    CommandBuffer begin(const char * name, vk::CommandBufferLevel level = vk::CommandBufferLevel::ePrimary);
 
     /// @brief Submit command buffers to the queue for asynchronous processing.
-    /// After this call, all command buffer poiners are inaccessable. The caller should not use them anymore.
+    /// After this call, all command buffer pointers are inaccessible. The caller should not use them anymore.
     /// @return A submission ID that later to check/wait for the completion of the submission. Return an empty
     /// handle on failure.
     SubmissionID submit(const SubmitParameters &);
 
     /// @brief Drop command buffers. Discard all contents of them.
-    /// After this call, the command buffer poiners are inaccessable. The caller should not use them anymore.
-    void drop(vk::ArrayProxy<const CommandBuffer * const>);
+    /// After this call, the command buffer pointers are inaccessible. The caller should not use them anymore.
+    void drop(vk::ArrayProxy<const CommandBuffer>);
 
     /// @brief Wait for the queue to finish processing submitted commands.
     /// @param SubmissionID The submission handle to wait for. It must be returned by the submit() call of the same queue.
@@ -1905,7 +1940,7 @@ public:
 
     /// @brief Create another queue object that shares the same underlying queue handle.
     CommandQueue clone(const std::string & newName = {}) const {
-        return CommandQueue{ConstructParameters{{newName.empty() ? name() : newName}, gi(), family(), index()}};
+        return CommandQueue {ConstructParameters {{newName.empty() ? name() : newName}, gi(), family(), index()}};
     }
 
 protected:
