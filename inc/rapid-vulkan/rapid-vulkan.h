@@ -330,7 +330,7 @@ struct GlobalInfo {
 // ---------------------------------------------------------------------------------------------------------------------
 /// \def format
 /// \brief A printf like string formatting function.
-#if __clang__
+#ifdef __GNUC__
 __attribute__((format(printf, 1, 2)))
 #endif
 inline std::string
@@ -556,12 +556,14 @@ public:
 
     constexpr Ref() = default;
 
-    Ref(T & t) {
+    template<typename T2>
+    Ref(T2 & t) {
         _ptr = &t;
         addRef(_ptr);
     }
 
-    Ref(T * t) {
+    template<typename T2>
+    Ref(T2 * t) {
         if (!t) return;
         _ptr = t;
         addRef(_ptr);
@@ -570,13 +572,15 @@ public:
     ~Ref() { clear(); }
 
     /// copy constructor
-    Ref(const Ref & rhs) {
+    template<typename T2>
+    Ref(const Ref<T2> & rhs) {
         if (rhs._ptr) addRef(rhs._ptr);
         _ptr = rhs._ptr;
     }
 
     /// move constructor
-    Ref(Ref && rhs) {
+    template<typename T2>
+    Ref(Ref<T2> && rhs) {
         _ptr     = rhs._ptr;
         rhs._ptr = nullptr;
     }
@@ -610,7 +614,8 @@ public:
     }
 
     /// copy operator
-    Ref & operator=(const Ref & rhs) {
+    template<typename T2>
+    Ref & operator=(const Ref<T2> & rhs) {
         if (_ptr == rhs._ptr) return *this;
         if (_ptr) release(_ptr);
         if (rhs._ptr) addRef(rhs._ptr);
@@ -619,7 +624,8 @@ public:
     }
 
     /// move operator
-    Ref & operator=(Ref && rhs) {
+    template<typename T2>
+    Ref & operator=(Ref<T2> && rhs) {
         if (this != &rhs) {
             if (_ptr) release(_ptr);
             _ptr     = rhs._ptr;
@@ -629,21 +635,24 @@ public:
     }
 
     /// comparison operator
-    bool operator==(const Ref & rhs) const { return _ptr == rhs._ptr; }
+    template<typename T2>
+    bool operator==(const Ref<T2> & rhs) const { return _ptr == rhs._ptr; }
 
     /// @brief null equality operator
     /// @return true if null, false otherwise.
     bool operator==(std::nullptr_t) { return _ptr == nullptr; }
 
     /// comparison operator
-    bool operator!=(const Ref & rhs) const { return _ptr != rhs._ptr; }
+    template<typename T2>
+    bool operator!=(const Ref<T2> & rhs) const { return _ptr != rhs._ptr; }
 
     /// @brief not null operator.
     /// @return true if not null, false otherwise.
     bool operator!=(std::nullptr_t) { return _ptr != nullptr; }
 
     /// comparison operator
-    bool operator<(const Ref & rhs) const { return _ptr < rhs._ptr; }
+    template<typename T2>
+    bool operator<(const Ref<T2> & rhs) const { return _ptr < rhs._ptr; }
 
     /// @brief boolean cast.
     /// @return true if not null, false otherwise.
@@ -1667,8 +1676,14 @@ struct DrawPack {
         ComputePipeline::DispatchParameters dispatch; ///< Dispatch parameters for compute pipeline.
     };
 
+    DrawPack() {}
+
+    ~DrawPack() {}
+
     void cmdRender(vk::Device device, vk::CommandBuffer cb,
                    std::function<vk::DescriptorSet(const Pipeline &, uint32_t setIndex)> descriptorSetAllocator) const {
+        if (!pipeline) return;
+
         auto layout = pipeline->layout();
         auto bp     = pipeline->bindPoint();
 

@@ -1933,7 +1933,7 @@ public:
 
 class Drawable::Impl {
 public:
-    Impl(Drawable & o): _owner(o) {}
+    Impl(Drawable & o): _owner(o) { (void) _owner; }
 
     ~Impl() {}
 
@@ -1952,33 +1952,25 @@ public:
         _constants.back().value.assign((const uint8_t *) data, (const uint8_t *) data + size);
     }
 
-    void set(const vk::ArrayProxy<const BufferView> & vertexBuffers) { _vertexBuffers = vertexBuffers; }
+    void set(const vk::ArrayProxy<const BufferView> & vertexBuffers) { _vertexBuffers.assign(vertexBuffers.begin(), vertexBuffers.end()); }
 
     void set(const IndexBuffer & ib) { _indexBuffer = ib; }
 
-    void set(const GraphicsPipeline::DrawParameters &) {
-        // TODO
-    }
+    void set(const GraphicsPipeline::DrawParameters & p) { _drawParameters = p; }
 
-    void set(const ComputePipeline::DispatchParameters &) {
-        // TODO
-    }
+    void set(const ComputePipeline::DispatchParameters & p) { _dispatchParameters = p; }
 
     DrawPack compile() const {
-        return {};
-        //     if (!validate(submission)) return;
-        //     cb.bindPipeline(_pipeline->bindPoint(), _pipeline->handle());
-        //     bindDescriptors(cb);
-        //     bindConstants(cb);
-        //     if (_pipeline->bindPoint() == vk::PipelineBindPoint::eGraphics) {
-        //         bindVertcies();
-        //         auto gp = (GraphicsPipeline *) _pipeline.get();
-        //         gp->cmdDraw(cb, _drawParameters);
-        //     } else {
-        //         RVI_ASSERT(_pipeline->bindPoint() == vk::PipelineBindPoint::eCompute);
-        //         auto cp = (ComputePipeline *) _pipeline.get();
-        //         cp->cmdDispatch(cb, _dispatchParameters);
-        //     }
+        DrawPack pack;
+        if (!compileDescriptors(pack)) return {};
+        if (!compileConstants(pack)) return {};
+        if (_pipeline->bindPoint() == vk::PipelineBindPoint::eGraphics) {
+            if (!compileGraphics(pack)) return {};
+        } else if (_pipeline->bindPoint() == vk::PipelineBindPoint::eCompute) {
+            if (compileCompute(pack)) return {};
+        }
+        pack.pipeline = _pipeline;
+        return pack;
     }
 
 private:
@@ -1986,7 +1978,7 @@ private:
     Ref<Pipeline>                                          _pipeline;
     std::unordered_map<DescriptorIdentifier, ArgumentImpl> _descriptors;
     std::vector<DrawPack::ConstantArgument>                _constants;
-    vk::ArrayProxy<const BufferView>                       _vertexBuffers;
+    std::vector<BufferView>                                _vertexBuffers;
     IndexBuffer                                            _indexBuffer;
     GraphicsPipeline::DrawParameters                       _drawParameters;
     ComputePipeline::DispatchParameters                    _dispatchParameters;
@@ -2020,58 +2012,89 @@ private:
         return v;
     }
 
-    // DrawPack compile() {
-    //     return {};
-    // const auto & refl = _pipeline->reflection();
-    // _writes.clear();
-    // for (uint32_t si = 0; si < refl.descriptors.size(); ++si) {
-    //     const auto & s = refl.descriptors[si];
-    //     for (uint32_t i = 0; i < s.size(); ++i) {
-    //         const auto & b = s[i].binding;
-    //         auto &       w = _writes.emplace_back();
-    //         w.setDstSet(sets->at(setIndex));
-    //         w.setDstBinding(b.binding);
-    //         w.setDescriptorType(b.descriptorType);
+    bool compileDescriptors(DrawPack & pack) const {
+        const auto & refl = _pipeline->reflection();
+        pack.descriptors.clear();
+        for (uint32_t si = 0; si < refl.descriptors.size(); ++si) {
+            const auto & s = refl.descriptors[si];
+            auto writes = std::vector<vk::WriteDescriptorSet>();
+            for (uint32_t i = 0; i < s.size(); ++i) {
+                if (s[i].empty()) continue;
+                const auto & b = s[i].binding;
+                auto         w = vk::WriteDescriptorSet{};
+                w.setDstBinding(b.binding);
+                w.setDescriptorType(b.descriptorType);
 
-    //         // Locate the arugment for this binding slot.
-    //         auto a = find({si, i});
-    //         if (!a) {
-    //             RVI_LOGE("Drawable (%s) validation error: set %u slot %u is not set.", _owner.name().c_str(), si, i);
-    //             return false;
-    //         }
+                // Locate the argument for this binding slot.
+                auto a = find({si, i});
+                if (!a) {
+                    RVI_LOGE("Drawable (%s) validation error: set %u binding %u is not set.", _owner.name().c_str(), si, i);
+                    return false;
+                }
 
-    //         // verify that the argument type is compatible with the descriptor type
-    //         if (!a->typeCompatibleWith(b.descriptorType)) {
-    //             RVI_LOGE("Drawable (%s) validation error: : set %u slot %u is of type %s, but the argument is of type %s.", _owner.name().c_str(), si, i,
-    //                      vk::to_string(b.descriptorType).c_str(), a->type());
-    //             return false;
-    //         }
+                // verify that the argument type is compatible with the descriptor type
+                if (!a->typeCompatibleWith(b.descriptorType)) {
+                    RVI_LOGE("Drawable (%s) validation error: : set %u binding %u is of type %s, but the argument is of type %s.", _owner.name().c_str(), si, i,
+                            vk::to_string(b.descriptorType).c_str(), a->type());
+                    return false;
+                }
 
-    //         // verify that there're enough descriptors in the argument.
-    //         if (a->count() < b.descriptorCount) {
-    //             RVI_LOGE("Drawable (%s) validation error: : set %u slot %u requires %u descriptors, but the argument has only %zu.",
-    //             _owner.name().c_str(),
-    //                      si, i, b.descriptorCount, a->count());
-    //             return false;
-    //         }
+                // verify that there're enough descriptors in the argument.
+                if (a->count() < b.descriptorCount) {
+                    RVI_LOGE("Drawable (%s) validation error: : set %u binding %u requires %u descriptors, but the argument has only %zu.",
+                        _owner.name().c_str(), si, i, b.descriptorCount, a->count());
+                    return false;
+                }
 
-    //         auto & value = a->value();
-    //         if (auto buf = std::get_if<Argument::Impl::BufferArgs>(&value))
-    //             w.setBufferInfo(buf->infos);
-    //         else if (auto img = std::get_if<Argument::Impl::ImageArgs>(&value))
-    //             w.setImageInfo(img->infos);
-    //         else {
-    //             // we should not reach here, since we have already checked the type compatibility.
-    //             RAPID_VULKAN_ASSERT(false, "should never reach here.");
-    //         }
-    //     }
-    // }
-    // if (_writes.empty()) return true;
+                auto & value = a->value();
+                if (auto buf = std::get_if<Argument::Impl::BufferArgs>(&value)) {
+                    w.setBufferInfo(buf->infos);
+                    for(size_t j = 0; j < buf->buffers.size(); ++j) {
+                        const auto & b : buf->buffers[j];
+                        if (!b.buffer) {
+                            RVI_LOGE("Drawable (%s) validation error: : set %u binding %u contains empty buffer descriptor at index %zu",
+                               _owner.name().c_str(), si, i, j);
+                            return false;
+                        }
+                        pack.buffers.push_back(b.buffer);
+                    }
+                } else if (auto img = std::get_if<Argument::Impl::ImageArgs>(&value)) {
+                    w.setImageInfo(img->infos);
+                    for(size_t j = 0; j < img.images.size(); ++j) {
+                        const auto & b : img.images[j];
+                        if (!b.image) {
+                            RVI_LOGE("Drawable (%s) validation error: : set %u binding %u contains empty image descriptor at index %zu",
+                               _owner.name().c_str(), si, i, j);
+                            return false;
+                        }
+                        pack.images.push_back(b.image);
+                    }
+                } else {
+                    // we should not reach here, since we have already checked the type compatibility.
+                    RAPID_VULKAN_ASSERT(false, "should never reach here.");
+                }
 
-    // // done
-    // _valid = true;
-    // return _valid;
-    // }
+                // this is a valid write
+                writes.push_back(w);
+            }
+        }
+        return false;
+    }
+
+    bool compileConstants(DrawPack & pack) const {
+        //
+        return false;
+    }
+
+    bool compileGraphics(DrawPack & pack) const {
+        //
+        return false;
+    }
+
+    bool compileCompute(DrawPack & pack) const {
+        //
+        return false;
+    }
 
     // void bindDescriptors(vk::CommandBuffer cb, Ref<SubmissionID> & submission) {
     //     RVI_ASSERT(!_changed && _valid);
@@ -2487,7 +2510,7 @@ private:
         }
         auto it = _active.find(cb.impl());
         if (it == _active.end()) {
-            if (!expectedNull) RVI_LOGE("Command buffer pointer %p is not created by queue (%s).", cb, cb.name().c_str(), name().c_str());
+            if (!expectedNull) RVI_LOGE("Command buffer pointer %p is not created by queue (%s).", cb.name().c_str(), name().c_str());
             return {};
         }
         return it->second;
