@@ -1905,6 +1905,12 @@ Argument & Argument::t(vk::ArrayProxy<const ImageSampler> v) {
     return *this;
 }
 
+class ArgumentImpl : public Argument {
+public:
+    using Argument::Argument;
+    ~ArgumentImpl() = default;
+};
+
 class Drawable::Impl {
 public:
     Impl(Drawable & o): _owner(o) {}
@@ -1956,14 +1962,14 @@ public:
     }
 
 private:
-    Drawable &                                         _owner;
-    Ref<Pipeline>                                      _pipeline;
-    std::unordered_map<DescriptorIdentifier, Argument> _descriptors;
-    std::vector<DrawPack::ConstantArgument>            _constants;
-    vk::ArrayProxy<const BufferView>                   _vertexBuffers;
-    IndexBuffer                                        _indexBuffer;
-    GraphicsPipeline::DrawParameters                   _drawParameters;
-    ComputePipeline::DispatchParameters                _dispatchParameters;
+    Drawable &                                             _owner;
+    Ref<Pipeline>                                          _pipeline;
+    std::unordered_map<DescriptorIdentifier, ArgumentImpl> _descriptors;
+    std::vector<DrawPack::ConstantArgument>                _constants;
+    vk::ArrayProxy<const BufferView>                       _vertexBuffers;
+    IndexBuffer                                            _indexBuffer;
+    GraphicsPipeline::DrawParameters                       _drawParameters;
+    ComputePipeline::DispatchParameters                    _dispatchParameters;
 
     bool                                _valid   = false;
     bool                                _changed = true;

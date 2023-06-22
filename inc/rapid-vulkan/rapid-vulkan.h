@@ -214,6 +214,7 @@ SOFTWARE.
 #include <optional>
 #include <algorithm>
 #include <exception>
+#include <functional>
 
 // ---------------------------------------------------------------------------------------------------------------------
 // RVI stands for Rapid Vulkan Implementation. Macros started with this prefix are reserved for internal use.
