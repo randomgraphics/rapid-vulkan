@@ -65,6 +65,7 @@ SOFTWARE.
 #include <list>
 #include <set>
 #include <deque>
+#include <optional>
 #include <signal.h>
 #include <inttypes.h>
 
@@ -2219,15 +2220,14 @@ private:
         FINISHED,
     };
 
-    CommandQueue &                  _queue;
-    const GlobalInfo *              _gi = nullptr;
-    uint32_t                        _family {};
-    std::string                     _name;
-    vk::CommandBufferLevel          _level {};
-    vk::CommandPool                 _pool; // one pool for each command buffer for simplicity and for multithread safety.
-    vk::CommandBuffer               _handle {};
-    Ref<CommandQueue::SubmissionID> _submission;
-    State                           _state = RECORDING;
+    CommandQueue &         _queue;
+    const GlobalInfo *     _gi = nullptr;
+    uint32_t               _family {};
+    std::string            _name;
+    vk::CommandBufferLevel _level {};
+    vk::CommandPool        _pool; // one pool for each command buffer for simplicity and for multithread safety.
+    vk::CommandBuffer      _handle {};
+    State                  _state = RECORDING;
 
 private:
     struct DescriptorPoolKey {
@@ -2266,7 +2266,7 @@ public:
     const std::string & name() const { return _owner.name(); }
 
     CommandBuffer * begin(const char * name, vk::CommandBufferLevel level) {
-        auto lock   = std::lock_guard {_mutex};
+        auto                               lock = std::lock_guard {_mutex};
         std::shared_ptr<CommandBufferImpl> p;
         if (_finished.empty()) {
             p = std::make_unique<CommandBufferImpl>(_owner, _desc.gi, _desc.family, name, level);
@@ -2282,7 +2282,7 @@ public:
 
     SubmissionID submit(const SubmitParameters & sp) {
         // remove duplicated command buffers
-        std::vector<const CommandBuffer*> uniqueCommandBuffers;
+        std::vector<const CommandBuffer *> uniqueCommandBuffers;
         uniqueCommandBuffers.reserve(sp.commandBuffers.size());
         std::unique_copy(sp.commandBuffers.begin(), sp.commandBuffers.end(), std::back_inserter(uniqueCommandBuffers));
 
@@ -2331,7 +2331,7 @@ public:
 
     void drop(const vk::ArrayProxy<const CommandBuffer * const> & commandBuffers) {
         // remove duplicated command buffers
-        std::vector<const CommandBuffer*> uniqueCommandBuffers;
+        std::vector<const CommandBuffer *> uniqueCommandBuffers;
         uniqueCommandBuffers.reserve(commandBuffers.size());
         std::unique_copy(commandBuffers.begin(), commandBuffers.end(), std::back_inserter(uniqueCommandBuffers));
 
@@ -2348,16 +2348,19 @@ public:
     void wait(const vk::ArrayProxy<const SubmissionID> & submissions) {
         auto lock = std::lock_guard {_mutex};
 
+        // do nothing if pending list is empty.
+        if (_pending.empty()) return;
+
         // find the submission to wait for.
         PendingIterator submission;
         if (submissions.empty()) {
             // wait for all pending submissions to finish.
-            submission = _pending.end();
+            submission = --_pending.end();
         } else {
             // if the submission array is not empty, then find the one with the largest index.
-            std::vector<PendingIterator> candidates;
-            for(const auto & sid : submissions) {
-                if (sid.queue != (int64_t)(intptr_t) this) {
+            std::optional<int64_t> candidate;
+            for (const auto & sid : submissions) {
+                if (sid.queue != (int64_t) (intptr_t) this) {
                     RVI_LOGE("Submission %" PRIi64 " is not from queue %s!", sid.index, name().c_str());
                     continue;
                 }
@@ -2373,27 +2376,32 @@ public:
                 }
 
                 // this is an valid pending submission.
-                if (candidates.empty()) {
-                    candidates.push_back(_pending.begin());
-                } else if (sid.newerThan(candidates[0]->index)) {
-                    candidates[0] = sid;
+                if (!candidate.has_value()) {
+                    candidate = sid.index;
+                } else if (sid.newerThan(candidate.value())) {
+                    // we only need to save the newest one.
+                    candidate = sid.index;
                 }
             }
-            if (candidates.empty()) return;
+            if (!candidate.has_value()) {
+                RVI_LOGE("No valid submission is found!");
+                return;
+            }
 
-            // wait for the specified submission to finish.
-            submission = findSubmission(sid.index);
+            submission = findSubmission(candidate.value());
             if (submission == _pending.end()) {
-                RVI_LOGE("Submission %" PRIi64 " is invalid since it is not found in the pending list!", sid.index);
+                RVI_LOGE("Submission %" PRIi64 " is invalid since it is not found in the pending list!", (*submission)->index);
                 return;
             }
         }
+        RVI_ASSERT(submission != _pending.end());
 
         // wait for the submission to finish.
-        waitSubmission(submission);
+        waitSubmission(**submission);
 
         // Move all finished command buffers to finished list.
-        for(auto s = _pending.begin(); s != submission; ++s) {
+        ++submission;
+        for (auto s = _pending.begin(); s != submission; ++s) {
             for (auto cb : (*s)->commandBuffers) {
                 cb->hibernate();
                 _finished[cb.get()] = cb;
@@ -2418,8 +2426,8 @@ private:
     };
 
     typedef std::unordered_map<const CommandBuffer *, std::shared_ptr<CommandBufferImpl>> CommandBufferMap;
-    typedef std::deque<std::shared_ptr<InternalSubmission>>                         PendingList;
-    typedef PendingList::iterator                                                   PendingIterator;
+    typedef std::deque<std::shared_ptr<InternalSubmission>>                               PendingList;
+    typedef PendingList::iterator                                                         PendingIterator;
 
     CommandQueue &   _owner;
     std::mutex       _mutex;
@@ -2443,7 +2451,7 @@ private:
         return it->second;
     }
 
-    PendingIterator findSubmission(uint64_t index) {
+    PendingIterator findSubmission(int64_t index) {
         return std::find_if(_pending.begin(), _pending.end(), [index](const auto & s) { return s->index == index; });
     }
 
@@ -2588,7 +2596,7 @@ public:
                 .i(bb->image->handle(), pp.backbufferStatus.access, DESIRED_PRESENT_STATUS.access, pp.backbufferStatus.layout, DESIRED_PRESENT_STATUS.layout,
                    vk::ImageAspectFlagBits::eColor)
                 .s(pp.backbufferStatus.stages, DESIRED_PRESENT_STATUS.stages)
-                .cmdWrite(cb);
+                .cmdWrite(*cb);
             bb->status = DESIRED_PRESENT_STATUS;
         } else {
             bb->status = pp.backbufferStatus;
@@ -2596,7 +2604,7 @@ public:
 
         // present current frame
         if (_handle) {
-            _graphicsQueue->submit({cb, {}, {frame.renderFinished}, {frame.frameEndSemaphore}});
+            frame.frameEndSubmission = _graphicsQueue->submit({cb, {}, {frame.renderFinished}, {frame.frameEndSemaphore}});
 
             auto presentInfo = vk::PresentInfoKHR()
                                    .setSwapchainCount(1)
@@ -2605,20 +2613,17 @@ public:
                                    .setWaitSemaphoreCount(1)
                                    .setPWaitSemaphores(&frame.frameEndSemaphore);
             auto result = _presentQueue.presentKHR(&presentInfo);
-            if (vk::Result::eSuccess == result) {
-                // Store the command buffer. This will be used later to wait for the frame to be available for reuse.
-                frame.frameEndCommands = cb;
-            } else if (result == vk::Result::eSuboptimalKHR || result == vk::Result::eErrorOutOfDateKHR) {
+            if (result == vk::Result::eSuboptimalKHR || result == vk::Result::eErrorOutOfDateKHR) {
                 // this means window/surface size is changed, we need to recreate the swapchain.
-                _graphicsQueue->wait();
+                _graphicsQueue->wait(frame.frameEndSubmission);
+                frame.frameEndSubmission = {};
                 recreateWindowSwapchain();
-            } else {
+            } else if (vk::Result::eSuccess != result) {
                 RVI_THROW("Failed to present swapchain image. result = %s", vk::to_string((vk::Result) result).c_str());
             }
         } else {
             // headless swapchain.
-            _graphicsQueue->submit({cb, {}, {frame.renderFinished}, {frame.imageAvailable}});
-            frame.frameEndCommands = cb;
+            frame.frameEndSubmission = _graphicsQueue->submit({cb, {}, {frame.renderFinished}, {frame.imageAvailable}});
         }
 
         // then start a new frame.
@@ -2628,10 +2633,10 @@ public:
 
 private:
     struct FrameImpl : public Frame {
-        uint32_t          imageIndex {};
-        vk::Semaphore     frameEndSemaphore {};
-        vk::CommandBuffer frameEndCommands {};
-        Ref<Image>        headlessImage; ///< the image that is used as the backbuffer for headless swapchain.
+        uint32_t                   imageIndex {};
+        vk::Semaphore              frameEndSemaphore {};
+        CommandQueue::SubmissionID frameEndSubmission {};
+        Ref<Image>                 headlessImage; ///< the image that is used as the backbuffer for headless swapchain.
     };
 
     struct BackbufferImpl : public Backbuffer {
@@ -2802,7 +2807,7 @@ private:
             Barrier()
                 .i(_depthBuffer->handle(), vk::AccessFlagBits::eNone, vk::AccessFlagBits::eNone, vk::ImageLayout::eUndefined,
                    vk::ImageLayout::eDepthStencilAttachmentOptimal, vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil)
-                .cmdWrite(c);
+                .cmdWrite(c->handle());
         }
 
         // initialize back buffer array.
@@ -2833,12 +2838,11 @@ private:
                 .i(bb.image->handle(), vk::AccessFlagBits::eNone, DESIRED_PRESENT_STATUS.access, vk::ImageLayout::eUndefined, DESIRED_PRESENT_STATUS.layout,
                    vk::ImageAspectFlagBits::eColor)
                 .s(vk::PipelineStageFlagBits::eAllCommands, DESIRED_PRESENT_STATUS.stages)
-                .cmdWrite(c);
+                .cmdWrite(c->handle());
         }
 
         // execute the command buffer to update image layout
-        _graphicsQueue->submit({c});
-        _graphicsQueue->wait();
+        _graphicsQueue->submit({c}).wait();
 
         // initialize frame array.
         RVI_ASSERT(_backbuffers.size() > surfaceCaps.minImageCount);
@@ -2872,7 +2876,7 @@ private:
             Barrier()
                 .i(_depthBuffer->handle(), vk::AccessFlagBits::eNone, vk::AccessFlagBits::eNone, vk::ImageLayout::eUndefined,
                    vk::ImageLayout::eDepthStencilAttachmentOptimal, vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil)
-                .cmdWrite(c);
+                .cmdWrite(c->handle());
         }
 
         // create back buffer and frame array.
@@ -2901,7 +2905,7 @@ private:
                 .i(f.headlessImage->handle(), vk::AccessFlagBits::eNone, DESIRED_PRESENT_STATUS.access, vk::ImageLayout::eUndefined,
                    DESIRED_PRESENT_STATUS.layout, vk::ImageAspectFlagBits::eColor)
                 .s(vk::PipelineStageFlagBits::eAllCommands, DESIRED_PRESENT_STATUS.stages)
-                .cmdWrite(c);
+                .cmdWrite(c->handle());
 
             // Store the image to back buffer structure
             bb.image = f.headlessImage;
@@ -2935,9 +2939,9 @@ private:
         frame.index  = _frameIndex;
 
         // wait for the frame to be available again.
-        if (frame.frameEndCommands) {
-            _graphicsQueue->wait(frame.frameEndCommands);
-            frame.frameEndCommands = nullptr; // Clear the command buffer. So we only wait it once.
+        if (frame.frameEndSubmission) {
+            _graphicsQueue->wait({frame.frameEndSubmission});
+            frame.frameEndSubmission = {}; // Clear the command buffer. So we only wait it once.
         }
 
         // Acquire the next available swapchain image. Only do this if we are not in headless mode.

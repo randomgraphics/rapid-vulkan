@@ -515,9 +515,9 @@ protected:
 
 private:
     friend class RefBase;
-    std::string           _name;
-    std::atomic<uint64_t> _ref               = 0;
-    bool                  _noDeleteOnZeroRef = false;
+    std::string                   _name;
+    mutable std::atomic<uint64_t> _ref               = 0;
+    bool                          _noDeleteOnZeroRef = false;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -528,12 +528,12 @@ protected:
 
     ~RefBase() {}
 
-    static void addRef(Root * p) {
+    static void addRef(const Root * p) {
         RVI_ASSERT(p);
         ++p->_ref;
     }
 
-    static void release(Root * p) {
+    static void release(const Root * p) {
         RVI_ASSERT(p);
         if (1 == p->_ref.fetch_sub(1)) {
             RVI_ASSERT(0 == p->_ref);
@@ -1869,6 +1869,8 @@ public:
             auto q = (CommandQueue*)(intptr_t)queue;
             q->wait(*this);
         }
+
+        operator bool() const { return !empty(); }
     };
 
     CommandQueue(const ConstructParameters &);
