@@ -1820,13 +1820,19 @@ public:
     CommandBuffer(const CommandBuffer & o): _impl(o._impl) {}
     ~CommandBuffer() = default;
 
-    bool empty() const { return _impl == nullptr; }
-
     const std::string & name() const;
 
     vk::CommandBuffer handle() const;
 
     Impl * impl() const { return _impl; }
+
+    bool empty() const { return _impl == nullptr; }
+
+    bool finished() const;
+
+    bool pending() const;
+
+    bool recording() const;
 
     /// @brief Enqueue a draw pack to the queue to be rendered later.
     /// The drawable and the associated resources are considered in-use until the command buffer is dropped or finished executing on GPU.
@@ -1930,8 +1936,11 @@ public:
 
     /// @brief Wait for the queue to finish processing submitted commands.
     /// @param SubmissionID The submission handle to wait for. It must be returned by the submit() call of the same queue.
-    /// Passing in empty submission handle is allowed. In that case, the function will wait for all submissions to finish.
-    void wait(const vk::ArrayProxy<const SubmissionID> & = {});
+    /// Empty and invalid submission will be ignored.
+    CommandQueue & wait(const vk::ArrayProxy<const SubmissionID> &);
+
+    /// @brief Wait for all submitted work to finish.
+    CommandQueue & waitIdle();
 
     auto gi() const -> const GlobalInfo * { return desc().gi; }
     auto family() const -> uint32_t { return desc().family; }

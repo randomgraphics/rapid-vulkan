@@ -960,12 +960,12 @@ private:
 
 Image::SetContentParameters & Image::SetContentParameters::setQueue(const CommandQueue & queue) {
     queueFamily = queue.family();
-    queueIndex = queue.index();
+    queueIndex  = queue.index();
     return *this;
 }
 Image::ReadContentParameters & Image::ReadContentParameters::setQueue(const CommandQueue & queue) {
     queueFamily = queue.family();
-    queueIndex = queue.index();
+    queueIndex  = queue.index();
     return *this;
 }
 vk::ImageAspectFlags Image::determineImageAspect(vk::Format format, vk::ImageAspectFlags aspect) {
@@ -2249,6 +2249,8 @@ private:
     vk::CommandBuffer      _handle {};
     State                  _state = RECORDING;
 
+    friend class CommandBuffer;
+
 private:
     struct DescriptorPoolKey {
         std::vector<vk::DescriptorSetLayoutBinding> bindings;
@@ -2282,9 +2284,10 @@ auto CommandBuffer::name() const -> const std::string & {
     static const std::string emptyName = ""s;
     return _impl ? _impl->name() : emptyName;
 }
-auto CommandBuffer::handle() const -> vk::CommandBuffer {
-    return _impl ? _impl->handle() : vk::CommandBuffer{};
-}
+auto CommandBuffer::handle() const -> vk::CommandBuffer { return _impl ? _impl->handle() : vk::CommandBuffer {}; }
+bool CommandBuffer::finished() const { return _impl ? Impl::FINISHED == _impl->_state : false; }
+bool CommandBuffer::pending() const { return _impl ? Impl::EXECUTING == _impl->_state : false; }
+bool CommandBuffer::recording() const { return _impl ? Impl::RECORDING == _impl->_state : false; }
 auto CommandBuffer::render(const DrawPack & d) const -> const CommandBuffer & {
     if (_impl) _impl->render(d);
     return *this;
@@ -2388,71 +2391,60 @@ public:
         }
     }
 
-    void wait(const vk::ArrayProxy<const SubmissionID> & submissions) {
+    CommandQueue & wait(const vk::ArrayProxy<const SubmissionID> & submissions) {
+        if (submissions.empty()) return _owner;
+
         auto lock = std::lock_guard {_mutex};
 
         // do nothing if pending list is empty.
-        if (_pending.empty()) return;
+        if (_pending.empty()) return _owner;
 
-        // find the submission to wait for.
-        PendingIterator submission;
-        if (submissions.empty()) {
-            // wait for all pending submissions to finish.
-            submission = --_pending.end();
-        } else {
-            // if the submission array is not empty, then find the one with the largest index.
-            std::optional<int64_t> candidate;
-            for (const auto & sid : submissions) {
-                if (sid.queue != (int64_t) (intptr_t) this) {
-                    RVI_LOGE("Submission %" PRIi64 " is not from queue %s!", sid.index, name().c_str());
-                    continue;
-                }
-                auto oldest = _pending.front()->index;
-                if (sid.olderThan(oldest)) {
-                    // the workload has finished already.
-                    continue;
-                }
-                auto newest = _pending.back()->index;
-                if (sid.newerThan(newest)) {
-                    RVI_LOGE("Submission %" PRIi64 " is invalid since it is newer than the newest submission %" PRIi64 "!", sid.index, newest);
-                    continue;
-                }
-
-                // this is an valid pending submission.
-                if (!candidate.has_value()) {
-                    candidate = sid.index;
-                } else if (sid.newerThan(candidate.value())) {
-                    // we only need to save the newest one.
-                    candidate = sid.index;
-                }
+        // if the submission array is not empty, then find the one with the largest index.
+        std::optional<int64_t> candidate;
+        for (const auto & sid : submissions) {
+            if (sid.queue != (int64_t) (intptr_t) this) {
+                RVI_LOGE("Submission %" PRIi64 " is not from queue %s!", sid.index, name().c_str());
+                continue;
             }
+            auto oldest = _pending.front()->index;
+            if (sid.olderThan(oldest)) {
+                // the workload has finished already.
+                continue;
+            }
+            auto newest = _pending.back()->index;
+            if (sid.newerThan(newest)) {
+                RVI_LOGE("Submission %" PRIi64 " is invalid since it is newer than the newest submission %" PRIi64 "!", sid.index, newest);
+                continue;
+            }
+
+            // this is an valid pending submission.
             if (!candidate.has_value()) {
-                RVI_LOGE("No valid submission is found!");
-                return;
-            }
-
-            submission = findSubmission(candidate.value());
-            if (submission == _pending.end()) {
-                RVI_LOGE("Submission %" PRIi64 " is invalid since it is not found in the pending list!", (*submission)->index);
-                return;
+                candidate = sid.index;
+            } else if (sid.newerThan(candidate.value())) {
+                // we only need to save the newest one.
+                candidate = sid.index;
             }
         }
-        RVI_ASSERT(submission != _pending.end());
-
-        // wait for the submission to finish.
-        waitSubmission(**submission);
-
-        // Move all finished command buffers to finished list.
-        ++submission;
-        for (auto s = _pending.begin(); s != submission; ++s) {
-            for (auto cb : (*s)->commandBuffers) {
-                cb->hibernate();
-                _finished[cb.get()] = cb;
-            }
+        if (!candidate.has_value()) {
+            RVI_LOGE("No valid submission is found!");
+            return _owner;
         }
 
-        // Remove all finished submissions from the pending list. This will also delete the command buffer objects.
-        _pending.erase(_pending.begin(), submission);
+        auto submission = findSubmission(candidate.value());
+        if (submission == _pending.end()) {
+            RVI_LOGE("Submission %" PRIi64 " is invalid since it is not found in the pending list!", (*submission)->index);
+            return _owner;
+        }
+
+        // done
+        waitSubmission(submission);
+        return _owner;
+    }
+
+    CommandQueue & waitIdle() {
+        auto lock = std::lock_guard {_mutex};
+        if (!_pending.empty()) waitSubmission(--_pending.end());
+        return _owner;
     }
 
     void setName(const std::string & name) {
@@ -2505,10 +2497,24 @@ private:
         return std::find_if(_pending.begin(), _pending.end(), [index](const auto & s) { return s->index == index; });
     }
 
-    void waitSubmission(InternalSubmission & s) {
-        RVI_ASSERT(s.fence);
-        auto result = _desc.gi->device.waitForFences({s.fence}, true, UINT64_MAX);
-        if (result != vk::Result::eSuccess) { RVI_LOGE("Submission %" PRIi64 " failed to wait for finish!", s.index); }
+    void waitSubmission(PendingIterator iter) {
+        RVI_ASSERT(iter != _pending.end());
+        const auto & submission = **iter;
+        RVI_ASSERT(submission.fence);
+        auto result = _desc.gi->device.waitForFences({submission.fence}, true, UINT64_MAX);
+        if (result != vk::Result::eSuccess) { RVI_LOGE("Submission %" PRIi64 " failed to wait for finish!", submission.index); }
+
+        // Move all finished command buffers to finished list.
+        ++iter;
+        for (auto s = _pending.begin(); s != iter; ++s) {
+            for (auto cb : (*s)->commandBuffers) {
+                cb->hibernate();
+                _finished[cb.get()] = cb;
+            }
+        }
+
+        // Remove all finished submissions from the pending list. This will also delete the command buffer objects.
+        _pending.erase(_pending.begin(), iter);
     }
 
     // void finish(CommandBuffer * p) {
@@ -2556,7 +2562,8 @@ auto CommandQueue::desc() const -> const Desc & { return _impl->desc(); }
 auto CommandQueue::begin(const char * purpose, vk::CommandBufferLevel level) -> CommandBuffer { return _impl->begin(purpose, level); }
 auto CommandQueue::submit(const SubmitParameters & sp) -> SubmissionID { return _impl->submit(sp); }
 void CommandQueue::drop(vk::ArrayProxy<const CommandBuffer> commandBuffers) { _impl->drop(commandBuffers); }
-void CommandQueue::wait(const vk::ArrayProxy<const SubmissionID> & s) { _impl->wait(s); }
+auto CommandQueue::wait(const vk::ArrayProxy<const SubmissionID> & s) -> CommandQueue & { return _impl->wait(s); }
+auto CommandQueue::waitIdle() -> CommandQueue & { return _impl->waitIdle(); }
 void CommandQueue::onNameChanged(const std::string &) { _impl->setName(name()); }
 
 // *********************************************************************************************************************
@@ -2981,7 +2988,7 @@ private:
             _graphicsQueue->submit({cb, {}, {}, {f.imageAvailable}});
         }
 
-        _graphicsQueue->wait();
+        _graphicsQueue->waitIdle();
     }
 
     void beginFrame() {

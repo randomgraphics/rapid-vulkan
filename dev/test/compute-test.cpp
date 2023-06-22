@@ -15,7 +15,7 @@ TEST_CASE("noop-compute") {
         p.cmdDispatch(c, {1, 1, 1});
         q.submit({c});
     }
-    q.wait();
+    q.waitIdle();
 }
 
 TEST_CASE("cs-buffer-args") {
@@ -46,7 +46,7 @@ TEST_CASE("cs-buffer-args") {
         c.render(ap.compile());
         q->submit({c});
     }
-    q->wait();
+    q->waitIdle();
 
     if (rdc) rdc.end();
 
