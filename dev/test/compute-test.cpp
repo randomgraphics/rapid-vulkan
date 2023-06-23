@@ -34,7 +34,7 @@ TEST_CASE("cs-buffer-args") {
     b1.setContent(Buffer::SetContentParameters {}.setData(vk::ArrayProxy<const float> {1.0f}));
     auto b2 = Buffer({{"buf2"}, TestVulkanInstance::device->gi(), 4, vk::BufferUsageFlagBits::eStorageBuffer});
     b2.setContent(Buffer::SetContentParameters {}.setData(vk::ArrayProxy<const uint32_t> {0xbadbeef}));
-    auto ap = Drawable({{"cs-buffer-args"}, Ref<Pipeline> {&p}});
+    auto ap = Drawable({{"cs-buffer-args"}, &p});
     ap.b({0, 0}, {{b1}});
     ap.b({0, 1}, {{b2}});
     ap.c(0, vk::ArrayProxy<const float> {1.0f});

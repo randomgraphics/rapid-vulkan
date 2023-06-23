@@ -2290,19 +2290,27 @@ private:
 
     struct DescriptorPoolKey {
         std::vector<vk::DescriptorSetLayoutBinding> bindings;
-        bool                                        operator<(const DescriptorPoolKey & rhs) const {
-                                                   if (bindings.size() != rhs.bindings.size()) return bindings.size() < rhs.bindings.size();
+
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4702) // unreachable code
+#endif
+        bool operator<(const DescriptorPoolKey & rhs) const {
+            if (bindings.size() != rhs.bindings.size()) return bindings.size() < rhs.bindings.size();
             for (size_t i = 0; i < bindings.size(); ++i) {
-                                                       const auto & a = bindings[i];
-                                                       const auto & b = rhs.bindings[i];
-                                                       if (a.binding != b.binding) return a.binding < b.binding;
+                const auto & a = bindings[i];
+                const auto & b = rhs.bindings[i];
+                if (a.binding != b.binding) return a.binding < b.binding;
                 if (a.descriptorType != b.descriptorType) return a.descriptorType < b.descriptorType;
                 if (a.descriptorCount != b.descriptorCount) return a.descriptorCount < b.descriptorCount;
                 return a.stageFlags < b.stageFlags;
             }
-                                                   return false;
+            return false;
         }
     };
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 
     typedef std::map<DescriptorPoolKey, DescriptorPool> DescriptorPoolMap;
 

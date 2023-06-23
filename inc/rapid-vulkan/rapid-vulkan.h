@@ -595,6 +595,12 @@ public:
     ~Ref() { clear(); }
 
     /// copy constructor
+    Ref(const Ref & rhs) {
+        _ptr = rhs.get();
+        if (_ptr) addRef(_ptr);
+    }
+
+    /// copy constructor from compatible type
     template<typename T2>
     Ref(const Ref<T2> & rhs) {
         _ptr = rhs.get();
@@ -602,6 +608,9 @@ public:
     }
 
     /// move constructor
+    Ref(Ref && rhs) { _ptr = rhs.detach(); }
+
+    /// move constructor from compatible type
     template<typename T2>
     Ref(Ref<T2> && rhs) {
         _ptr = rhs.detach();
@@ -639,6 +648,16 @@ public:
     }
 
     /// copy operator
+    Ref & operator=(const Ref & rhs) {
+        auto p = rhs.get();
+        if (_ptr == p) return *this;
+        if (p) addRef(p);
+        if (_ptr) release(_ptr);
+        _ptr = p;
+        return *this;
+    }
+
+    /// copy operator from compatible type
     template<typename T2>
     Ref & operator=(const Ref<T2> & rhs) {
         auto p = rhs.get();
@@ -650,6 +669,15 @@ public:
     }
 
     /// move operator
+    Ref & operator=(Ref && rhs) {
+        if (this != &rhs) {
+            if (_ptr) release(_ptr);
+            _ptr = rhs.detach();
+        }
+        return *this;
+    }
+
+    /// move operator from compatible type
     template<typename T2>
     Ref & operator=(Ref<T2> && rhs) {
         if (this != &rhs) {
@@ -660,30 +688,40 @@ public:
     }
 
     /// comparison operator
-    template<typename T2>
+    bool operator==(const Ref & rhs) const { return _ptr == rhs.get(); }
+
+    /// comparison operator for compatible type
+    template<typename T2, std::enable_if_t<std::is_convertible_v<T2, T>>>
     bool operator==(const Ref<T2> & rhs) const {
         return _ptr == rhs.get();
     }
 
-    /// @brief null equality operator
-    /// @return true if null, false otherwise.
+    /// comparison operator for nullptr
     bool operator==(std::nullptr_t) { return _ptr == nullptr; }
 
     /// comparison operator
+    bool operator!=(const Ref & rhs) const { return _ptr != rhs.get(); }
+
+    /// comparison operator for compatible type
     template<typename T2>
     bool operator!=(const Ref<T2> & rhs) const {
         return _ptr != rhs.get();
     }
 
-    /// @brief not null operator.
-    /// @return true if not null, false otherwise.
+    /// comparison operator for nullptr
     bool operator!=(std::nullptr_t) { return _ptr != nullptr; }
+
+    /// comparison operator
+    bool operator<(const Ref & rhs) const { return _ptr < rhs.get(); }
 
     /// comparison operator
     template<typename T2>
     bool operator<(const Ref<T2> & rhs) const {
         return _ptr < rhs.get();
     }
+
+    /// comparison operator
+    bool operator<(std::nullptr_t) const { return _ptr < (T *) nullptr; }
 
     /// @brief boolean cast.
     /// @return true if not null, false otherwise.
