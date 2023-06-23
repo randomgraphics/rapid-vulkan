@@ -2148,7 +2148,8 @@ public:
         return _gi->device.allocateDescriptorSets({_pool, 1, &_layout})[0];
     }
 
-    void hibernate() {
+    /// Release all already-full descriptor pools.
+    void purge() {
         for (auto & p : _full) { _gi->safeDestroy(p); }
         _full.clear();
     }
@@ -2215,19 +2216,16 @@ private:
 
 class CommandBuffer::Impl : public CommandBuffer {
 public:
-    Impl(CommandQueue & queue, const GlobalInfo * gi, uint32_t family, const std::string & name_, vk::CommandBufferLevel level)
-        : _queue(queue), _gi(gi), _name(name_), _level(level) {
-        RVI_ASSERT(_gi);
-
-        _pool = _gi->device.createCommandPool(vk::CommandPoolCreateInfo().setQueueFamilyIndex(family), _gi->allocator);
-
+    Impl(CommandQueue & queue, const std::string & name_, vk::CommandBufferLevel level)
+        : _queue(queue), _name(name_), _level(level) {
+        const auto & d  = queue.desc();
+        _pool = d.gi->device.createCommandPool(vk::CommandPoolCreateInfo().setQueueFamilyIndex(d.family), d.gi->allocator);
         wakeup();
     }
 
     ~Impl() {
-        if (!_gi) return;
         clear();
-        _gi->safeDestroy(_pool);
+        _queue.desc().gi->safeDestroy(_pool);
     }
 
     void wakeup() {
@@ -2237,8 +2235,8 @@ public:
         info.commandPool        = _pool;
         info.level              = _level;
         info.commandBufferCount = 1;
-        _handle                 = _gi->device.allocateCommandBuffers(info)[0];
-        setVkHandleName(_gi->device, _handle, _name);
+        _handle                 = _queue.desc().gi->device.allocateCommandBuffers(info)[0];
+        setVkHandleName(_queue.desc().gi->device, _handle, _name);
         _handle.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
     }
 
@@ -2256,7 +2254,7 @@ public:
         // TODO: calculate diff to minimize the number of pipeline bindings and descriptor set bindings/updates.
 
         // render the draw pack
-        d.cmdRender(_gi->device, _handle, [&](const Pipeline & p, uint32_t i) { return allocateDescriptorSet(p, i); });
+        d.cmdRender(_queue.desc().gi->device, _handle, [&](const Pipeline & p, uint32_t i) { return allocateDescriptorSet(p, i); });
     }
 
     const std::string & name() const { return _name; }
@@ -2315,7 +2313,6 @@ private:
     typedef std::map<DescriptorPoolKey, DescriptorPool> DescriptorPoolMap;
 
     CommandQueue &         _queue;
-    const GlobalInfo *     _gi = nullptr;
     uint32_t               _family {};
     std::string            _name;
     vk::CommandBufferLevel _level {};
@@ -2328,8 +2325,10 @@ private:
 
 private:
     void clear() {
-        _gi->safeDestroy(_handle, _pool);
-        _gi->device.resetCommandPool(_pool);
+        auto gi = _queue.desc().gi;
+        gi->safeDestroy(_handle, _pool);
+        gi->device.resetCommandPool(_pool);
+        for (auto & p : _descriptorPools) p.second.purge();
     }
 
     vk::DescriptorSet allocateDescriptorSet(const Pipeline & p, uint32_t setIndex) {
@@ -2343,7 +2342,7 @@ private:
         for (const auto & d : set) { key.bindings.push_back(d.binding); }
         auto iter = _descriptorPools.find(key);
         if (iter == _descriptorPools.end()) {
-            auto inserted = _descriptorPools.emplace(key, DescriptorPool::ConstructParameters {{_name}, _gi, key.bindings});
+            auto inserted = _descriptorPools.emplace(key, DescriptorPool::ConstructParameters {{_name}, _queue.desc().gi, key.bindings});
             RVI_REQUIRE(inserted.second);
             iter = inserted.first;
         }
@@ -2388,7 +2387,7 @@ public:
         auto                                 lock = std::lock_guard {_mutex};
         std::shared_ptr<CommandBuffer::Impl> p;
         if (_finished.empty()) {
-            p = std::make_unique<CommandBuffer::Impl>(_owner, _desc.gi, _desc.family, name, level);
+            p = std::make_unique<CommandBuffer::Impl>(_owner, name, level);
         } else {
             p = _finished.begin()->second;
             _finished.erase(_finished.begin());
@@ -2440,6 +2439,14 @@ public:
         for (auto cb : s->commandBuffers) {
             cb->setPending();
             _active.erase(cb.get());
+        }
+
+        // going through the pending list in reverse order to find the first submission that is already finished the execution on GPU.
+        for (auto iter = _pending.rbegin(); iter != _pending.rend(); ++iter) {
+            auto status = _desc.gi->device.getFenceStatus((*iter)->fence);
+            if (vk::Result::eNotReady == status) continue; // the submission is still in progress.
+            finishSubmission(iter.base() - 1);
+            break;
         }
 
         // add to pending list
@@ -2575,8 +2582,12 @@ private:
         RVI_ASSERT(submission.fence);
         auto result = _desc.gi->device.waitForFences({submission.fence}, true, UINT64_MAX);
         if (result != vk::Result::eSuccess) { RVI_LOGE("Submission %" PRIi64 " failed to wait for finish!", submission.index); }
+        finishSubmission(iter);
+    }
 
+    void finishSubmission(PendingIterator iter) {
         // Move all finished command buffers to finished list.
+        RVI_ASSERT(iter != _pending.end());
         ++iter;
         for (auto s = _pending.begin(); s != iter; ++s) {
             for (auto cb : (*s)->commandBuffers) {
@@ -2584,7 +2595,6 @@ private:
                 _finished[cb.get()] = cb;
             }
         }
-
         // Remove all finished submissions from the pending list. This will also delete the command buffer objects.
         _pending.erase(_pending.begin(), iter);
     }
@@ -2870,8 +2880,13 @@ private:
         clearSwapchain();
         auto gi = _cp.gi;
 
-        // determine the swapchain size
+        // verify surface caps.
         auto surfaceCaps = gi->physical.getSurfaceCapabilitiesKHR(_cp.surface);
+        if (0 == surfaceCaps.maxImageExtent.width || 0 == surfaceCaps.maxImageExtent.height) {
+            RVI_THROW("Can't create swapchain, since the surface is minimized.");
+        }
+
+        // determine the swapchain size
         auto w           = (uint32_t) _cp.width;
         auto h           = (uint32_t) _cp.height;
         if (0 == w) w = (uint32_t) surfaceCaps.currentExtent.width;

@@ -1,6 +1,7 @@
 # P0
-- A Drawable class that contains a pipline and resources (buffers, images, constants) used by the pipeline.
-- A 3D model viewer that as a complex-enough use case of the library.
+- A 3D model viewer that as a complex-enough use case of the library.-
+- BUG: simple triangle sample crash when minimized.
+- BUG: drawable sample seems leaking small amount of memory every frame.
 
 # P1
 - A more powerful render pass class that combined vk::RenderPass and vk::Framebuffers together.
