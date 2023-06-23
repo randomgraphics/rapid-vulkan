@@ -7,6 +7,7 @@ add_executable(rapid-vulkan-test
     image-test.cpp
     queue-test.cpp
     sample-test.cpp
+    smoke-test.cpp
     test-main.cpp
 )
 target_link_libraries(rapid-vulkan-test PUBLIC rapid-vulkan-static ${RAPID_VULKAN_SYSTEM_LIBRARIES})

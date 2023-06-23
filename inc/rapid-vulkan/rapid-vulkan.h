@@ -530,6 +530,9 @@ public:
     /// destroyed.
     void markAsNotDeleteable() { _noDeleteOnZeroRef = true; }
 
+    /// @brief Get the reference count of the object.
+    uint64_t refCount() const { return _ref; }
+
 protected:
     Root(const ConstructParameters & params): _name("<no-name>"s) { setName(params.name); }
 
@@ -578,14 +581,12 @@ public:
 
     constexpr Ref() = default;
 
-    template<typename T2>
-    Ref(T2 & t) {
+    Ref(T & t) {
         _ptr = &t;
         addRef(_ptr);
     }
 
-    template<typename T2>
-    Ref(T2 * t) {
+    Ref(T * t) {
         if (!t) return;
         _ptr = t;
         addRef(_ptr);
@@ -596,9 +597,8 @@ public:
     /// copy constructor
     template<typename T2>
     Ref(const Ref<T2> & rhs) {
-        auto p = rhs.get();
-        if (p) addRef(p);
-        _ptr = p;
+        _ptr = rhs.get();
+        if (_ptr) addRef(_ptr);
     }
 
     /// move constructor
