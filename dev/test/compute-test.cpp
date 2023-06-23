@@ -26,7 +26,7 @@ TEST_CASE("cs-buffer-args") {
     auto p    = ComputePipeline({{"cs-buffer-args"}, &noop});
     p.markAsNotDeleteable();
 
-    auto rdc  = RenderDocCapture();
+    auto rdc = RenderDocCapture();
     if (rdc) rdc.begin("cs-buffer-args");
 
     // create buffers and argument pack

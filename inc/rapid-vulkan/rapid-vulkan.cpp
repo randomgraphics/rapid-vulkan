@@ -66,6 +66,7 @@ SOFTWARE.
 #include <set>
 #include <deque>
 #include <optional>
+#include <memory>
 #include <signal.h>
 #include <inttypes.h>
 
@@ -1383,88 +1384,6 @@ static PipelineReflection reflectShaders(const std::string & pipelineName, vk::A
 }
 
 // *********************************************************************************************************************
-// DescriptorPool
-// *********************************************************************************************************************
-
-class DescriptorPool : public Root {
-public:
-    struct ConstructParameters : public Root::ConstructParameters {
-        const GlobalInfo *                                   gi = nullptr;
-        vk::ArrayProxy<const vk::DescriptorSetLayoutBinding> bindings {};
-        size_t                                               maxSets = 1024;
-    };
-
-    DescriptorPool(const ConstructParameters & cp): Root(cp) { construct(cp); }
-
-    ~DescriptorPool() { destruct(); }
-
-    vk::DescriptorSet allocate() {
-        if (_availableSets == 0) {
-            if (_pool) _full.push_back(_pool), _pool = VK_NULL_HANDLE;
-            _pool          = _gi->device.createDescriptorPool(vk::DescriptorPoolCreateInfo().setPoolSizes(_sizes), _gi->allocator);
-            _availableSets = _maxSets;
-        }
-        --_availableSets;
-        return _gi->device.allocateDescriptorSets({_pool, 1, &_layout})[0];
-    }
-
-protected:
-    void onNameChanged(const std::string &) override { updateName(); }
-
-private:
-    const GlobalInfo *                  _gi {};
-    size_t                              _maxSets {};
-    std::vector<vk::DescriptorPoolSize> _sizes;
-    vk::DescriptorSetLayout             _layout {};
-    vk::DescriptorPool                  _pool {};
-    size_t                              _availableSets {}; ///< number of sets that are available for allocation in the pool.
-    std::vector<vk::DescriptorPool>     _full;             ///< pools that are full already.
-
-private:
-    void updateName() {
-        setVkHandleName(_gi->device, _layout, name() + ".layout");
-        setVkHandleName(_gi->device, _pool, name() + ".pool");
-    }
-
-    void construct(const ConstructParameters & cp) {
-        RVI_REQUIRE(cp.gi);
-        RVI_REQUIRE(!cp.bindings.empty());
-        RVI_REQUIRE(cp.maxSets > 0);
-
-        _gi      = cp.gi;
-        _maxSets = cp.maxSets;
-
-        auto bindings = std::vector<vk::DescriptorSetLayoutBinding> {};
-        auto sizesMap = std::map<vk::DescriptorType, uint32_t> {};
-        for (const auto & b : cp.bindings) {
-            if (0 == b.descriptorCount) continue; // skip empty descriptor
-            bindings.push_back(b);
-            sizesMap[b.descriptorType] += b.descriptorCount;
-        }
-        if (bindings.empty()) return; // no descriptor to allocate
-
-        // create set layout
-        _layout = _gi->device.createDescriptorSetLayout(vk::DescriptorSetLayoutCreateInfo {}.setBindings(bindings), _gi->allocator);
-
-        // create pool
-        _sizes.reserve(sizesMap.size());
-        for (const auto & kv : sizesMap) _sizes.push_back({kv.first, kv.second});
-
-        // done
-        updateName();
-    }
-
-    void destruct() {
-        if (!_gi) return;
-        _gi->safeDestroy(_layout);
-        _gi->safeDestroy(_pool);
-        for (auto & p : _full) { _gi->safeDestroy(p); }
-        _full.clear();
-        _gi = nullptr;
-    }
-};
-
-// *********************************************************************************************************************
 // PipelineLayout
 // *********************************************************************************************************************
 
@@ -1503,14 +1422,14 @@ public:
         _reflection = reflectShaders(owner.name(), shaders);
 
         // create descriptor set layouts
-        _sets.resize(_reflection.descriptors.size());
-        for (uint32_t s = 0; s < _sets.size(); ++s) {
+        _setLayouts.resize(_reflection.descriptors.size());
+        for (uint32_t s = 0; s < _setLayouts.size(); ++s) {
             std::vector<vk::DescriptorSetLayoutBinding> bindings;
             for (const auto & d : _reflection.descriptors[s]) {
                 if (d.empty()) continue; // skip empty descriptor
                 bindings.push_back(d.binding);
             }
-            _sets[s].layout = _gi->device.createDescriptorSetLayout(vk::DescriptorSetLayoutCreateInfo {}.setBindings(bindings), _gi->allocator);
+            _setLayouts[s] = _gi->device.createDescriptorSetLayout(vk::DescriptorSetLayoutCreateInfo {}.setBindings(bindings), _gi->allocator);
         }
 
         // create push constant array
@@ -1521,21 +1440,16 @@ public:
             pc.push_back({kv.first, kv.second.begin, kv.second.end - kv.second.begin});
         }
 
-        // create pipeline layout array
-        std::vector<vk::DescriptorSetLayout> layouts;
-        layouts.reserve(_sets.size());
-        for (const auto & s : _sets) layouts.push_back(s.layout);
-
         // create pipeline layout
-        _handle = _gi->device.createPipelineLayout(vk::PipelineLayoutCreateInfo().setSetLayouts(layouts).setPushConstantRanges(pc), _gi->allocator);
+        _handle = _gi->device.createPipelineLayout(vk::PipelineLayoutCreateInfo().setSetLayouts(_setLayouts).setPushConstantRanges(pc), _gi->allocator);
 
         // done
         onNameChanged();
     }
 
     ~Impl() {
-        for (auto & s : _sets) { s.clear(*_gi); }
-        _sets.clear();
+        for (auto & s : _setLayouts) { _gi->safeDestroy(s); }
+        _setLayouts.clear();
         _gi->safeDestroy(_handle);
     }
 
@@ -1548,21 +1462,11 @@ public:
     }
 
 private:
-    struct DescriptorSet {
-        vk::DescriptorSetLayout layout {};
-        Ref<DescriptorPool>     pool;
-
-        void clear(const GlobalInfo & gi) {
-            gi.safeDestroy(layout);
-            pool.reset();
-        }
-    };
-
-    PipelineLayout &           _owner;
-    const GlobalInfo *         _gi = nullptr;
-    PipelineReflection         _reflection;
-    vk::PipelineLayout         _handle;
-    std::vector<DescriptorSet> _sets;
+    PipelineLayout &                     _owner;
+    const GlobalInfo *                   _gi = nullptr;
+    PipelineReflection                   _reflection;
+    vk::PipelineLayout                   _handle;
+    std::vector<vk::DescriptorSetLayout> _setLayouts;
 };
 
 PipelineLayout::PipelineLayout(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this, cp.shaders); }
@@ -1606,6 +1510,7 @@ Pipeline::~Pipeline() {
     _impl = nullptr;
 }
 auto Pipeline::bindPoint() const -> vk::PipelineBindPoint { return _impl->bindPoint; }
+auto Pipeline::handle() const -> vk::Pipeline { return _impl->handle; }
 auto Pipeline::layout() const -> vk::PipelineLayout { return _impl->layout().handle(); }
 auto Pipeline::reflection() const -> const PipelineReflection & { return _impl->layout().reflection(); }
 
@@ -1733,6 +1638,8 @@ void DrawPack::cmdRender(vk::Device device, vk::CommandBuffer cb,
 
     auto layout = pipeline->layout();
     auto bp     = pipeline->bindPoint();
+
+    cb.bindPipeline(bp, pipeline->handle());
 
     for (uint32_t s = 0; s < descriptors.size(); ++s) {
         auto & w = descriptors[s];
@@ -2216,29 +2123,116 @@ auto Drawable::dp(const ComputePipeline::DispatchParameters & v) -> Drawable & {
 auto Drawable::compile() const -> DrawPack { return _impl->compile(); };
 
 // *********************************************************************************************************************
+// DescriptorPool
+// *********************************************************************************************************************
+
+class DescriptorPool : public Root {
+public:
+    struct ConstructParameters : public Root::ConstructParameters {
+        const GlobalInfo *                                   gi = nullptr;
+        vk::ArrayProxy<const vk::DescriptorSetLayoutBinding> bindings {};
+        size_t                                               maxSets = 1024;
+    };
+
+    DescriptorPool(const ConstructParameters & cp): Root(cp) { construct(cp); }
+
+    ~DescriptorPool() { destruct(); }
+
+    vk::DescriptorSet allocate() {
+        if (_availableSets == 0) {
+            if (_pool) _full.push_back(_pool), _pool = VK_NULL_HANDLE;
+            _pool          = _gi->device.createDescriptorPool(vk::DescriptorPoolCreateInfo().setPoolSizes(_sizes).setMaxSets(_maxSets), _gi->allocator);
+            _availableSets = _maxSets;
+        }
+        --_availableSets;
+        return _gi->device.allocateDescriptorSets({_pool, 1, &_layout})[0];
+    }
+
+    void hibernate() {
+        for (auto & p : _full) { _gi->safeDestroy(p); }
+        _full.clear();
+    }
+
+protected:
+    void onNameChanged(const std::string &) override { updateName(); }
+
+private:
+    const GlobalInfo *                  _gi {};
+    uint32_t                            _maxSets {};
+    std::vector<vk::DescriptorPoolSize> _sizes;
+    vk::DescriptorSetLayout             _layout {};
+    vk::DescriptorPool                  _pool {};
+    size_t                              _availableSets {}; ///< number of sets that are available for allocation in the pool.
+    std::vector<vk::DescriptorPool>     _full;             ///< pools that are full already.
+
+private:
+    void updateName() {
+        setVkHandleName(_gi->device, _layout, name() + ".layout");
+        setVkHandleName(_gi->device, _pool, name() + ".pool");
+    }
+
+    void construct(const ConstructParameters & cp) {
+        RVI_REQUIRE(cp.gi);
+        RVI_REQUIRE(!cp.bindings.empty());
+        RVI_REQUIRE(cp.maxSets > 0);
+
+        _gi      = cp.gi;
+        _maxSets = (uint32_t) cp.maxSets;
+
+        auto bindings = std::vector<vk::DescriptorSetLayoutBinding> {};
+        auto sizesMap = std::map<vk::DescriptorType, uint32_t> {};
+        for (const auto & b : cp.bindings) {
+            if (0 == b.descriptorCount) continue; // skip empty descriptor
+            bindings.push_back(b);
+            sizesMap[b.descriptorType] += b.descriptorCount;
+        }
+        if (bindings.empty()) return; // no descriptor to allocate
+
+        // create set layout
+        _layout = _gi->device.createDescriptorSetLayout(vk::DescriptorSetLayoutCreateInfo {}.setBindings(bindings), _gi->allocator);
+
+        // create pool
+        _sizes.reserve(sizesMap.size());
+        for (const auto & kv : sizesMap) _sizes.push_back({kv.first, kv.second});
+
+        // done
+        updateName();
+    }
+
+    void destruct() {
+        if (!_gi) return;
+        _gi->safeDestroy(_layout);
+        _gi->safeDestroy(_pool);
+        for (auto & p : _full) { _gi->safeDestroy(p); }
+        _full.clear();
+        _gi = nullptr;
+    }
+};
+
+// *********************************************************************************************************************
 // Command Buffer/Pool/Queue
 // *********************************************************************************************************************
 
 class CommandBuffer::Impl : public CommandBuffer {
 public:
     Impl(CommandQueue & queue, const GlobalInfo * gi, uint32_t family, const std::string & name_, vk::CommandBufferLevel level)
-        : _queue(queue), _gi(gi), _family(family), _name(name_), _level(level) {
+        : _queue(queue), _gi(gi), _name(name_), _level(level) {
         RVI_ASSERT(_gi);
+
+        _pool = _gi->device.createCommandPool(vk::CommandPoolCreateInfo().setQueueFamilyIndex(family), _gi->allocator);
+
         wakeup();
     }
 
     ~Impl() {
         if (!_gi) return;
         clear();
+        _gi->safeDestroy(_pool);
     }
 
     void wakeup() {
         clear();
-
         _state = RECORDING;
-
-        _pool = _gi->device.createCommandPool(vk::CommandPoolCreateInfo().setQueueFamilyIndex(_family), _gi->allocator);
-
         vk::CommandBufferAllocateInfo info;
         info.commandPool        = _pool;
         info.level              = _level;
@@ -2294,6 +2288,24 @@ private:
         FINISHED,
     };
 
+    struct DescriptorPoolKey {
+        std::vector<vk::DescriptorSetLayoutBinding> bindings;
+        bool                                        operator<(const DescriptorPoolKey & rhs) const {
+                                                   if (bindings.size() != rhs.bindings.size()) return bindings.size() < rhs.bindings.size();
+            for (size_t i = 0; i < bindings.size(); ++i) {
+                                                       const auto & a = bindings[i];
+                                                       const auto & b = rhs.bindings[i];
+                                                       if (a.binding != b.binding) return a.binding < b.binding;
+                if (a.descriptorType != b.descriptorType) return a.descriptorType < b.descriptorType;
+                if (a.descriptorCount != b.descriptorCount) return a.descriptorCount < b.descriptorCount;
+                return a.stageFlags < b.stageFlags;
+            }
+                                                   return false;
+        }
+    };
+
+    typedef std::map<DescriptorPoolKey, DescriptorPool> DescriptorPoolMap;
+
     CommandQueue &         _queue;
     const GlobalInfo *     _gi = nullptr;
     uint32_t               _family {};
@@ -2302,35 +2314,32 @@ private:
     vk::CommandPool        _pool; // one pool for each command buffer for simplicity and for multithread safety.
     vk::CommandBuffer      _handle {};
     State                  _state = RECORDING;
+    DescriptorPoolMap      _descriptorPools;
 
     friend class CommandBuffer;
 
 private:
-    struct DescriptorPoolKey {
-        std::vector<vk::DescriptorSetLayoutBinding> bindings;
-        bool                                        operator<(const DescriptorPoolKey & rhs) const {
-            if (bindings.size() != rhs.bindings.size()) return bindings.size() < rhs.bindings.size();
-            for (size_t i = 0; i < bindings.size(); ++i) {
-                const auto & a = bindings[i];
-                const auto & b = rhs.bindings[i];
-                if (a.binding != b.binding) return a.binding < b.binding;
-                if (a.descriptorType != b.descriptorType) return a.descriptorType < b.descriptorType;
-                if (a.descriptorCount != b.descriptorCount) return a.descriptorCount < b.descriptorCount;
-                return a.stageFlags < b.stageFlags;
-            }
-            return false;
-        }
-    };
-    typedef std::map<DescriptorPoolKey, vk::DescriptorPool> DescriptorPoolMap;
-
     void clear() {
         _gi->safeDestroy(_handle, _pool);
-        _gi->safeDestroy(_pool);
+        _gi->device.resetCommandPool(_pool);
     }
 
-    vk::DescriptorSet allocateDescriptorSet(const Pipeline &, uint32_t) {
-        RVI_THROW("not implemented");
-        return {};
+    vk::DescriptorSet allocateDescriptorSet(const Pipeline & p, uint32_t setIndex) {
+        const auto & refl = p.reflection();
+        if (setIndex >= refl.descriptors.size()) {
+            RVI_LOGE("Failed to allocate descriptor set: set index %d is out of range!", setIndex);
+            return {};
+        }
+        const auto &      set = refl.descriptors[setIndex];
+        DescriptorPoolKey key;
+        for (const auto & d : set) { key.bindings.push_back(d.binding); }
+        auto iter = _descriptorPools.find(key);
+        if (iter == _descriptorPools.end()) {
+            auto inserted = _descriptorPools.emplace(key, DescriptorPool::ConstructParameters {{_name}, _gi, key.bindings});
+            RVI_REQUIRE(inserted.second);
+            iter = inserted.first;
+        }
+        return iter->second.allocate();
     }
 };
 

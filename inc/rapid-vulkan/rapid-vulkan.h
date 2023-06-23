@@ -630,9 +630,7 @@ public:
         return p;
     }
 
-    T * get() const {
-        return (T *) _ptr;
-    }
+    T * get() const { return (T *) _ptr; }
 
     /// get address of the underlying pointer
     T * const * addr() const {
@@ -656,7 +654,7 @@ public:
     Ref & operator=(Ref<T2> && rhs) {
         if (this != &rhs) {
             if (_ptr) release(_ptr);
-            _ptr     = rhs.detach();
+            _ptr = rhs.detach();
         }
         return *this;
     }
@@ -1469,6 +1467,8 @@ public:
     ~Pipeline() override;
 
     vk::PipelineBindPoint bindPoint() const;
+
+    vk::Pipeline handle() const;
 
     vk::PipelineLayout layout() const;
 
