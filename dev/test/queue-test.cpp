@@ -2,14 +2,14 @@
 #include "test-instance.h"
 
 /// Make sure calling hibernate multiple times on command buffers is safe.
-TEST_CASE("drawable-duplicated-command-buffers") {
+TEST_CASE("queue-duplicated-command-buffers") {
     auto q = TestVulkanInstance::device->graphics()->clone();
     auto c = q.begin(nullptr); // testing null name is safe
     q.submit({{c, c}});
     q.submit({{c, c}});
 }
 
-TEST_CASE("drawable-wait-idle") {
+TEST_CASE("queue-wait-idle") {
     auto q = TestVulkanInstance::device->graphics()->clone();
     auto c = q.begin(nullptr); // testing null name is safe
     auto s = q.submit({c});
@@ -17,7 +17,7 @@ TEST_CASE("drawable-wait-idle") {
     q.wait(s);    // wait on an already finished submission is safe and not an error.
 }
 
-TEST_CASE("drawable-reuse") {
+TEST_CASE("queue-reuse") {
     auto q = TestVulkanInstance::device->graphics();
 
     SECTION("reuse-finished") {
