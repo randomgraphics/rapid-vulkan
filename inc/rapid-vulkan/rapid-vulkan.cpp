@@ -1724,8 +1724,47 @@ void ComputePipeline::cmdDispatch(vk::CommandBuffer cb, const DispatchParameters
 }
 
 // *********************************************************************************************************************
-// Drawable
+// Drawable & DrawPack
 // *********************************************************************************************************************
+
+void DrawPack::cmdRender(vk::Device device, vk::CommandBuffer cb,
+                std::function<vk::DescriptorSet(const Pipeline &, uint32_t setIndex)> descriptorSetAllocator) const {
+    if (!pipeline) return;
+
+    auto layout = pipeline->layout();
+    auto bp     = pipeline->bindPoint();
+
+    for (uint32_t s = 0; s < descriptors.size(); ++s) {
+        auto & w = descriptors[s];
+        if (w.empty()) continue;
+        auto set = descriptorSetAllocator(*pipeline, s);
+        for (auto & d : w) const_cast<vk::WriteDescriptorSet &>(d).dstSet = set;
+        device.updateDescriptorSets(w, {});
+        cb.bindDescriptorSets(bp, layout, s, 1, &set, 0, nullptr);
+    }
+
+    for (const auto & c : constants) cb.pushConstants(layout, c.stages, c.offset, (uint32_t) c.value.size(), c.value.data());
+
+    if (vk::PipelineBindPoint::eGraphics == bp) {
+        if (!vertexBuffers.empty()) {
+            RVI_ASSERT(vertexBuffers.size() == vertexOffsets.size());
+            cb.bindVertexBuffers(0, (uint32_t) vertexBuffers.size(), vertexBuffers.data(), vertexOffsets.data());
+        }
+
+        if (indexBuffer.buffer) {
+            // indexed draw
+            cb.bindIndexBuffer(indexBuffer.buffer, indexBuffer.offset, indexType);
+            cb.drawIndexed(draw.indexCount, draw.instanceCount, draw.firstIndex, draw.vertexOffset, draw.firstInstance);
+        } else {
+            // non-indexed draw
+            cb.draw(draw.vertexCount, draw.instanceCount, draw.firstVertex, draw.firstInstance);
+        }
+    } else if (vk::PipelineBindPoint::eCompute == bp) {
+        cb.dispatch((uint32_t) dispatch.width, (uint32_t) dispatch.height, (uint32_t) dispatch.depth);
+    } else {
+        RVI_THROW("Invalid pipeline bind point");
+    }
+}
 
 /// Represent a single pipeline descriptor (buffer/image/sampler)
 /// @todo rename to Descriptor
@@ -1954,13 +1993,17 @@ public:
 
     void set(const vk::ArrayProxy<const BufferView> & vertexBuffers) { _vertexBuffers.assign(vertexBuffers.begin(), vertexBuffers.end()); }
 
-    void set(const IndexBuffer & ib) { _indexBuffer = ib; }
+    void set(const BufferView & ib, vk::IndexType t) {
+        _indexBuffer = ib;
+        _indexType   = t;
+    }
 
     void set(const GraphicsPipeline::DrawParameters & p) { _drawParameters = p; }
 
     void set(const ComputePipeline::DispatchParameters & p) { _dispatchParameters = p; }
 
     DrawPack compile() const {
+        // TODO: cache the compiled pack. Only recompile when the drawable is modified.
         DrawPack pack;
         if (!compileDescriptors(pack)) return {};
         if (!compileConstants(pack)) return {};
@@ -1979,13 +2022,10 @@ private:
     std::unordered_map<DescriptorIdentifier, ArgumentImpl> _descriptors;
     std::vector<DrawPack::ConstantArgument>                _constants;
     std::vector<BufferView>                                _vertexBuffers;
-    IndexBuffer                                            _indexBuffer;
+    BufferView                                             _indexBuffer;
+    vk::IndexType                                          _indexType = vk::IndexType::eUint16;
     GraphicsPipeline::DrawParameters                       _drawParameters;
     ComputePipeline::DispatchParameters                    _dispatchParameters;
-
-    bool                                _valid   = false;
-    bool                                _changed = true;
-    std::vector<vk::WriteDescriptorSet> _writes;
 
 private:
     Argument * get(DescriptorIdentifier id) { return &_descriptors[id]; }
@@ -1995,10 +2035,10 @@ private:
         return iter == _descriptors.end() ? nullptr : iter->second._impl;
     }
 
-    std::vector<std::tuple<vk::PushConstantRange, const void *>> getConstant(vk::ShaderStageFlags stages, uint32_t begin, uint32_t end) const {
+    std::vector<std::tuple<vk::PushConstantRange, const uint8_t *>> getConstant(vk::ShaderStageFlags stages, uint32_t begin, uint32_t end) const {
         if (!stages) return {};
         if (begin >= end) return {};
-        std::vector<std::tuple<vk::PushConstantRange, const void *>> v;
+        std::vector<std::tuple<vk::PushConstantRange, const uint8_t *>> v;
         for (auto & c : _constants) {
             vk::PushConstantRange range {};
             range.stageFlags = c.stages & stages;
@@ -2015,13 +2055,14 @@ private:
     bool compileDescriptors(DrawPack & pack) const {
         const auto & refl = _pipeline->reflection();
         pack.descriptors.clear();
+        pack.descriptors.resize(refl.descriptors.size());
         for (uint32_t si = 0; si < refl.descriptors.size(); ++si) {
-            const auto & s = refl.descriptors[si];
-            auto writes = std::vector<vk::WriteDescriptorSet>();
+            const auto & s      = refl.descriptors[si];
+            auto         writes = std::vector<vk::WriteDescriptorSet>();
             for (uint32_t i = 0; i < s.size(); ++i) {
                 if (s[i].empty()) continue;
                 const auto & b = s[i].binding;
-                auto         w = vk::WriteDescriptorSet{};
+                auto         w = vk::WriteDescriptorSet {};
                 w.setDstBinding(b.binding);
                 w.setDescriptorType(b.descriptorType);
 
@@ -2035,39 +2076,38 @@ private:
                 // verify that the argument type is compatible with the descriptor type
                 if (!a->typeCompatibleWith(b.descriptorType)) {
                     RVI_LOGE("Drawable (%s) validation error: : set %u binding %u is of type %s, but the argument is of type %s.", _owner.name().c_str(), si, i,
-                            vk::to_string(b.descriptorType).c_str(), a->type());
+                             vk::to_string(b.descriptorType).c_str(), a->type());
                     return false;
                 }
 
                 // verify that there're enough descriptors in the argument.
                 if (a->count() < b.descriptorCount) {
                     RVI_LOGE("Drawable (%s) validation error: : set %u binding %u requires %u descriptors, but the argument has only %zu.",
-                        _owner.name().c_str(), si, i, b.descriptorCount, a->count());
+                             _owner.name().c_str(), si, i, b.descriptorCount, a->count());
                     return false;
                 }
 
                 auto & value = a->value();
                 if (auto buf = std::get_if<Argument::Impl::BufferArgs>(&value)) {
                     w.setBufferInfo(buf->infos);
-                    for(size_t j = 0; j < buf->buffers.size(); ++j) {
-                        const auto & b : buf->buffers[j];
-                        if (!b.buffer) {
-                            RVI_LOGE("Drawable (%s) validation error: : set %u binding %u contains empty buffer descriptor at index %zu",
-                               _owner.name().c_str(), si, i, j);
+                    for (size_t j = 0; j < buf->buffers.size(); ++j) {
+                        const auto & v = buf->buffers[j];
+                        if (!v.buffer) {
+                            RVI_LOGE("Drawable (%s) validation error: : set %u binding %u contains empty buffer descriptor at index %zu", _owner.name().c_str(),
+                                     si, i, j);
                             return false;
                         }
-                        pack.buffers.push_back(b.buffer);
                     }
                 } else if (auto img = std::get_if<Argument::Impl::ImageArgs>(&value)) {
                     w.setImageInfo(img->infos);
-                    for(size_t j = 0; j < img.images.size(); ++j) {
-                        const auto & b : img.images[j];
-                        if (!b.image) {
-                            RVI_LOGE("Drawable (%s) validation error: : set %u binding %u contains empty image descriptor at index %zu",
-                               _owner.name().c_str(), si, i, j);
+                    for (size_t j = 0; j < img->images.size(); ++j) {
+                        const auto & v = img->images[j];
+                        if (!v.imageView) {
+                            RVI_LOGE("Drawable (%s) validation error: : set %u binding %u contains empty image view at index %zu", _owner.name().c_str(),
+                                     si, i, j);
                             return false;
                         }
-                        pack.images.push_back(b.image);
+                        // TODO: add the image to pack.images array to avoid it being released too early.
                     }
                 } else {
                     // we should not reach here, since we have already checked the type compatibility.
@@ -2077,72 +2117,62 @@ private:
                 // this is a valid write
                 writes.push_back(w);
             }
+            pack.descriptors[si] = std::move(writes);
         }
-        return false;
+        return true;
     }
 
     bool compileConstants(DrawPack & pack) const {
-        //
-        return false;
+        const auto & reflection = _pipeline->reflection();
+        for (const auto & kv : reflection.constants) {
+            if (kv.second.empty()) continue;
+            auto v = getConstant(kv.first, kv.second.begin, kv.second.end);
+            if (v.empty()) {
+                RVI_LOGW("Drawable (%s) validate error: push constant range %s is not set.", _owner.name().c_str(), vk::to_string(kv.first).c_str());
+                return false;
+            }
+            for (const auto & [pcr, data] : v) pack.constants.push_back({pcr.stageFlags, pcr.offset, {data, data + pcr.size}});
+        }
+        return true;
     }
 
     bool compileGraphics(DrawPack & pack) const {
-        //
-        return false;
+        // TODO: more validations, such as length of vertex buffers, etc.
+        pack.vertexBuffers.clear();
+        pack.vertexOffsets.clear();
+        for (size_t i = 0; i < _vertexBuffers.size(); ++i) {
+            const auto & v = _vertexBuffers[i];
+            if (!v.buffer) {
+                RVI_LOGE("Drawable (%s) validation error: vertex buffer %zu is not set.", _owner.name().c_str(), i);
+                return false;
+            }
+            pack.vertexBuffers.push_back(v.buffer);
+            pack.vertexOffsets.push_back(v.offset);
+        }
+
+        if (_drawParameters.indexCount > 0) {
+            // this is an indexed draw, thus requires an index buffer.
+            if (!_indexBuffer.buffer) {
+                RVI_LOGE("Drawable (%s) validation error: index buffer is not set.", _owner.name().c_str());
+                return false;
+            }
+            pack.indexBuffer = _indexBuffer;
+            pack.indexType   = _indexType;
+        }
+
+        // done
+        pack.draw = _drawParameters;
+        return true;
     }
 
     bool compileCompute(DrawPack & pack) const {
-        //
+        if (0 == _dispatchParameters.width || 0 == _dispatchParameters.height || 0 == _dispatchParameters.depth) {
+            RVI_LOGE("Drawable (%s) validation error: dispatch dimension can't be zero.", _owner.name().c_str());
+            return false;
+        }
+        pack.dispatch = _dispatchParameters;
         return false;
     }
-
-    // void bindDescriptors(vk::CommandBuffer cb, Ref<SubmissionID> & submission) {
-    //     RVI_ASSERT(!_changed && _valid);
-    //     if (_writes.empty()) return;
-    //     cb.bindDescriptorSets(bindPoint, _pipeline->layout(), 0, sets, {});
-    // }
-
-    // void bindConstants(vk::CommandBuffer cb) const {
-    //     RVI_ASSERT(!_changed && _valid);
-    //     auto         layout     = _pipeline->layout();
-    //     const auto & reflection = _pipeline->reflection();
-    //     for (const auto & kv : reflection.constants) {
-    //         if (kv.second.empty()) continue;
-    //         auto v = getConstant(kv.first, kv.second.begin, kv.second.end);
-    //         if (v.empty()) {
-    //             // No warnings ehre. Push constant value is persistent within one
-    //             // command buffer submit. So it is not required to update all the values on every pipeline binding.
-    //             continue;
-    //         }
-    //         for (const auto & [pcr, data] : v) cb.pushConstants(layout, pcr.stageFlags, pcr.offset, pcr.size, data);
-    //     }
-    // }
-
-    // void bindVertcies() const {
-    //     const auto & dp = _drawParameters;
-    //     if (_vertexBuffers.size() > 0) {
-    //         RVI_REQUIRE(_vertexBuffers.size() <= 16); // TODO: use a stack_array class to remove this limitation.
-    //         vk::Buffer     buffers[16];
-    //         vk::DeviceSize offsets[16];
-    //         for (size_t i = 0; i < _vertexBuffers.size(); ++i) {
-    //             const auto & view = _vertexBuffers.data()[i];
-    //             RVI_REQUIRE(view.buffer, "Empty vertex buffer is not allowed.");
-    //             buffers[i] = view.buffer;
-    //             offsets[i] = view.offset;
-    //             // TODO: validate vertex buffer size on debug build.
-    //         }
-    //         cb.bindVertexBuffers(0, (uint32_t) _vertexBuffers.size(), buffers, offsets);
-    //     }
-
-    //     if (_indexBuffer.buffer) {
-    //         // indexed draw
-    //         cb.bindIndexBuffer(_indexBuffer.buffer, _indexBuffer.offset, _indexBuffer.indexType);
-    //         cb.drawIndexed(dp.indexCount, dp.instanceCount, dp.firstIndex, dp.vertexOffset, dp.firstInstance);
-    //     } else {
-    //         // non-indexed draw
-    //         cb.draw(dp.vertexCount, dp.instanceCount, dp.firstVertex, dp.firstInstance);
-    //     }
-    // }
 };
 
 Drawable::Drawable(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this); }
@@ -2170,8 +2200,8 @@ auto Drawable::v(vk::ArrayProxy<const BufferView> v) -> Drawable & {
     _impl->set(v);
     return *this;
 }
-auto Drawable::i(const IndexBuffer & v) -> Drawable & {
-    _impl->set(v);
+auto Drawable::i(const BufferView & v, vk::IndexType t) -> Drawable & {
+    _impl->set(v, t);
     return *this;
 }
 auto Drawable::dp(const GraphicsPipeline::DrawParameters & v) -> Drawable & {

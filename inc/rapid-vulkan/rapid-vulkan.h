@@ -616,10 +616,11 @@ public:
     /// copy operator
     template<typename T2>
     Ref & operator=(const Ref<T2> & rhs) {
-        if (_ptr == rhs._ptr) return *this;
+        auto newValue = rhs.get();
+        if (_ptr == newValue) return *this;
+        if (newValue) addRef(newValue);
         if (_ptr) release(_ptr);
-        if (rhs._ptr) addRef(rhs._ptr);
-        _ptr = rhs._ptr;
+        _ptr = newValue;
         return *this;
     }
 
@@ -636,7 +637,9 @@ public:
 
     /// comparison operator
     template<typename T2>
-    bool operator==(const Ref<T2> & rhs) const { return _ptr == rhs._ptr; }
+    bool operator==(const Ref<T2> & rhs) const {
+        return _ptr == rhs._ptr;
+    }
 
     /// @brief null equality operator
     /// @return true if null, false otherwise.
@@ -644,7 +647,9 @@ public:
 
     /// comparison operator
     template<typename T2>
-    bool operator!=(const Ref<T2> & rhs) const { return _ptr != rhs._ptr; }
+    bool operator!=(const Ref<T2> & rhs) const {
+        return _ptr != rhs._ptr;
+    }
 
     /// @brief not null operator.
     /// @return true if not null, false otherwise.
@@ -652,7 +657,9 @@ public:
 
     /// comparison operator
     template<typename T2>
-    bool operator<(const Ref<T2> & rhs) const { return _ptr < rhs._ptr; }
+    bool operator<(const Ref<T2> & rhs) const {
+        return _ptr < rhs._ptr;
+    }
 
     /// @brief boolean cast.
     /// @return true if not null, false otherwise.
@@ -1656,10 +1663,7 @@ struct DrawPack {
         std::vector<uint8_t> value {};
     };
 
-    Ref<const Pipeline>             pipeline;
-    std::vector<Ref<const Buffer>>  buffers;
-    std::vector<Ref<const Image>>   images;
-    std::vector<Ref<const Sampler>> samplers;
+    Ref<const Pipeline> pipeline;
 
     std::vector<std::vector<vk::WriteDescriptorSet>> descriptors;
 
@@ -1680,44 +1684,7 @@ struct DrawPack {
 
     ~DrawPack() {}
 
-    void cmdRender(vk::Device device, vk::CommandBuffer cb,
-                   std::function<vk::DescriptorSet(const Pipeline &, uint32_t setIndex)> descriptorSetAllocator) const {
-        if (!pipeline) return;
-
-        auto layout = pipeline->layout();
-        auto bp     = pipeline->bindPoint();
-
-        for (uint32_t s = 0; s < descriptors.size(); ++s) {
-            auto & w = descriptors[s];
-            if (w.empty()) continue;
-            auto set = descriptorSetAllocator(*pipeline, s);
-            for (auto & d : w) const_cast<vk::WriteDescriptorSet &>(d).dstSet = set;
-            device.updateDescriptorSets(w, {});
-            cb.bindDescriptorSets(bp, layout, s, 1, &set, 0, nullptr);
-        }
-
-        for (const auto & c : constants) cb.pushConstants(layout, c.stages, c.offset, (uint32_t) c.value.size(), c.value.data());
-
-        if (vk::PipelineBindPoint::eGraphics == bp) {
-            if (!vertexBuffers.empty()) {
-                RVI_ASSERT(vertexBuffers.size() == vertexOffsets.size());
-                cb.bindVertexBuffers(0, (uint32_t) vertexBuffers.size(), vertexBuffers.data(), vertexOffsets.data());
-            }
-
-            if (indexBuffer.buffer) {
-                // indexed draw
-                cb.bindIndexBuffer(indexBuffer.buffer, indexBuffer.offset, indexType);
-                cb.drawIndexed(draw.indexCount, draw.instanceCount, draw.firstIndex, draw.vertexOffset, draw.firstInstance);
-            } else {
-                // non-indexed draw
-                cb.draw(draw.vertexCount, draw.instanceCount, draw.firstVertex, draw.firstInstance);
-            }
-        } else if (vk::PipelineBindPoint::eCompute == bp) {
-            cb.dispatch((uint32_t) dispatch.width, (uint32_t) dispatch.height, (uint32_t) dispatch.depth);
-        } else {
-            RVI_THROW("Invalid pipeline bind point");
-        }
-    }
+    void cmdRender(vk::Device device, vk::CommandBuffer cb, std::function<vk::DescriptorSet(const Pipeline &, uint32_t setIndex)> descriptorSetAllocator) const;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1749,30 +1716,30 @@ public:
         Ref<Pipeline> pipeline {};
     };
 
-    struct IndexBuffer {
-        /// @brief Handle of the index buffer.
-        vk::Buffer buffer = VK_NULL_HANDLE;
+    // struct IndexBuffer {
+    //     /// @brief Handle of the index buffer.
+    //     vk::Buffer buffer = VK_NULL_HANDLE;
 
-        /// @brief Byte offset of the first index. Ignored if buffer is empty.
-        vk::DeviceSize offset = 0;
+    //     /// @brief Byte offset of the first index. Ignored if buffer is empty.
+    //     vk::DeviceSize offset = 0;
 
-        /// @brief Index type;
-        vk::IndexType indexType = vk::IndexType::eUint16;
+    //     /// @brief Index type;
+    //     vk::IndexType indexType = vk::IndexType::eUint16;
 
-        /// @brief Get size/stride of the index based on the type.
-        size_t indexStride() const {
-            switch (indexType) {
-            case vk::IndexType::eUint16:
-                return sizeof(uint16_t);
-            case vk::IndexType::eUint32:
-                return sizeof(uint32_t);
-            case vk::IndexType::eUint8EXT:
-                return 1;
-            default:
-                return 0;
-            }
-        }
-    };
+    //     /// @brief Get size/stride of the index based on the type.
+    //     size_t indexStride() const {
+    //         switch (indexType) {
+    //         case vk::IndexType::eUint16:
+    //             return sizeof(uint16_t);
+    //         case vk::IndexType::eUint32:
+    //             return sizeof(uint32_t);
+    //         case vk::IndexType::eUint8EXT:
+    //             return 1;
+    //         default:
+    //             return 0;
+    //         }
+    //     }
+    // };
 
     Drawable(const ConstructParameters &);
 
@@ -1796,11 +1763,11 @@ public:
         return c(offset, data.size() * sizeof(T), data.data(), stages);
     }
 
-    /// @brief Set vertex buffer.
+    /// @brief Append a vertex buffer to the drawable.
     Drawable & v(vk::ArrayProxy<const BufferView>);
 
     /// @brief Set index buffer
-    Drawable & i(const IndexBuffer &);
+    Drawable & i(const BufferView & buffer, vk::IndexType type = vk::IndexType::eUint16);
 
     Drawable & dp(const GraphicsPipeline::DrawParameters &);
 
