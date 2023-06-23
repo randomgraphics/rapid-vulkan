@@ -14,7 +14,7 @@ TEST_CASE("drawable-wait-idle") {
     auto c = q.begin(nullptr); // testing null name is safe
     auto s = q.submit({c});
     q.waitIdle(); // wait for the queue to be idle.
-    q.wait(s); // wait on an already finished submission is safe and not an error.
+    q.wait(s);    // wait on an already finished submission is safe and not an error.
 }
 
 TEST_CASE("drawable-reuse") {

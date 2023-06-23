@@ -1728,7 +1728,7 @@ void ComputePipeline::cmdDispatch(vk::CommandBuffer cb, const DispatchParameters
 // *********************************************************************************************************************
 
 void DrawPack::cmdRender(vk::Device device, vk::CommandBuffer cb,
-                std::function<vk::DescriptorSet(const Pipeline &, uint32_t setIndex)> descriptorSetAllocator) const {
+                         std::function<vk::DescriptorSet(const Pipeline &, uint32_t setIndex)> descriptorSetAllocator) const {
     if (!pipeline) return;
 
     auto layout = pipeline->layout();
@@ -2103,8 +2103,8 @@ private:
                     for (size_t j = 0; j < img->images.size(); ++j) {
                         const auto & v = img->images[j];
                         if (!v.imageView) {
-                            RVI_LOGE("Drawable (%s) validation error: : set %u binding %u contains empty image view at index %zu", _owner.name().c_str(),
-                                     si, i, j);
+                            RVI_LOGE("Drawable (%s) validation error: : set %u binding %u contains empty image view at index %zu", _owner.name().c_str(), si, i,
+                                     j);
                             return false;
                         }
                         // TODO: add the image to pack.images array to avoid it being released too early.
@@ -2308,16 +2308,16 @@ private:
     struct DescriptorPoolKey {
         std::vector<vk::DescriptorSetLayoutBinding> bindings;
         bool                                        operator<(const DescriptorPoolKey & rhs) const {
-            if (bindings.size() != rhs.bindings.size()) return bindings.size() < rhs.bindings.size();
+                                                   if (bindings.size() != rhs.bindings.size()) return bindings.size() < rhs.bindings.size();
             for (size_t i = 0; i < bindings.size(); ++i) {
-                const auto & a = bindings[i];
-                const auto & b = rhs.bindings[i];
-                if (a.binding != b.binding) return a.binding < b.binding;
+                                                       const auto & a = bindings[i];
+                                                       const auto & b = rhs.bindings[i];
+                                                       if (a.binding != b.binding) return a.binding < b.binding;
                 if (a.descriptorType != b.descriptorType) return a.descriptorType < b.descriptorType;
                 if (a.descriptorCount != b.descriptorCount) return a.descriptorCount < b.descriptorCount;
                 return a.stageFlags < b.stageFlags;
             }
-            return false;
+                                                   return false;
         }
     };
     typedef std::map<DescriptorPoolKey, vk::DescriptorPool> DescriptorPoolMap;
