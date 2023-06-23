@@ -2,6 +2,7 @@ set(CMAKE_CXX_STANDARD 20)
 add_executable(rapid-vulkan-test
     buffer-test.cpp
     compute-test.cpp
+    drawable-test.cpp
     graphics-test.cpp
     image-test.cpp
     queue-test.cpp

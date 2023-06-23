@@ -418,6 +418,28 @@ inline void setVkHandleName(vk::Device device, T handle, std::string name) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
+/// @brief Helper function to insert a begin label to command buffer
+inline bool cmdBeginDebugLabel(vk::CommandBuffer cmd, const char * name, const std::array<float, 4> & color = {1, 1, 1, 1}) {
+#if VULKAN_HPP_DISPATCH_LOADER_DYNAMIC == 1
+    if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdBeginDebugUtilsLabelEXT) return false;
+#else
+    if (!::vkCmdBeginDebugUtilsLabelEXT) return false;
+#endif
+    if (!cmd || !name) return false;
+    cmd.beginDebugUtilsLabelEXT(vk::DebugUtilsLabelEXT().setPLabelName(name).setColor(color));
+    return true;
+}
+
+inline void endDebugLabel(vk::CommandBuffer cmd) {
+#if VULKAN_HPP_DISPATCH_LOADER_DYNAMIC == 1
+    if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdEndDebugUtilsLabelEXT) return;
+#else
+    if (!::vkCmdEndDebugUtilsLabelEXT) return;
+#endif
+    if (cmd) cmd.endDebugUtilsLabelEXT();
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
 /// Utility function to enumerate vulkan item/feature/extension list.
 template<typename T, typename Q>
 inline std::vector<T> completeEnumerate(Q query) {

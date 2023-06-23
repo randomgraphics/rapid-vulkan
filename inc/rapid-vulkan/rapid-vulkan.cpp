@@ -2005,6 +2005,7 @@ public:
     DrawPack compile() const {
         // TODO: cache the compiled pack. Only recompile when the drawable is modified.
         DrawPack pack;
+        if (!_pipeline) return {};
         if (!compileDescriptors(pack)) return {};
         if (!compileConstants(pack)) return {};
         if (_pipeline->bindPoint() == vk::PipelineBindPoint::eGraphics) {
@@ -2359,13 +2360,14 @@ public:
         _desc.handle = params.gi->device.getQueue(params.family, params.index);
     }
 
-    ~Impl() {}
+    ~Impl() { waitIdle(); }
 
     const Desc & desc() const { return _desc; }
 
     const std::string & name() const { return _owner.name(); }
 
     CommandBuffer begin(const char * name, vk::CommandBufferLevel level) {
+        if (!name || !*name) name = "<no-name>";
         auto                                 lock = std::lock_guard {_mutex};
         std::shared_ptr<CommandBuffer::Impl> p;
         if (_finished.empty()) {
@@ -2427,7 +2429,7 @@ public:
         _pending.push_back(std::move(s));
 
         // done
-        return {(intptr_t) this, _nextSubmissionId};
+        return {(intptr_t)&_owner, _nextSubmissionId};
     }
 
     void drop(const vk::ArrayProxy<const CommandBuffer> & commandBuffers) {
@@ -2455,8 +2457,8 @@ public:
         // if the submission array is not empty, then find the one with the largest index.
         std::optional<int64_t> candidate;
         for (const auto & sid : submissions) {
-            if (sid.queue != (int64_t) (intptr_t) this) {
-                RVI_LOGE("Submission %" PRIi64 " is not from queue %s!", sid.index, name().c_str());
+            if (sid.queue != (int64_t) (intptr_t) &_owner) {
+                RVI_LOGE("Submission %" PRIi64 " is not from queue (%s)!", sid.index, name().c_str());
                 continue;
             }
             auto oldest = _pending.front()->index;
@@ -2540,7 +2542,7 @@ private:
         }
         auto it = _active.find(cb.impl());
         if (it == _active.end()) {
-            if (!expectedNull) RVI_LOGE("Command buffer pointer %p is not created by queue (%s).", cb.name().c_str(), name().c_str());
+            if (!expectedNull) RVI_LOGE("Command buffer (%s) is not created by queue (%s).", cb.name().c_str(), name().c_str());
             return {};
         }
         return it->second;

@@ -48,10 +48,9 @@ TEST_CASE("cs-buffer-args") {
     }
     q->waitIdle();
 
-    if (rdc) rdc.end();
-
     // read contents of b2
     auto c2 = b2.readContent({});
+    if (rdc) rdc.end();
     REQUIRE(c2.size() == 4);
     REQUIRE(*(const float *) c2.data() == 2.0f);
 }
