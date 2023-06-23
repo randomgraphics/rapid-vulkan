@@ -596,15 +596,15 @@ public:
     /// copy constructor
     template<typename T2>
     Ref(const Ref<T2> & rhs) {
-        if (rhs._ptr) addRef(rhs._ptr);
-        _ptr = rhs._ptr;
+        auto p = rhs.get();
+        if (p) addRef(p);
+        _ptr = p;
     }
 
     /// move constructor
     template<typename T2>
     Ref(Ref<T2> && rhs) {
-        _ptr     = rhs._ptr;
-        rhs._ptr = nullptr;
+        _ptr = rhs.detach();
     }
 
     void clear() {
@@ -624,9 +624,14 @@ public:
         if (t) addRef(_ptr);
     }
 
-    template<typename T2 = T>
-    T2 * get() const {
-        return (T2 *) _ptr;
+    T * detach() {
+        auto p = _ptr;
+        _ptr   = nullptr;
+        return p;
+    }
+
+    T * get() const {
+        return (T *) _ptr;
     }
 
     /// get address of the underlying pointer
@@ -638,11 +643,11 @@ public:
     /// copy operator
     template<typename T2>
     Ref & operator=(const Ref<T2> & rhs) {
-        auto newValue = rhs.get();
-        if (_ptr == newValue) return *this;
-        if (newValue) addRef(newValue);
+        auto p = rhs.get();
+        if (_ptr == p) return *this;
+        if (p) addRef(p);
         if (_ptr) release(_ptr);
-        _ptr = newValue;
+        _ptr = p;
         return *this;
     }
 
@@ -651,8 +656,7 @@ public:
     Ref & operator=(Ref<T2> && rhs) {
         if (this != &rhs) {
             if (_ptr) release(_ptr);
-            _ptr     = rhs._ptr;
-            rhs._ptr = nullptr;
+            _ptr     = rhs.detach();
         }
         return *this;
     }
@@ -660,7 +664,7 @@ public:
     /// comparison operator
     template<typename T2>
     bool operator==(const Ref<T2> & rhs) const {
-        return _ptr == rhs._ptr;
+        return _ptr == rhs.get();
     }
 
     /// @brief null equality operator
@@ -670,7 +674,7 @@ public:
     /// comparison operator
     template<typename T2>
     bool operator!=(const Ref<T2> & rhs) const {
-        return _ptr != rhs._ptr;
+        return _ptr != rhs.get();
     }
 
     /// @brief not null operator.
@@ -680,7 +684,7 @@ public:
     /// comparison operator
     template<typename T2>
     bool operator<(const Ref<T2> & rhs) const {
-        return _ptr < rhs._ptr;
+        return _ptr < rhs.get();
     }
 
     /// @brief boolean cast.
@@ -1735,7 +1739,7 @@ union DescriptorIdentifier {
 class Drawable : public Root {
 public:
     struct ConstructParameters : public Root::ConstructParameters {
-        Ref<Pipeline> pipeline {};
+        Ref<const Pipeline> pipeline {};
     };
 
     // struct IndexBuffer {

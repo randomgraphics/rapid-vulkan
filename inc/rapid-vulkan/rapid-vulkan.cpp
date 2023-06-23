@@ -1972,7 +1972,7 @@ public:
 
 class Drawable::Impl {
 public:
-    Impl(Drawable & o): _owner(o) { (void) _owner; }
+    Impl(Drawable & o, const ConstructParameters & cp): _owner(o), _pipeline(cp.pipeline) {}
 
     ~Impl() {}
 
@@ -2019,7 +2019,7 @@ public:
 
 private:
     Drawable &                                             _owner;
-    Ref<Pipeline>                                          _pipeline;
+    Ref<const Pipeline>                                    _pipeline;
     std::unordered_map<DescriptorIdentifier, ArgumentImpl> _descriptors;
     std::vector<DrawPack::ConstantArgument>                _constants;
     std::vector<BufferView>                                _vertexBuffers;
@@ -2176,7 +2176,7 @@ private:
     }
 };
 
-Drawable::Drawable(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this); }
+Drawable::Drawable(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this, cp); }
 Drawable::~Drawable() {
     delete _impl;
     _impl = nullptr;
@@ -2309,16 +2309,16 @@ private:
     struct DescriptorPoolKey {
         std::vector<vk::DescriptorSetLayoutBinding> bindings;
         bool                                        operator<(const DescriptorPoolKey & rhs) const {
-                                                   if (bindings.size() != rhs.bindings.size()) return bindings.size() < rhs.bindings.size();
+            if (bindings.size() != rhs.bindings.size()) return bindings.size() < rhs.bindings.size();
             for (size_t i = 0; i < bindings.size(); ++i) {
-                                                       const auto & a = bindings[i];
-                                                       const auto & b = rhs.bindings[i];
-                                                       if (a.binding != b.binding) return a.binding < b.binding;
+                const auto & a = bindings[i];
+                const auto & b = rhs.bindings[i];
+                if (a.binding != b.binding) return a.binding < b.binding;
                 if (a.descriptorType != b.descriptorType) return a.descriptorType < b.descriptorType;
                 if (a.descriptorCount != b.descriptorCount) return a.descriptorCount < b.descriptorCount;
                 return a.stageFlags < b.stageFlags;
             }
-                                                   return false;
+            return false;
         }
     };
     typedef std::map<DescriptorPoolKey, vk::DescriptorPool> DescriptorPoolMap;
@@ -2329,7 +2329,7 @@ private:
     }
 
     vk::DescriptorSet allocateDescriptorSet(const Pipeline &, uint32_t) {
-        //
+        RVI_THROW("not implemented");
         return {};
     }
 };
@@ -2429,7 +2429,7 @@ public:
         _pending.push_back(std::move(s));
 
         // done
-        return {(intptr_t)&_owner, _nextSubmissionId};
+        return {(intptr_t) &_owner, _nextSubmissionId};
     }
 
     void drop(const vk::ArrayProxy<const CommandBuffer> & commandBuffers) {
