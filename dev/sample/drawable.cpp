@@ -92,7 +92,7 @@ void entry(const Options & options) {
         sw.cmdBeginBuiltInRenderPass(c, Swapchain::BeginRenderPassParameters {}.setClearColorF({0.0f, 1.0f, 0.0f, 1.0f})); // clear to green
 
         // enqueue the draw command
-        c.render(dr.compile());
+        c.render(*dr.compile());
 
         // end render pass
         sw.cmdEndBuiltInRenderPass(c);

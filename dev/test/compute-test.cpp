@@ -44,7 +44,7 @@ TEST_CASE("cs-buffer-args") {
     auto q = dev->graphics();
     REQUIRE(q);
     if (auto c = q->begin("cs-buffer-args")) {
-        c.render(ap.compile());
+        c.render(*ap.compile());
         q->submit({c});
     }
     q->waitIdle();

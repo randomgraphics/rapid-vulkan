@@ -215,6 +215,7 @@ SOFTWARE.
 #include <algorithm>
 #include <exception>
 #include <functional>
+#include <memory>
 
 // ---------------------------------------------------------------------------------------------------------------------
 // RVI stands for Rapid Vulkan Implementation. Macros started with this prefix are reserved for internal use.
@@ -1848,7 +1849,7 @@ public:
     Drawable & dp(const ComputePipeline::DispatchParameters &);
 
     /// @brief Create a compat snapshot of the drawable.
-    DrawPack compile() const;
+    std::shared_ptr<const DrawPack> compile() const;
 
 private:
     class Impl;

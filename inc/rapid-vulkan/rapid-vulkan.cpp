@@ -56,17 +56,12 @@ SOFTWARE.
 #endif // RVI_NEED_VMA_IMPL
 
 #include <cmath>
-#include <sstream>
 #include <stdexcept>
 #include <iomanip>
 #include <mutex>
 #include <variant>
-#include <unordered_map>
 #include <list>
-#include <set>
 #include <deque>
-#include <optional>
-#include <memory>
 #include <signal.h>
 #include <inttypes.h>
 
@@ -1879,52 +1874,107 @@ public:
 
 class Drawable::Impl {
 public:
-    Impl(Drawable & o, const ConstructParameters & cp): _owner(o), _pipeline(cp.pipeline) {}
+    Impl(Drawable & o, const ConstructParameters & cp): _owner(o), _pipeline(cp.pipeline) {
+        _pack           = std::make_shared<DrawPack>();
+        _pack->pipeline = _pipeline;
+        _dirty.setAll();
+    }
 
     ~Impl() {}
 
     void clear() {
         _descriptors.clear();
         _constants.clear();
+        _pack.reset();
+        _dirty.setAll();
     }
 
-    void set(DescriptorIdentifier id, vk::ArrayProxy<const BufferView> v) { _descriptors[id].b(v); }
+    void set(DescriptorIdentifier id, vk::ArrayProxy<const BufferView> v) {
+        _descriptors[id].b(v);
+        _dirty.descriptors = true;
+    }
 
-    void set(DescriptorIdentifier id, vk::ArrayProxy<const ImageSampler> v) { _descriptors[id].t(v); }
+    void set(DescriptorIdentifier id, vk::ArrayProxy<const ImageSampler> v) {
+        _descriptors[id].t(v);
+        _dirty.descriptors = true;
+    }
 
     void set(size_t offset, size_t size, const void * data, vk::ShaderStageFlags stages) {
         if (0 == data || 0 == size || !stages) return; // ignore empty data.
         _constants.push_back({stages, (uint32_t) offset});
         _constants.back().value.assign((const uint8_t *) data, (const uint8_t *) data + size);
+        _dirty.constants = true;
     }
 
-    void set(const vk::ArrayProxy<const BufferView> & vertexBuffers) { _vertexBuffers.assign(vertexBuffers.begin(), vertexBuffers.end()); }
+    void set(const vk::ArrayProxy<const BufferView> & vertexBuffers) {
+        if (_pipeline->bindPoint() != vk::PipelineBindPoint::eGraphics) return;
+        _vertexBuffers.assign(vertexBuffers.begin(), vertexBuffers.end());
+        _dirty.graphicsOrDispatch = true;
+    }
 
     void set(const BufferView & ib, vk::IndexType t) {
-        _indexBuffer = ib;
-        _indexType   = t;
+        if (_pipeline->bindPoint() != vk::PipelineBindPoint::eGraphics) return;
+        if (ib == _indexBuffer && t == _indexType) return;
+        _indexBuffer              = ib;
+        _indexType                = t;
+        _dirty.graphicsOrDispatch = true;
     }
 
-    void set(const GraphicsPipeline::DrawParameters & p) { _drawParameters = p; }
+    void set(const GraphicsPipeline::DrawParameters & p) {
+        if (_pipeline->bindPoint() != vk::PipelineBindPoint::eGraphics) return;
+        _drawParameters           = p;
+        _dirty.graphicsOrDispatch = true;
+    }
 
-    void set(const ComputePipeline::DispatchParameters & p) { _dispatchParameters = p; }
+    void set(const ComputePipeline::DispatchParameters & p) {
+        if (_pipeline->bindPoint() != vk::PipelineBindPoint::eCompute) return;
+        _dispatchParameters       = p;
+        _dirty.graphicsOrDispatch = true;
+    }
 
-    DrawPack compile() const {
-        // TODO: cache the compiled pack. Only recompile when the drawable is modified.
-        DrawPack pack;
-        if (!_pipeline) return {};
-        if (!compileDescriptors(pack)) return {};
-        if (!compileConstants(pack)) return {};
-        if (_pipeline->bindPoint() == vk::PipelineBindPoint::eGraphics) {
-            if (!compileGraphics(pack)) return {};
-        } else if (_pipeline->bindPoint() == vk::PipelineBindPoint::eCompute) {
-            if (compileCompute(pack)) return {};
+    std::shared_ptr<DrawPack> compile() const {
+        // if the pipeline is not ready, return a failsafe pack.
+        if (!_pipeline) return failsafe();
+
+        // if the pack is not dirty, return the cached pack.
+        if (!_dirty.all) return _pack;
+
+        if (_dirty.descriptors) {
+            if (!compileDescriptors(*_pack)) return failsafe();
         }
-        pack.pipeline = _pipeline;
-        return pack;
+
+        if (_dirty.constants) {
+            if (!compileConstants(*_pack)) return failsafe();
+        }
+
+        if (_dirty.graphicsOrDispatch) {
+            if (_pipeline->bindPoint() == vk::PipelineBindPoint::eGraphics) {
+                if (!compileGraphics(*_pack)) return failsafe();
+            } else if (_pipeline->bindPoint() == vk::PipelineBindPoint::eCompute) {
+                if (!compileCompute(*_pack)) return failsafe();
+            }
+        }
+
+        // done
+        _dirty.clearAll();
+        return _pack;
     }
 
 private:
+    union DirtyFlags {
+        uint64_t all = 0;
+        struct {
+            bool descriptors        : 1;
+            bool constants          : 1;
+            bool graphicsOrDispatch : 1;
+        };
+
+        void setAll() { all = (uint64_t) -1; }
+
+        void clearAll() { all = 0; }
+    };
+    static_assert(sizeof(DirtyFlags) == sizeof(uint64_t));
+
     Drawable &                                             _owner;
     Ref<const Pipeline>                                    _pipeline;
     std::unordered_map<DescriptorIdentifier, ArgumentImpl> _descriptors;
@@ -1934,8 +1984,15 @@ private:
     vk::IndexType                                          _indexType = vk::IndexType::eUint16;
     GraphicsPipeline::DrawParameters                       _drawParameters;
     ComputePipeline::DispatchParameters                    _dispatchParameters;
+    mutable std::shared_ptr<DrawPack>                      _pack;
+    mutable DirtyFlags                                     _dirty {};
 
 private:
+    static std::shared_ptr<DrawPack> failsafe() {
+        static std::shared_ptr<DrawPack> pack(new DrawPack);
+        return pack;
+    }
+
     Argument * get(DescriptorIdentifier id) { return &_descriptors[id]; }
 
     const Argument::Impl * find(DescriptorIdentifier id) const {
@@ -2031,6 +2088,7 @@ private:
     }
 
     bool compileConstants(DrawPack & pack) const {
+        pack.constants.clear();
         const auto & reflection = _pipeline->reflection();
         for (const auto & kv : reflection.constants) {
             if (kv.second.empty()) continue;
@@ -2079,7 +2137,7 @@ private:
             return false;
         }
         pack.dispatch = _dispatchParameters;
-        return false;
+        return true;
     }
 };
 
@@ -2120,7 +2178,7 @@ auto Drawable::dp(const ComputePipeline::DispatchParameters & v) -> Drawable & {
     _impl->set(v);
     return *this;
 }
-auto Drawable::compile() const -> DrawPack { return _impl->compile(); };
+auto Drawable::compile() const -> std::shared_ptr<const DrawPack> { return _impl->compile(); };
 
 // *********************************************************************************************************************
 // DescriptorPool
@@ -3914,6 +3972,14 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
 // ---------------------------------------------------------------------------------------------------------------------
 //
 Instance::~Instance() {
+#if RAPID_VULKAN_ENABLE_LOADER
+    // This is a hack to ensure that all instance function pointers are valid,
+    // specially when there are multiple instances
+    if (_instance) {
+        // load all function pointers.
+        VULKAN_HPP_DEFAULT_DISPATCHER.init(_instance);
+    }
+#endif
     if (_debugReport) {
         _instance.destroyDebugReportCallbackEXT(_debugReport);
         _debugReport = VK_NULL_HANDLE;
