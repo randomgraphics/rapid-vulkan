@@ -533,16 +533,26 @@ public:
     /// @brief Get the reference count of the object.
     uint64_t refCount() const { return _ref; }
 
-protected:
-    Root(const ConstructParameters & params): _name("<no-name>"s) { setName(params.name); }
+    /// @brief Get the total number of instances of this class.
+    static uint64_t instanceCount() { return _instanceCount; }
 
-    virtual void onNameChanged(const std::string & oldName) { (void) oldName; }
+protected:
+    Root(const ConstructParameters & params): _name("<no-name>"s) {
+        ++_instanceCount;
+        setName(params.name);
+    }
+
+    virtual void onNameChanged(const std::string & oldName) {
+        (void) oldName;
+        --_instanceCount;
+    }
 
 private:
     friend class RefBase;
-    std::string                   _name;
-    mutable std::atomic<uint64_t> _ref               = 0;
-    bool                          _noDeleteOnZeroRef = false;
+    std::string                         _name;
+    mutable std::atomic<uint64_t>       _ref               = 0;
+    bool                                _noDeleteOnZeroRef = false;
+    inline static std::atomic<uint64_t> _instanceCount     = 0;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
