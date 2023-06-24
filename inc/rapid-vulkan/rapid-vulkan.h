@@ -430,7 +430,7 @@ inline bool cmdBeginDebugLabel(vk::CommandBuffer cmd, const char * name, const s
     return true;
 }
 
-inline void endDebugLabel(vk::CommandBuffer cmd) {
+inline void cmdEndDebugLabel(vk::CommandBuffer cmd) {
 #if VULKAN_HPP_DISPATCH_LOADER_DYNAMIC == 1
     if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdEndDebugUtilsLabelEXT) return;
 #else

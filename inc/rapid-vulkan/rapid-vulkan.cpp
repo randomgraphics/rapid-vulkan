@@ -2312,7 +2312,6 @@ private:
     typedef std::map<DescriptorPoolKey, DescriptorPool> DescriptorPoolMap;
 
     CommandQueue &         _queue;
-    uint32_t               _family {};
     std::string            _name;
     vk::CommandBufferLevel _level {};
     vk::CommandPool        _pool; // one pool for each command buffer for simplicity and for multithread safety.
