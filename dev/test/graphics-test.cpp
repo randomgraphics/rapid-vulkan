@@ -33,8 +33,7 @@ TEST_CASE("clear-screen") {
         sw.cmdBeginBuiltInRenderPass(c, bp);
         if (drawTriangle) p.cmdDraw(c, GraphicsPipeline::DrawParameters {}.setNonIndexed(3)); // draw a full screen blue triangle.
         sw.cmdEndBuiltInRenderPass(c);
-        q.submit({c});
-        q.wait();
+        q.submit({c}).wait();
     };
 
     // case 1. clear only.
@@ -85,10 +84,10 @@ TEST_CASE("vertex-buffer") {
     auto f = sw.currentFrame();
     auto c = q.begin("vertex-buffer-test");
     sw.cmdBeginBuiltInRenderPass(c, Swapchain::BeginRenderPassParameters {}.setClearColorF({0.0f, 1.0f, 0.0f, 1.0f})); // clear to green
-    p.cmdDraw(c, GraphicsPipeline::DrawParameters {}.setNonIndexed(3).setVertexBuffers({{vb}}));                       // then draw a blue triangle.
+    c.handle().bindVertexBuffers(0, {vb.handle()}, {0});                                                               // bind the vertex buffer
+    p.cmdDraw(c, GraphicsPipeline::DrawParameters {}.setNonIndexed(3));                                                // then draw a blue triangle.
     sw.cmdEndBuiltInRenderPass(c);
-    q.submit({c, {}, {f.imageAvailable}, {f.renderFinished}});
-    q.wait();
+    q.submit({c, {}, {f.imageAvailable}, {f.renderFinished}}).wait();
     rdc.end();
 
     // read content of back buffer.

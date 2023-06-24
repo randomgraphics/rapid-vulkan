@@ -12,6 +12,6 @@ int main() {
         p.cmdDispatch(c, {1, 1, 1});
         q.submit({c});
     }
-    q.wait();
+    q.waitIdle();
     return 0;
 }

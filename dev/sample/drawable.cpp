@@ -1,5 +1,5 @@
 /*
-    This file demonstrates the basic usage of feeding data to graphics pipeline via ArgumentPack class.
+    This file demonstrates the basic usage of the Drawable class.
 */
 #include "../rv.h"
 #include <iostream>
@@ -38,7 +38,7 @@ struct Options {
 };
 
 void entry(const Options & options) {
-    // Standard boilerplate of creating instance, device, swapchain, etc. It is basicaly the same as simple-triangle.cpp.
+    // Standard boilerplate of creating instance, device, swapchain, etc. It is basically the same as simple-triangle.cpp.
     using namespace rapid_vulkan;
     auto w        = uint32_t(1280);
     auto h        = uint32_t(720);
@@ -58,21 +58,20 @@ void entry(const Options & options) {
                                          .dynamicViewport()
                                          .addVertexAttribute(0, 0, vk::Format::eR32G32Sfloat)
                                          .addVertexBuffer(2 * sizeof(float)));
+    p.doNotDeleteOnZeroRef(); // Make the stack-allocated pipeline instance compatible with Ref<>
 
-    // This part is what this sample is about. We create 2 uniform buffers and bind them to the pipeline via ArgumentPack.
-    auto u0   = Buffer(Buffer::ConstructParameters {{"ub0"}, gi}.setUniform().setSize(sizeof(float) * 2));
-    auto u1   = Buffer(Buffer::ConstructParameters {{"ub1"}, gi}.setUniform().setSize(sizeof(float) * 3));
-    auto args = ArgumentPack({});
-    args.b({0, 0}, {{u0.handle()}}).b({0, 1}, {{u1.handle()}});
-
-    // We also need a vertex buffer to draw the triangle.
+    // This part is what this sample is about. We create some buffers and bind them to the drawable.
+    auto u0 = Buffer(Buffer::ConstructParameters {{"ub0"}, gi}.setUniform().setSize(sizeof(float) * 2));
+    auto u1 = Buffer(Buffer::ConstructParameters {{"ub1"}, gi}.setUniform().setSize(sizeof(float) * 3));
     auto bc = Buffer::SetContentParameters {}.setQueue(*device.graphics());
     auto vb = Buffer(Buffer::ConstructParameters {{"vb"}, gi}.setVertex().setSize(sizeof(float) * 2 * 3));
     vb.setContent(bc.setData<float>({-0.5f, -0.5f, 0.5f, -0.5f, 0.5f, 0.5f}));
+    auto dr = Drawable({{}, &p});
+    dr.b({0, 0}, {{u0.handle()}}).b({0, 1}, {{u1.handle()}}).v({{vb.handle()}}).dp(GraphicsPipeline::DrawParameters {}.setNonIndexed(3));
 
     glfw.show();
     for (;;) {
-        // Standard boilerplate of rendering a frame. It is basicaly the same as simple-triangle.cpp.
+        // Standard boilerplate of rendering a frame. It is basically the same as simple-triangle.cpp.
         if (options.headless) {
             if (sw.currentFrame().index > 10) break; // render 10 frames in headless mode.
             std::cout << "Frame " << sw.currentFrame().index << std::endl;
@@ -92,11 +91,8 @@ void entry(const Options & options) {
         // begin the render pass
         sw.cmdBeginBuiltInRenderPass(c, Swapchain::BeginRenderPassParameters {}.setClearColorF({0.0f, 1.0f, 0.0f, 1.0f})); // clear to green
 
-        // bind the arguments to the pipeline
-        p.cmdBind(c, args);
-
-        // draw the triangle using the vertex buffer we created.
-        p.cmdDraw(c, GraphicsPipeline::DrawParameters {}.setVertexBuffers({{vb.handle()}}).setNonIndexed(3));
+        // enqueue the draw command
+        c.render(*dr.compile());
 
         // end render pass
         sw.cmdEndBuiltInRenderPass(c);

@@ -56,15 +56,14 @@ SOFTWARE.
 #endif // RVI_NEED_VMA_IMPL
 
 #include <cmath>
-#include <sstream>
 #include <stdexcept>
 #include <iomanip>
 #include <mutex>
 #include <variant>
-#include <unordered_map>
 #include <list>
-#include <set>
+#include <deque>
 #include <signal.h>
+#include <inttypes.h>
 
 #if RAPID_VULKAN_ENABLE_LOADER
 // implement the default dynamic dispatcher storage. Has to use this macro outside of any namespace.
@@ -120,242 +119,6 @@ void threadSafeWaitForDeviceIdle(vk::Device device) {
     auto              lock = std::lock_guard {mutex};
     device.waitIdle();
 }
-
-// *********************************************************************************************************************
-// Command Buffer/Pool/Queue
-// *********************************************************************************************************************
-
-class CommandBuffer {
-public:
-    enum State {
-        RECORDING,
-        ENDED,
-        EXECUTING,
-        FINISHED,
-    };
-
-    std::list<CommandBuffer *>::iterator pending = {};
-
-    CommandBuffer(const GlobalInfo * gi, uint32_t family, const std::string & name_, vk::CommandBufferLevel level): _gi(gi), _name(name_) {
-        RVI_ASSERT(_gi);
-        _pool = _gi->device.createCommandPool(vk::CommandPoolCreateInfo().setQueueFamilyIndex(family), _gi->allocator);
-
-        vk::CommandBufferAllocateInfo info;
-        info.commandPool        = _pool;
-        info.level              = level;
-        info.commandBufferCount = 1;
-        _handle                 = _gi->device.allocateCommandBuffers(info)[0];
-        _level                  = level;
-        setVkObjectName(_gi->device, _handle, name_);
-        _handle.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
-    }
-
-    virtual ~CommandBuffer() {
-        _gi->safeDestroy(_handle, _pool);
-        _gi->safeDestroy(_semaphore);
-        _gi->safeDestroy(_pool);
-    }
-
-    const GlobalInfo * gi() const { return _gi; }
-
-    const std::string & name() const { return _name; }
-
-    vk::CommandBuffer handle() const { return _handle; }
-
-    State state() const { return _state; }
-
-    bool submit(vk::Queue queue, const CommandQueue::SubmitParameters & sp) {
-        // verify the command buffer state
-        if (_state == RECORDING) {
-            // end the command buffer
-            _handle.end();
-            _state = ENDED;
-        } else if (_state != ENDED) {
-            RVI_LOGE("[ERROR] Command buffer %s is not in RECORDING or ENDED state!", _name.c_str());
-            return false;
-        }
-
-        // setup signal fence
-        RVI_ASSERT(!_builtInSubmissionFence);
-        auto fence = sp.signalFence;
-        if (!fence) {
-            _builtInSubmissionFence = _gi->device.createFenceUnique({});
-            setVkObjectName(_gi->device, _builtInSubmissionFence.get(), _name);
-            fence = _builtInSubmissionFence.get();
-        }
-
-        // setup signal semaphore
-        RVI_ASSERT(!_semaphore);
-        auto semaphore = _gi->device.createSemaphoreUnique({});
-        setVkObjectName(_gi->device, semaphore.get(), _name);
-        std::vector<vk::Semaphore> signalSemaphores(sp.signalSemaphores.begin(), sp.signalSemaphores.end());
-        signalSemaphores.push_back(semaphore.get());
-
-        // setup wait semaphore flag array
-        std::vector<vk::PipelineStageFlags> flags(sp.waitSemaphores.size(), vk::PipelineStageFlagBits::eBottomOfPipe);
-
-        // submit the command buffer
-        vk::SubmitInfo si;
-        si.setWaitSemaphores(sp.waitSemaphores);
-        si.setSignalSemaphores(signalSemaphores);
-        si.setCommandBufferCount(1);
-        si.setPCommandBuffers(&_handle);
-        si.setPWaitDstStageMask(flags.data());
-        queue.submit({si}, fence);
-
-        // done
-        _state          = EXECUTING;
-        _effectiveFence = fence; // store the fence handle (could be user provided or built-in)
-        _semaphore      = semaphore.release();
-        return true;
-    }
-
-    // wait for the command buffer to finish executing on GPU.
-    void finish() {
-        if (EXECUTING == _state) {
-            RVI_ASSERT(_effectiveFence);
-            auto result = _gi->device.waitForFences({_effectiveFence}, true, UINT64_MAX);
-            if (result != vk::Result::eSuccess) { RVI_LOGE("[ERROR] Command buffer %s failed to wait for fence!", _name.c_str()); }
-            _state = FINISHED;
-        }
-    }
-
-    /// Only called on pending command buffers and unconditionally mark it as finished.
-    /// Should only be called on a pending or already finished command buffer.
-    void setFinished() {
-        RVI_ASSERT(_state == EXECUTING || _state == FINISHED);
-        _state = FINISHED;
-    }
-
-private:
-    const GlobalInfo *     _gi;
-    std::string            _name;
-    vk::CommandPool        _pool; // one pool for each command buffer for simplicity for now.
-    vk::CommandBuffer      _handle {};
-    vk::CommandBufferLevel _level = vk::CommandBufferLevel::ePrimary;
-    State                  _state = RECORDING;
-    vk::UniqueFence        _builtInSubmissionFence;
-    vk::Fence              _effectiveFence = nullptr;
-    vk::Semaphore          _semaphore      = nullptr;
-};
-
-class CommandQueue::Impl {
-public:
-    Impl(const ConstructParameters & params) {
-        _desc.gi     = params.gi;
-        _desc.family = params.family;
-        _desc.index  = params.index;
-        _desc.handle = params.gi->device.getQueue(params.family, params.index);
-    }
-
-    ~Impl() {}
-
-    const Desc & desc() const { return _desc; }
-
-    vk::CommandBuffer begin(const char * name, vk::CommandBufferLevel level) {
-        auto lock = std::lock_guard {_mutex};
-        auto p    = std::make_unique<CommandBuffer>(_desc.gi, _desc.family, name, level);
-        auto h    = p->handle();
-        _all[h]   = std::move(p);
-        return h;
-    }
-
-    void submit(const SubmitParameters & sp) {
-        auto lock = std::lock_guard {_mutex};
-
-        // check the incoming pointer
-        auto p = promote(sp.commands);
-        RVI_REQUIRE(p, "The submitted command buffer is not created by this queue!");
-
-        RVI_REQUIRE(p->submit(_desc.handle, sp));
-
-        // Done. add the command buffer to the pending list.
-        p->pending = _pendings.insert(_pendings.end(), p);
-    }
-
-    void wait(vk::CommandBuffer cb) {
-        auto lock = std::lock_guard {_mutex};
-        if (!cb) {
-            waitIdle();
-            return;
-        }
-        auto p = promote(cb, true); // could be null if the command buffer is already finished.
-        if (!p) return;
-        finish(p);
-    }
-
-    void setName(const std::string & name) {
-        auto lock = std::lock_guard {_mutex};
-        setVkObjectName(_desc.gi->device, _desc.handle, name.c_str());
-    }
-
-private:
-    typedef std::unordered_map<VkCommandBuffer, std::unique_ptr<CommandBuffer>> CommandBufferSet;
-    typedef std::list<CommandBuffer *>                                          PendingList;
-
-private:
-    std::mutex       _mutex;
-    CommandBufferSet _all;      /// All command buffers ever created. This is used to validate the incoming command buffer pointers.
-    PendingList      _pendings; /// Command buffers that are currently being executed, sorted in order of submission.
-    Desc             _desc;
-
-private:
-    CommandBuffer * promote(vk::CommandBuffer cb, bool expectedNull = false) const {
-        if (!cb) return nullptr;
-        auto it = _all.find(cb);
-        if (it == _all.end()) {
-            if (!expectedNull) RVI_LOGE("Invalid command buffer handle.");
-            return nullptr;
-        }
-        return it->second.get();
-    }
-
-    void finish(CommandBuffer * p) {
-        if (p) {
-            p->finish();
-            if (CommandBuffer::FINISHED != p->state()) {
-                RVI_LOGE("Can't finish command buffer %s: buffer was not in EXECUTING or FINISHED state.", p->name().c_str());
-                return;
-            }
-            RAPID_VULKAN_ASSERT(std::find(_pendings.begin(), _pendings.end(), p) != _pendings.end());
-        }
-
-        // Mark this command buffer and all command buffers submitted before it as finished.
-        auto end = p ? p->pending : _pendings.end();
-        if (p) end++;
-        for (auto iter = _pendings.begin(); iter != end; ++iter) {
-            auto cb = *iter;
-            cb->setFinished();
-            // TODO: move the command buffer to the finished list.
-            // _finished.push_back(std::move(*iter));
-
-            // Remove from all list, which will automatically delete the command buffer instance.
-            _all.erase(_all.find(cb->handle()));
-        }
-        // Then remove them from the pending list.
-        _pendings.erase(_pendings.begin(), end);
-    }
-
-    void waitIdle() {
-        try {
-            _desc.handle.waitIdle();
-        } catch (vk::SystemError & error) { RVI_LOGE("%s", error.what()); }
-
-        // then mark all command buffers as finished.
-        finish(nullptr);
-    }
-};
-
-CommandQueue::CommandQueue(const ConstructParameters & params): Root(params), _impl(new Impl(params)) { _impl->setName(name()); }
-CommandQueue::~CommandQueue() {
-    delete _impl;
-    _impl = nullptr;
-}
-auto CommandQueue::desc() const -> const Desc & { return _impl->desc(); }
-auto CommandQueue::begin(const char * purpose, vk::CommandBufferLevel level) -> vk::CommandBuffer { return _impl->begin(purpose, level); }
-void CommandQueue::submit(const SubmitParameters & sp) { _impl->submit(sp); }
-void CommandQueue::wait(vk::CommandBuffer cb) { _impl->wait(cb); }
-void CommandQueue::onNameChanged(const std::string &) { _impl->setName(name()); }
 
 // *********************************************************************************************************************
 // Buffer
@@ -485,8 +248,7 @@ public:
         auto queue = CommandQueue({{_owner.name()}, _gi, params.queueFamily, params.queueIndex});
         if (auto cb = queue.begin(_owner.name().c_str(), vk::CommandBufferLevel::ePrimary)) {
             staging.cmdCopy({cb, _owner.handle(), _desc.size, dstOffset, 0, size});
-            queue.submit({cb});
-            queue.wait(cb);
+            queue.wait(queue.submit({{cb}}));
         }
     }
 
@@ -504,8 +266,7 @@ public:
         auto queue   = CommandQueue({{_owner.name()}, _gi, params.queueFamily, params.queueIndex});
         if (auto cb = queue.begin(_owner.name().c_str(), vk::CommandBufferLevel::ePrimary)) {
             cmdCopy({cb, staging.handle(), size, 0, offset});
-            queue.submit({cb});
-            queue.wait(cb);
+            queue.wait(queue.submit({cb}));
         } else {
             return {};
         }
@@ -563,8 +324,8 @@ public:
 
     void onNameChanged() {
         const auto & name = _owner.name();
-        if (_handle) setVkObjectName(_gi->device, _handle, name);
-        if (_memory) setVkObjectName(_gi->device, _memory, name);
+        if (_handle) setVkHandleName(_gi->device, _handle, name);
+        if (_memory) setVkHandleName(_gi->device, _memory, name);
 #if RAPID_VULKAN_ENABLE_VMA
         if (_allocation) vmaSetAllocationName(_gi->vmaAllocator, _allocation, name.c_str());
 #endif
@@ -584,6 +345,16 @@ private:
     bool imported() const { return _desc.handle && !_handle; }
 };
 
+Buffer::SetContentParameters & Buffer::SetContentParameters::setQueue(const CommandQueue & q) {
+    queueFamily = q.family();
+    queueIndex  = q.index();
+    return *this;
+}
+Buffer::ReadParameters & Buffer::ReadParameters::setQueue(const CommandQueue & q) {
+    queueFamily = q.family();
+    queueIndex  = q.index();
+    return *this;
+}
 Buffer::Buffer(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this, cp); }
 Buffer::Buffer(const ImportParameters & cp): Root(cp) { _impl = new Impl(*this, cp); }
 Buffer::~Buffer() {
@@ -934,7 +705,7 @@ public:
         // vci.components       = {VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_B, VK_COMPONENT_SWIZZLE_A};
         // vci.subresourceRange = {aspect, 0, ci.mipLevels, 0, ci.arrayLayers};
         // RVI_VK_REQUIRE(vkCreateImageView(g.device, &vci, g.allocator, &view));
-        // setVkObjectName(g.device, view, name);
+        // setVkHandleName(g.device, view, name);
     }
 
     Impl(Image & o, const ImportParameters & ip): _owner(o), _gi(ip.gi) {
@@ -1031,9 +802,8 @@ public:
                 .i(_desc.handle, vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead,
                    vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, r)
                 .cmdWrite(c);
-            c.copyBufferToImage(staging, _desc.handle, vk::ImageLayout::eTransferDstOptimal, {copyRegion});
-            q.submit({c});
-            q.wait(c);
+            c.handle().copyBufferToImage(staging, _desc.handle, vk::ImageLayout::eTransferDstOptimal, {copyRegion});
+            q.wait(q.submit({{c}}));
         }
     }
 
@@ -1083,9 +853,8 @@ public:
                 .i(_desc.handle, vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead,
                    vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferSrcOptimal, r)
                 .cmdWrite(c);
-            c.copyImageToBuffer(_desc.handle, vk::ImageLayout::eTransferSrcOptimal, staging, copyRegions);
-            q.submit({c});
-            q.wait(c);
+            c.handle().copyImageToBuffer(_desc.handle, vk::ImageLayout::eTransferSrcOptimal, staging, copyRegions);
+            q.wait(q.submit({c}));
         }
 
         // read data out of the staging buffer
@@ -1100,8 +869,8 @@ public:
 
     void onNameChanged() {
         const auto & name = _owner.name();
-        if (_handle) setVkObjectName(_gi->device, _handle, name);
-        if (_memory) setVkObjectName(_gi->device, _memory, name);
+        if (_handle) setVkHandleName(_gi->device, _handle, name);
+        if (_memory) setVkHandleName(_gi->device, _memory, name);
 #if RAPID_VULKAN_ENABLE_VMA
         if (_allocation) vmaSetAllocationName(_gi->vmaAllocator, _allocation, name.c_str());
         (void) _allocation; // silence unused private member warning.
@@ -1185,6 +954,16 @@ private:
     }
 };
 
+Image::SetContentParameters & Image::SetContentParameters::setQueue(const CommandQueue & queue) {
+    queueFamily = queue.family();
+    queueIndex  = queue.index();
+    return *this;
+}
+Image::ReadContentParameters & Image::ReadContentParameters::setQueue(const CommandQueue & queue) {
+    queueFamily = queue.family();
+    queueIndex  = queue.index();
+    return *this;
+}
 vk::ImageAspectFlags Image::determineImageAspect(vk::Format format, vk::ImageAspectFlags aspect) {
     switch (format) {
     // depth only format
@@ -1213,7 +992,6 @@ vk::ImageAspectFlags Image::determineImageAspect(vk::Format format, vk::ImageAsp
         return vk::ImageAspectFlagBits::eColor;
     }
 }
-
 Image::Image(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this, cp); }
 Image::Image(const ImportParameters & cp): Root(cp) { _impl = new Impl(*this, cp); }
 Image::~Image() {
@@ -1365,7 +1143,7 @@ void RenderPass::cmdNext(vk::CommandBuffer cb) const { cb.nextSubpass(vk::Subpas
 void RenderPass::cmdEnd(vk::CommandBuffer cb) const { cb.endRenderPass(); }
 
 void RenderPass::onNameChanged(const std::string &) {
-    if (_handle) setVkObjectName(_gi->device, _handle, name());
+    if (_handle) setVkHandleName(_gi->device, _handle, name());
 }
 
 // *********************************************************************************************************************
@@ -1443,344 +1221,12 @@ Framebuffer::Framebuffer(const ConstructParameters & cp): Root(cp), _gi(cp.gi) {
 Framebuffer::~Framebuffer() { _gi->safeDestroy(_handle); }
 
 void Framebuffer::onNameChanged(const std::string &) {
-    if (_handle) setVkObjectName(_gi->device, _handle, name());
+    if (_handle) setVkHandleName(_gi->device, _handle, name());
 }
-
-// *********************************************************************************************************************
-// Argument and ArgumentPack
-// *********************************************************************************************************************
-
-class Argument::Impl {
-public:
-    struct BufferArgs {
-        std::vector<vk::DescriptorBufferInfo> infos;
-        std::vector<BufferView>               buffers;
-
-        size_t size() const {
-            RAPID_VULKAN_ASSERT(infos.size() == buffers.size());
-            return infos.size();
-        }
-    };
-
-    struct ImageArgs {
-        enum Type {
-            INVALID = 0,
-            IMAGE,
-            SAMPLER,
-            COMBINED,
-        };
-        std::vector<vk::DescriptorImageInfo> infos;
-        std::vector<ImageSampler>            images;
-        Type                                 type = INVALID; // all args must be of the same type.
-
-        size_t size() const {
-            RAPID_VULKAN_ASSERT(infos.size() == images.size());
-            return infos.size();
-        }
-    };
-
-    typedef std::variant<std::monostate, BufferArgs, ImageArgs> Value;
-
-    Impl() {
-        RAPID_VULKAN_ASSERT(_value.index() == 0); // should start with monostate.
-    }
-
-    ~Impl() {}
-
-    void b(vk::ArrayProxy<const BufferView> v) {
-        auto sameValue = [&]() {
-            auto p = std::get_if<BufferArgs>(&_value);
-            if (!p) return false;
-            if (p->size() != v.size()) return false;
-            for (size_t i = 0; i < v.size(); ++i) {
-                if (p->buffers[i] != v.data()[i]) return false;
-            }
-            return true;
-        };
-        if (sameValue()) return;
-        _value      = BufferArgs();
-        auto & args = std::get<BufferArgs>(_value);
-        args.buffers.assign(v.begin(), v.end());
-        args.infos.resize(args.buffers.size());
-        for (size_t i = 0; i < args.buffers.size(); ++i) {
-            args.infos[i].buffer = args.buffers[i].buffer;
-            args.infos[i].offset = args.buffers[i].offset;
-            args.infos[i].range  = args.buffers[i].size;
-        }
-        _timestamp.fetch_add(1);
-    }
-
-    void i(vk::ArrayProxy<const ImageSampler> v) {
-        auto sameValue = [&]() {
-            auto p = std::get_if<ImageArgs>(&_value);
-            if (!p) return false;
-            if (p->size() != v.size()) return false;
-            for (size_t i = 0; i < v.size(); ++i) {
-                if (p->images[i] != v.data()[i]) return false;
-            }
-            return true;
-        };
-        if (sameValue()) return;
-        _value      = ImageArgs();
-        auto & args = std::get<ImageArgs>(_value);
-        args.images.assign(v.begin(), v.end());
-        args.infos.resize(args.images.size());
-        args.type = ImageArgs::INVALID;
-        for (size_t i = 0; i < args.images.size(); ++i) {
-            auto & info  = args.infos[i];
-            auto & image = args.images[i];
-            info.sampler = image.sampler;
-            ImageArgs::Type t;
-            if (image.imageView) {
-                info.imageLayout = image.imageLayout;
-                info.imageView   = image.imageView;
-                t                = info.sampler ? ImageArgs::COMBINED : ImageArgs::IMAGE;
-            } else {
-                info.imageLayout = vk::ImageLayout::eUndefined;
-                info.imageView   = nullptr;
-                t                = info.sampler ? ImageArgs::SAMPLER : ImageArgs::INVALID;
-            }
-            if (0 == i) {
-                args.type = t;
-            } else if (args.type != t) {
-                RVI_LOGE("All images are expected of same type. But image %zu has a different type than the first image.", i);
-                args.type = ImageArgs::INVALID;
-            }
-        }
-        _timestamp.fetch_add(1);
-    }
-
-    // void c(size_t offset, size_t size, const void * data) {
-    //     auto p = std::get_if<Constants>(&_value);
-    //     if (p) {
-    //         auto sameValue = [&]() {
-    //             if (p->size() != (offset + size)) return false;
-    //             return memcmp(p->data() + offset, data, size) == 0;
-    //         };
-    //         if (sameValue()) return;
-    //         memcpy(p->data() + offset, data, size);
-    //     } else {
-    //         std::vector<uint8_t> v(offset + size, 0);
-    //         memcpy(v.data() + offset, data, size);
-    //         _value = std::move(v);
-    //     }
-    //     _timestamp.fetch_add(1);
-    // }
-
-    const Value & value() const { return _value; }
-
-    int64_t modificationTimestamp() const { return _timestamp; }
-
-    // return number of descriptors in the argument.
-    size_t count() const {
-        auto index = _value.index();
-        if (1 == index)
-            return std::get<BufferArgs>(_value).infos.size();
-        else if (2 == index)
-            return std::get<ImageArgs>(_value).infos.size();
-        else
-            return 0;
-    }
-
-    bool typeCompatibleWith(vk::DescriptorType t) const {
-        auto index = _value.index();
-        if (1 == index) {
-            return t == vk::DescriptorType::eStorageBuffer || t == vk::DescriptorType::eUniformBuffer || t == vk::DescriptorType::eUniformBufferDynamic ||
-                   t == vk::DescriptorType::eStorageBufferDynamic;
-        } else if (2 == index) {
-            auto & args = std::get<ImageArgs>(_value);
-            switch (args.type) {
-            case ImageArgs::SAMPLER:
-                return t == vk::DescriptorType::eSampler;
-            case ImageArgs::IMAGE:
-                return t == vk::DescriptorType::eSampledImage || t == vk::DescriptorType::eStorageImage || t == vk::DescriptorType::eInputAttachment;
-            case ImageArgs::COMBINED:
-                return t == vk::DescriptorType::eCombinedImageSampler;
-            default:
-                return false;
-            }
-        } else {
-            return false;
-        }
-    }
-
-    const char * type() const {
-        auto index = _value.index();
-        if (1 == index)
-            return "Buffer";
-        else if (2 == index) {
-            auto & args = std::get<ImageArgs>(_value);
-            switch (args.type) {
-            case ImageArgs::IMAGE:
-                return "Image";
-            case ImageArgs::SAMPLER:
-                return "Sampler";
-            case ImageArgs::COMBINED:
-                return "Combined";
-            default:
-                return "<InvalidImageSampler>";
-            }
-        } else
-            return "<None>";
-    }
-
-private:
-    Value                _value;
-    std::atomic<int64_t> _timestamp = 0;
-};
-
-Argument::Argument(): _impl(new Impl()) {}
-Argument::~Argument() {
-    delete _impl;
-    _impl = nullptr;
-}
-Argument & Argument::b(vk::ArrayProxy<const BufferView> v) {
-    _impl->b(v);
-    return *this;
-}
-Argument & Argument::i(vk::ArrayProxy<const ImageSampler> v) {
-    _impl->i(v);
-    return *this;
-}
-
-class ArgumentImpl : public Argument {
-public:
-    ArgumentImpl() {}
-    ~ArgumentImpl() {}
-};
-
-class ArgumentPack::Impl {
-public:
-    Impl(ArgumentPack &) {}
-
-    ~Impl() {}
-
-    void clear() {
-        _descriptors.clear();
-        _constants.clear();
-    }
-
-    void set(DescriptorIdentifier id, vk::ArrayProxy<const BufferView> v) { _descriptors[id].b(v); }
-
-    void set(DescriptorIdentifier id, vk::ArrayProxy<const ImageSampler> v) { _descriptors[id].i(v); }
-
-    void set(size_t offset, size_t size, const void * data, vk::ShaderStageFlags stages) {
-        if (0 == data || 0 == size || !stages) return; // ignore empty data.
-        _constants.push_back({stages, (uint32_t) offset});
-        _constants.back().value.assign((const uint8_t *) data, (const uint8_t *) data + size);
-    }
-
-    Argument * get(DescriptorIdentifier id) { return &_descriptors[id]; }
-
-    const Argument * find(DescriptorIdentifier id) const {
-        auto iter = _descriptors.find(id);
-        return iter == _descriptors.end() ? nullptr : &iter->second;
-    }
-
-    std::vector<std::tuple<vk::PushConstantRange, const void *>> getConstant(vk::ShaderStageFlags stages, uint32_t begin, uint32_t end) const {
-        if (!stages) return {};
-        if (begin >= end) return {};
-        std::vector<std::tuple<vk::PushConstantRange, const void *>> v;
-        for (auto & c : _constants) {
-            vk::PushConstantRange range {};
-            range.stageFlags = c.stages & stages;
-            if (!range.stageFlags) continue;
-            range.offset = std::max(c.offset, begin);
-            end          = std::min((uint32_t) (c.offset + c.value.size()), end);
-            if (range.offset >= end) continue;
-            range.size = end - range.offset;
-            v.push_back({range, c.value.data() + range.offset - c.offset});
-        }
-        return v;
-    }
-
-private:
-    struct ConstantArgument {
-        vk::ShaderStageFlags stages {};
-        uint32_t             offset {};
-        std::vector<uint8_t> value {};
-    };
-
-    std::unordered_map<DescriptorIdentifier, ArgumentImpl> _descriptors;
-    std::vector<ConstantArgument>                          _constants;
-};
-
-ArgumentPack::ArgumentPack(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this); }
-ArgumentPack::~ArgumentPack() {
-    delete _impl;
-    _impl = nullptr;
-}
-auto ArgumentPack::clear() -> ArgumentPack & {
-    _impl->clear();
-    return *this;
-}
-auto ArgumentPack::b(DescriptorIdentifier id, vk::ArrayProxy<const BufferView> v) -> ArgumentPack & {
-    _impl->set(id, v);
-    return *this;
-}
-auto ArgumentPack::i(DescriptorIdentifier id, vk::ArrayProxy<const ImageSampler> v) -> ArgumentPack & {
-    _impl->set(id, v);
-    return *this;
-}
-auto ArgumentPack::c(size_t offset, size_t size, const void * data, vk::ShaderStageFlags stages) -> ArgumentPack & {
-    _impl->set(offset, size, data, stages);
-    return *this;
-}
-auto ArgumentPack::get(DescriptorIdentifier id) -> Argument * { return _impl->get(id); }
-auto ArgumentPack::find(DescriptorIdentifier id) const -> const Argument * { return _impl->find(id); }
 
 // *********************************************************************************************************************
 // Pipeline Reflection
 // *********************************************************************************************************************
-
-/// A utility class that describes parameter layout of a pipeline object.
-struct PipelineReflection {
-    /// @brief Represents one descriptor or descriptor array.
-    struct Descriptor {
-        /// @brief names of the shader variable.
-        /// The whole structure is considered empty/invalid, if names set is empty.
-        std::set<std::string> names;
-
-        /// @brief The descriptor binding information.
-        /// If the descriptor count is empty, then the whole structure is considered empty/invalid.
-        vk::DescriptorSetLayoutBinding binding;
-
-        bool empty() const { return names.empty() || 0 == binding.descriptorCount; }
-    };
-
-    /// Collection of descriptors in one set.
-    typedef std::vector<Descriptor> DescriptorSet;
-
-    /// Collection of descriptor sets indexed by the set index.
-    typedef std::vector<DescriptorSet> DescriptorLayout;
-
-    struct Constant {
-        uint32_t begin = (uint32_t) -1;
-        uint32_t end   = 0;
-        // TODO: add push constant name information.
-
-        bool empty() const { return begin >= end; }
-    };
-
-    /// Collection of push constants for each shader stage.
-    typedef std::map<vk::ShaderStageFlagBits, Constant> ConstantLayout;
-
-    /// Properties of vertex shader input.
-    struct VertexShaderInput {
-        vk::Format  format = vk::Format::eUndefined;
-        std::string shaderVariable; ///< name of the shader variable.
-    };
-
-    /// Collection of vertex shader input. Key is input location.
-    typedef std::map<uint32_t, VertexShaderInput> VertexLayout;
-
-    std::string      name; ///< name of the program that this reflect is from. this field is for logging and debugging.
-    DescriptorLayout descriptors;
-    ConstantLayout   constants;
-    VertexLayout     vertex;
-
-    PipelineReflection() {}
-};
 
 template<typename T, typename FUNC, typename... ARGS>
 static std::vector<T *> enumerateShaderVariables(SpvReflectShaderModule & module, FUNC func, ARGS... args) {
@@ -1953,10 +1399,6 @@ public:
 
     const PipelineReflection & reflection() const;
 
-    /// @brief Bind argument pack to the command buffer
-    /// After this method succeeded (returns true), it is ready to bind issue draw/dispatch commands.
-    bool cmdBind(vk::CommandBuffer, vk::PipelineBindPoint, const ArgumentPack &) const;
-
 protected:
     void onNameChanged(const std::string &) override;
 
@@ -1974,35 +1416,15 @@ public:
         _gi         = shaders.front()->gi();
         _reflection = reflectShaders(owner.name(), shaders);
 
-        // create descriptor set
-        _sets.resize(_reflection.descriptors.size());
-        for (uint32_t s = 0; s < _sets.size(); ++s) {
-            // go through all descriptors in this set. build variable and binding arrays.
-            auto & bindings = _sets[s].bindings;
-            auto   sizesMap = std::map<vk::DescriptorType, uint32_t>();
-            bindings.reserve(_reflection.descriptors[s].size());
-            for (uint32_t i = 0; i < _reflection.descriptors[s].size(); ++i) {
-                const auto & d = _reflection.descriptors[s][i];
+        // create descriptor set layouts
+        _setLayouts.resize(_reflection.descriptors.size());
+        for (uint32_t s = 0; s < _setLayouts.size(); ++s) {
+            std::vector<vk::DescriptorSetLayoutBinding> bindings;
+            for (const auto & d : _reflection.descriptors[s]) {
                 if (d.empty()) continue; // skip empty descriptor
                 bindings.push_back(d.binding);
-                sizesMap[d.binding.descriptorType] += d.binding.descriptorCount;
             }
-
-            // we have gone through all descriptors in the set. Now we can create descriptor set layout.
-            auto ci         = vk::DescriptorSetLayoutCreateInfo();
-            ci.bindingCount = (uint32_t) bindings.size();
-            ci.pBindings    = bindings.data();
-            _sets[s].layout = _gi->device.createDescriptorSetLayout(ci, _gi->allocator);
-
-            // convert sizes map to array
-            std::vector<vk::DescriptorPoolSize> sizes;
-            sizes.reserve(sizesMap.size());
-            for (const auto & kv : sizesMap) sizes.push_back({kv.first, kv.second});
-
-            // Create descriptor pool
-            // TODO: make the pool size configurable.
-            _sets[s].pool          = _gi->device.createDescriptorPool(vk::DescriptorPoolCreateInfo().setMaxSets(1024).setPoolSizes(sizes), _gi->allocator);
-            _sets[s].availableSets = 1024;
+            _setLayouts[s] = _gi->device.createDescriptorSetLayout(vk::DescriptorSetLayoutCreateInfo {}.setBindings(bindings), _gi->allocator);
         }
 
         // create push constant array
@@ -2013,21 +1435,16 @@ public:
             pc.push_back({kv.first, kv.second.begin, kv.second.end - kv.second.begin});
         }
 
-        // create pipeline layout array
-        std::vector<vk::DescriptorSetLayout> layouts;
-        layouts.reserve(_sets.size());
-        for (const auto & s : _sets) layouts.push_back(s.layout);
-
         // create pipeline layout
-        _handle = _gi->device.createPipelineLayout(vk::PipelineLayoutCreateInfo().setSetLayouts(layouts).setPushConstantRanges(pc), _gi->allocator);
+        _handle = _gi->device.createPipelineLayout(vk::PipelineLayoutCreateInfo().setSetLayouts(_setLayouts).setPushConstantRanges(pc), _gi->allocator);
 
         // done
         onNameChanged();
     }
 
     ~Impl() {
-        for (auto & s : _sets) { s.clear(*_gi); }
-        _sets.clear();
+        for (auto & s : _setLayouts) { _gi->safeDestroy(s); }
+        _setLayouts.clear();
         _gi->safeDestroy(_handle);
     }
 
@@ -2035,118 +1452,16 @@ public:
 
     const PipelineReflection & reflection() const { return _reflection; }
 
-    bool cmdBind(vk::CommandBuffer cb, vk::PipelineBindPoint bp, const ArgumentPack & ap) { return bindDescriptors(cb, bp, ap) && bindPushConstants(cb, ap); }
-
     void onNameChanged() {
-        if (_handle) setVkObjectName(_gi->device, _handle, _owner.name());
+        if (_handle) setVkHandleName(_gi->device, _handle, _owner.name());
     }
 
 private:
-    struct DescSet {
-        vk::DescriptorSetLayout                     layout;
-        std::vector<vk::DescriptorSetLayoutBinding> bindings;
-        vk::DescriptorPool                          pool;
-        size_t                                      availableSets = 0; ///< number of sets that are available for allocation in the pool.
-        std::vector<vk::DescriptorPool>             full;              // pools that are full already.
-
-        vk::DescriptorSet alloc(const GlobalInfo & gi) {
-            if (availableSets > 0) {
-                auto s = gi.device.allocateDescriptorSets(vk::DescriptorSetAllocateInfo(pool, 1, &layout));
-                availableSets--;
-                return s[0];
-            } else {
-                RVI_LOGE("descriptor pool is out of space.");
-                return {};
-            }
-        }
-
-        void clear(const GlobalInfo & gi) {
-            gi.safeDestroy(layout);
-            gi.safeDestroy(pool);
-            for (auto & p : full) { gi.safeDestroy(p); }
-            full.clear();
-        }
-    };
-
-private:
-    PipelineLayout &     _owner;
-    const GlobalInfo *   _gi = nullptr;
-    PipelineReflection   _reflection;
-    std::vector<DescSet> _sets;
-    vk::PipelineLayout   _handle;
-
-    static const Argument::Impl * findArgument(const ArgumentPack & ap, uint32_t set, uint32_t binding) {
-        auto a = ap.find({set, binding});
-        return a ? a->_impl : nullptr;
-    }
-
-    bool bindDescriptors(vk::CommandBuffer cb, vk::PipelineBindPoint bindPoint, const ArgumentPack & ap) {
-        auto writes     = std::vector<vk::WriteDescriptorSet>();
-        auto setHandles = std::vector<vk::DescriptorSet>();
-        for (uint32_t si = 0; si < _sets.size(); ++si) {
-            auto & s       = _sets[si];
-            auto   descSet = s.alloc(*_gi);
-            if (!descSet) return false;
-            setHandles.push_back(descSet);
-            for (uint32_t i = 0; i < s.bindings.size(); ++i) {
-                auto & b = s.bindings[i];
-                auto & w = writes.emplace_back();
-                w.setDstSet(descSet);
-                w.setDstBinding(b.binding);
-                w.setDescriptorType(b.descriptorType);
-
-                // Locate the arugment in the pack for this binding slot.
-                const Argument::Impl * a = findArgument(ap, si, i);
-                if (!a) {
-                    RVI_LOGE("Failed to bind argument pack (%s) to pipeline layout (%s): set %u slot %u not found in the argument pack.", ap.name().c_str(),
-                             _owner.name().c_str(), si, i);
-                    return false;
-                }
-
-                // verify that the argument type is compatible with the descriptor type
-                if (!a->typeCompatibleWith(b.descriptorType)) {
-                    RVI_LOGE("Failed to bind argument pack (%s) to pipeline layout (%s): set %u slot %u is of type %s, but the argument is of type %s.",
-                             ap.name().c_str(), _owner.name().c_str(), si, i, vk::to_string(b.descriptorType).c_str(), a->type());
-                    return false;
-                }
-
-                // verify that there're enough descriptors in the argument.
-                if (a->count() < b.descriptorCount) {
-                    RVI_LOGE(
-                        "Failed to bind argument pack (%s) to pipeline layout (%s): set %u slot %u requires %u descriptors, but the argument has only %zu.",
-                        ap.name().c_str(), _owner.name().c_str(), si, i, b.descriptorCount, a->count());
-                    return false;
-                }
-
-                auto & value = a->value();
-                if (auto buf = std::get_if<Argument::Impl::BufferArgs>(&value))
-                    w.setBufferInfo(buf->infos);
-                else if (auto img = std::get_if<Argument::Impl::ImageArgs>(&value))
-                    w.setImageInfo(img->infos);
-                else {
-                    // we should not reach here, since we have already checked the type compatibility.
-                    RAPID_VULKAN_ASSERT(false, "should never reach here.");
-                }
-            }
-        }
-        _gi->device.updateDescriptorSets(writes, {});
-        cb.bindDescriptorSets(bindPoint, _handle, 0, setHandles, {});
-        return true;
-    }
-
-    bool bindPushConstants(vk::CommandBuffer cb, const ArgumentPack & ap) {
-        for (const auto & kv : _reflection.constants) {
-            if (kv.second.empty()) continue;
-            auto v = ap._impl->getConstant(kv.first, kv.second.begin, kv.second.end);
-            if (v.empty()) {
-                // No warnings ehre. Push constant value is persistent within one
-                // command buffer submit. So it is not required to update all the values on every pipeline binding.
-                continue;
-            }
-            for (const auto & [pcr, data] : v) cb.pushConstants(_handle, pcr.stageFlags, pcr.offset, pcr.size, data);
-        }
-        return true;
-    }
+    PipelineLayout &                     _owner;
+    const GlobalInfo *                   _gi = nullptr;
+    PipelineReflection                   _reflection;
+    vk::PipelineLayout                   _handle;
+    std::vector<vk::DescriptorSetLayout> _setLayouts;
 };
 
 PipelineLayout::PipelineLayout(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this, cp.shaders); }
@@ -2156,7 +1471,6 @@ PipelineLayout::~PipelineLayout() {
 }
 auto PipelineLayout::handle() const -> vk::PipelineLayout { return _impl->handle(); }
 auto PipelineLayout::reflection() const -> const PipelineReflection & { return _impl->reflection(); }
-bool PipelineLayout::cmdBind(vk::CommandBuffer cb, vk::PipelineBindPoint bp, const ArgumentPack & ap) const { return _impl->cmdBind(cb, bp, ap); }
 void PipelineLayout::onNameChanged(const std::string &) { _impl->onNameChanged(); }
 
 // *********************************************************************************************************************
@@ -2180,10 +1494,6 @@ public:
 
     PipelineLayout & layout() const { return *_layout; }
 
-    void cmdBind(vk::CommandBuffer cb, const ArgumentPack & args) const {
-        if (handle) _layout->cmdBind(cb, bindPoint, args);
-    }
-
 private:
     const GlobalInfo *  _gi = nullptr;
     Ref<PipelineLayout> _layout;
@@ -2194,7 +1504,10 @@ Pipeline::~Pipeline() {
     delete _impl;
     _impl = nullptr;
 }
-void Pipeline::cmdBind(vk::CommandBuffer cb, const ArgumentPack & ap) const { return _impl->cmdBind(cb, ap); }
+auto Pipeline::bindPoint() const -> vk::PipelineBindPoint { return _impl->bindPoint; }
+auto Pipeline::handle() const -> vk::Pipeline { return _impl->handle; }
+auto Pipeline::layout() const -> vk::PipelineLayout { return _impl->layout().handle(); }
+auto Pipeline::reflection() const -> const PipelineReflection & { return _impl->layout().reflection(); }
 
 // *********************************************************************************************************************
 // Graphics Pipeline
@@ -2278,29 +1591,13 @@ GraphicsPipeline::GraphicsPipeline(const ConstructParameters & params): Pipeline
     _impl->bindPoint = vk::PipelineBindPoint::eGraphics;
 }
 
-void GraphicsPipeline::cmdDraw(vk::CommandBuffer cb, const DrawParameters & dp) {
+void GraphicsPipeline::cmdDraw(vk::CommandBuffer cb, const DrawParameters & dp) const {
     if (!_impl->handle) return;
 
     cb.bindPipeline(vk::PipelineBindPoint::eGraphics, _impl->handle);
 
-    // bind vertex buffers
-    if (dp.vertexBuffers.size() > 0) {
-        RVI_REQUIRE(dp.vertexBuffers.size() <= 16); // TODO: use a stack_array class to remove this limitation.
-        vk::Buffer     buffers[16];
-        vk::DeviceSize offsets[16];
-        for (size_t i = 0; i < dp.vertexBuffers.size(); ++i) {
-            const auto & view = dp.vertexBuffers.data()[i];
-            RVI_REQUIRE(view.buffer, "Empty vertex buffer is not allowed.");
-            buffers[i] = view.buffer;
-            offsets[i] = view.offset;
-            // TODO: validate vertex buffer size on debug build.
-        }
-        cb.bindVertexBuffers(0, (uint32_t) dp.vertexBuffers.size(), buffers, offsets);
-    }
-
-    if (dp.indexBuffer.buffer) {
+    if (dp.indexCount) {
         // indexed draw
-        cb.bindIndexBuffer(dp.indexBuffer.buffer, dp.indexBuffer.offset, dp.indexBuffer.indexType);
         cb.drawIndexed(dp.indexCount, dp.instanceCount, dp.firstIndex, dp.vertexOffset, dp.firstInstance);
     } else {
         // non-indexed draw
@@ -2321,10 +1618,1091 @@ ComputePipeline::ComputePipeline(const ConstructParameters & params): Pipeline(p
     _impl->bindPoint = vk::PipelineBindPoint::eCompute;
 }
 
-void ComputePipeline::cmdDispatch(vk::CommandBuffer cb, const DispatchParameters & dp) {
+void ComputePipeline::cmdDispatch(vk::CommandBuffer cb, const DispatchParameters & dp) const {
     cb.bindPipeline(vk::PipelineBindPoint::eCompute, _impl->handle);
     cb.dispatch((uint32_t) dp.width, (uint32_t) dp.height, (uint32_t) dp.depth);
 }
+
+// *********************************************************************************************************************
+// Drawable & DrawPack
+// *********************************************************************************************************************
+
+void DrawPack::cmdRender(vk::Device device, vk::CommandBuffer cb,
+                         std::function<vk::DescriptorSet(const Pipeline &, uint32_t setIndex)> descriptorSetAllocator) const {
+    if (!pipeline) return;
+
+    auto layout = pipeline->layout();
+    auto bp     = pipeline->bindPoint();
+
+    cb.bindPipeline(bp, pipeline->handle());
+
+    for (uint32_t s = 0; s < descriptors.size(); ++s) {
+        auto & w = descriptors[s];
+        if (w.empty()) continue;
+        auto set = descriptorSetAllocator(*pipeline, s);
+        for (auto & d : w) const_cast<vk::WriteDescriptorSet &>(d).dstSet = set;
+        device.updateDescriptorSets(w, {});
+        cb.bindDescriptorSets(bp, layout, s, 1, &set, 0, nullptr);
+    }
+
+    for (const auto & c : constants) cb.pushConstants(layout, c.stages, c.offset, (uint32_t) c.value.size(), c.value.data());
+
+    if (vk::PipelineBindPoint::eGraphics == bp) {
+        if (!vertexBuffers.empty()) {
+            RVI_ASSERT(vertexBuffers.size() == vertexOffsets.size());
+            cb.bindVertexBuffers(0, (uint32_t) vertexBuffers.size(), vertexBuffers.data(), vertexOffsets.data());
+        }
+
+        if (indexBuffer.buffer) {
+            // indexed draw
+            cb.bindIndexBuffer(indexBuffer.buffer, indexBuffer.offset, indexType);
+            cb.drawIndexed(draw.indexCount, draw.instanceCount, draw.firstIndex, draw.vertexOffset, draw.firstInstance);
+        } else {
+            // non-indexed draw
+            cb.draw(draw.vertexCount, draw.instanceCount, draw.firstVertex, draw.firstInstance);
+        }
+    } else if (vk::PipelineBindPoint::eCompute == bp) {
+        cb.dispatch((uint32_t) dispatch.width, (uint32_t) dispatch.height, (uint32_t) dispatch.depth);
+    } else {
+        RVI_THROW("Invalid pipeline bind point");
+    }
+}
+
+/// Represent a single pipeline descriptor (buffer/image/sampler)
+/// @todo rename to Descriptor
+class Argument {
+public:
+    RVI_NO_COPY_NO_MOVE(Argument);
+
+    /// @brief Set value of buffer argument. No effect, if the argument is not a buffer.
+    Argument & b(vk::ArrayProxy<const BufferView>);
+
+    /// @brief Set value of texture argument. No effect, if the argument is not a image/sampler
+    Argument & t(vk::ArrayProxy<const ImageSampler>);
+
+protected:
+    Argument();
+    ~Argument(); // No need make this virtual, since we'll always delete it through the derived class.
+
+    class Impl;
+    Impl * _impl = nullptr;
+
+    friend class Drawable;
+};
+
+class Argument::Impl {
+public:
+    struct BufferArgs {
+        std::vector<vk::DescriptorBufferInfo> infos;
+        std::vector<BufferView>               buffers;
+
+        size_t size() const {
+            RAPID_VULKAN_ASSERT(infos.size() == buffers.size());
+            return infos.size();
+        }
+    };
+
+    struct ImageArgs {
+        enum Type {
+            INVALID = 0,
+            IMAGE,
+            SAMPLER,
+            COMBINED,
+        };
+        std::vector<vk::DescriptorImageInfo> infos;
+        std::vector<ImageSampler>            images;
+        Type                                 type = INVALID; // all args must be of the same type.
+
+        size_t size() const {
+            RAPID_VULKAN_ASSERT(infos.size() == images.size());
+            return infos.size();
+        }
+    };
+
+    typedef std::variant<std::monostate, BufferArgs, ImageArgs> Value;
+
+    Impl() {
+        RAPID_VULKAN_ASSERT(_value.index() == 0); // should start with monostate.
+    }
+
+    ~Impl() {}
+
+    void b(vk::ArrayProxy<const BufferView> v) {
+        auto sameValue = [&]() {
+            auto p = std::get_if<BufferArgs>(&_value);
+            if (!p) return false;
+            if (p->size() != v.size()) return false;
+            for (size_t i = 0; i < v.size(); ++i) {
+                if (p->buffers[i] != v.data()[i]) return false;
+            }
+            return true;
+        };
+        if (sameValue()) return;
+        _value      = BufferArgs();
+        auto & args = std::get<BufferArgs>(_value);
+        args.buffers.assign(v.begin(), v.end());
+        args.infos.resize(args.buffers.size());
+        for (size_t i = 0; i < args.buffers.size(); ++i) {
+            args.infos[i].buffer = args.buffers[i].buffer;
+            args.infos[i].offset = args.buffers[i].offset;
+            args.infos[i].range  = args.buffers[i].size;
+        }
+        _timestamp.fetch_add(1);
+    }
+
+    void t(vk::ArrayProxy<const ImageSampler> v) {
+        auto sameValue = [&]() {
+            auto p = std::get_if<ImageArgs>(&_value);
+            if (!p) return false;
+            if (p->size() != v.size()) return false;
+            for (size_t i = 0; i < v.size(); ++i) {
+                if (p->images[i] != v.data()[i]) return false;
+            }
+            return true;
+        };
+        if (sameValue()) return;
+        _value      = ImageArgs();
+        auto & args = std::get<ImageArgs>(_value);
+        args.images.assign(v.begin(), v.end());
+        args.infos.resize(args.images.size());
+        args.type = ImageArgs::INVALID;
+        for (size_t i = 0; i < args.images.size(); ++i) {
+            auto & info  = args.infos[i];
+            auto & image = args.images[i];
+            info.sampler = image.sampler;
+            ImageArgs::Type t;
+            if (image.imageView) {
+                info.imageLayout = image.imageLayout;
+                info.imageView   = image.imageView;
+                t                = info.sampler ? ImageArgs::COMBINED : ImageArgs::IMAGE;
+            } else {
+                info.imageLayout = vk::ImageLayout::eUndefined;
+                info.imageView   = nullptr;
+                t                = info.sampler ? ImageArgs::SAMPLER : ImageArgs::INVALID;
+            }
+            if (0 == i) {
+                args.type = t;
+            } else if (args.type != t) {
+                RVI_LOGE("All images are expected of same type. But image %zu has a different type than the first image.", i);
+                args.type = ImageArgs::INVALID;
+            }
+        }
+        _timestamp.fetch_add(1);
+    }
+
+    const Value & value() const { return _value; }
+
+    int64_t modificationTimestamp() const { return _timestamp; }
+
+    // return number of descriptors in the argument.
+    size_t count() const {
+        auto index = _value.index();
+        if (1 == index)
+            return std::get<BufferArgs>(_value).infos.size();
+        else if (2 == index)
+            return std::get<ImageArgs>(_value).infos.size();
+        else
+            return 0;
+    }
+
+    bool typeCompatibleWith(vk::DescriptorType t) const {
+        auto index = _value.index();
+        if (1 == index) {
+            return t == vk::DescriptorType::eStorageBuffer || t == vk::DescriptorType::eUniformBuffer || t == vk::DescriptorType::eUniformBufferDynamic ||
+                   t == vk::DescriptorType::eStorageBufferDynamic;
+        } else if (2 == index) {
+            auto & args = std::get<ImageArgs>(_value);
+            switch (args.type) {
+            case ImageArgs::SAMPLER:
+                return t == vk::DescriptorType::eSampler;
+            case ImageArgs::IMAGE:
+                return t == vk::DescriptorType::eSampledImage || t == vk::DescriptorType::eStorageImage || t == vk::DescriptorType::eInputAttachment;
+            case ImageArgs::COMBINED:
+                return t == vk::DescriptorType::eCombinedImageSampler;
+            default:
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+
+    const char * type() const {
+        auto index = _value.index();
+        if (1 == index)
+            return "Buffer";
+        else if (2 == index) {
+            auto & args = std::get<ImageArgs>(_value);
+            switch (args.type) {
+            case ImageArgs::IMAGE:
+                return "Image";
+            case ImageArgs::SAMPLER:
+                return "Sampler";
+            case ImageArgs::COMBINED:
+                return "Combined";
+            default:
+                return "<InvalidImageSampler>";
+            }
+        } else
+            return "<None>";
+    }
+
+private:
+    Value                _value;
+    std::atomic<int64_t> _timestamp = 0;
+};
+
+Argument::Argument(): _impl(new Impl()) {}
+Argument::~Argument() {
+    delete _impl;
+    _impl = nullptr;
+}
+Argument & Argument::b(vk::ArrayProxy<const BufferView> v) {
+    _impl->b(v);
+    return *this;
+}
+Argument & Argument::t(vk::ArrayProxy<const ImageSampler> v) {
+    _impl->t(v);
+    return *this;
+}
+
+class ArgumentImpl : public Argument {
+public:
+    using Argument::Argument;
+    ~ArgumentImpl() = default;
+};
+
+class Drawable::Impl {
+public:
+    Impl(Drawable & o, const ConstructParameters & cp): _owner(o), _pipeline(cp.pipeline) {
+        _pack           = std::make_shared<DrawPack>();
+        _pack->pipeline = _pipeline;
+        _dirty.setAll();
+    }
+
+    ~Impl() {}
+
+    void clear() {
+        _descriptors.clear();
+        _constants.clear();
+        _pack.reset();
+        _dirty.setAll();
+    }
+
+    void set(DescriptorIdentifier id, vk::ArrayProxy<const BufferView> v) {
+        _descriptors[id].b(v);
+        _dirty.descriptors = true;
+    }
+
+    void set(DescriptorIdentifier id, vk::ArrayProxy<const ImageSampler> v) {
+        _descriptors[id].t(v);
+        _dirty.descriptors = true;
+    }
+
+    void set(size_t offset, size_t size, const void * data, vk::ShaderStageFlags stages) {
+        if (0 == data || 0 == size || !stages) return; // ignore empty data.
+        _constants.push_back({stages, (uint32_t) offset});
+        _constants.back().value.assign((const uint8_t *) data, (const uint8_t *) data + size);
+        _dirty.constants = true;
+    }
+
+    void set(const vk::ArrayProxy<const BufferView> & vertexBuffers) {
+        if (_pipeline->bindPoint() != vk::PipelineBindPoint::eGraphics) return;
+        _vertexBuffers.assign(vertexBuffers.begin(), vertexBuffers.end());
+        _dirty.graphicsOrDispatch = true;
+    }
+
+    void set(const BufferView & ib, vk::IndexType t) {
+        if (_pipeline->bindPoint() != vk::PipelineBindPoint::eGraphics) return;
+        if (ib == _indexBuffer && t == _indexType) return;
+        _indexBuffer              = ib;
+        _indexType                = t;
+        _dirty.graphicsOrDispatch = true;
+    }
+
+    void set(const GraphicsPipeline::DrawParameters & p) {
+        if (_pipeline->bindPoint() != vk::PipelineBindPoint::eGraphics) return;
+        _drawParameters           = p;
+        _dirty.graphicsOrDispatch = true;
+    }
+
+    void set(const ComputePipeline::DispatchParameters & p) {
+        if (_pipeline->bindPoint() != vk::PipelineBindPoint::eCompute) return;
+        _dispatchParameters       = p;
+        _dirty.graphicsOrDispatch = true;
+    }
+
+    std::shared_ptr<DrawPack> compile() const {
+        // if the pipeline is not ready, return a failsafe pack.
+        if (!_pipeline) return failsafe();
+
+        // if the pack is not dirty, return the cached pack.
+        if (!_dirty.all) return _pack;
+
+        if (_dirty.descriptors) {
+            if (!compileDescriptors(*_pack)) return failsafe();
+        }
+
+        if (_dirty.constants) {
+            if (!compileConstants(*_pack)) return failsafe();
+        }
+
+        if (_dirty.graphicsOrDispatch) {
+            if (_pipeline->bindPoint() == vk::PipelineBindPoint::eGraphics) {
+                if (!compileGraphics(*_pack)) return failsafe();
+            } else if (_pipeline->bindPoint() == vk::PipelineBindPoint::eCompute) {
+                if (!compileCompute(*_pack)) return failsafe();
+            }
+        }
+
+        // done
+        _dirty.clearAll();
+        return _pack;
+    }
+
+private:
+    union DirtyFlags {
+        uint64_t all = 0;
+        struct {
+            bool descriptors        : 1;
+            bool constants          : 1;
+            bool graphicsOrDispatch : 1;
+        };
+
+        void setAll() { all = (uint64_t) -1; }
+
+        void clearAll() { all = 0; }
+    };
+    static_assert(sizeof(DirtyFlags) == sizeof(uint64_t));
+
+    Drawable &                                             _owner;
+    Ref<const Pipeline>                                    _pipeline;
+    std::unordered_map<DescriptorIdentifier, ArgumentImpl> _descriptors;
+    std::vector<DrawPack::ConstantArgument>                _constants;
+    std::vector<BufferView>                                _vertexBuffers;
+    BufferView                                             _indexBuffer;
+    vk::IndexType                                          _indexType = vk::IndexType::eUint16;
+    GraphicsPipeline::DrawParameters                       _drawParameters;
+    ComputePipeline::DispatchParameters                    _dispatchParameters;
+    mutable std::shared_ptr<DrawPack>                      _pack;
+    mutable DirtyFlags                                     _dirty {};
+
+private:
+    static std::shared_ptr<DrawPack> failsafe() {
+        static std::shared_ptr<DrawPack> pack(new DrawPack);
+        return pack;
+    }
+
+    Argument * get(DescriptorIdentifier id) { return &_descriptors[id]; }
+
+    const Argument::Impl * find(DescriptorIdentifier id) const {
+        auto iter = _descriptors.find(id);
+        return iter == _descriptors.end() ? nullptr : iter->second._impl;
+    }
+
+    std::vector<std::tuple<vk::PushConstantRange, const uint8_t *>> getConstant(vk::ShaderStageFlags stages, uint32_t begin, uint32_t end) const {
+        if (!stages) return {};
+        if (begin >= end) return {};
+        std::vector<std::tuple<vk::PushConstantRange, const uint8_t *>> v;
+        for (auto & c : _constants) {
+            vk::PushConstantRange range {};
+            range.stageFlags = c.stages & stages;
+            if (!range.stageFlags) continue;
+            range.offset = std::max(c.offset, begin);
+            end          = std::min((uint32_t) (c.offset + c.value.size()), end);
+            if (range.offset >= end) continue;
+            range.size = end - range.offset;
+            v.push_back({range, c.value.data() + range.offset - c.offset});
+        }
+        return v;
+    }
+
+    bool compileDescriptors(DrawPack & pack) const {
+        const auto & refl = _pipeline->reflection();
+        pack.descriptors.clear();
+        pack.descriptors.resize(refl.descriptors.size());
+        for (uint32_t si = 0; si < refl.descriptors.size(); ++si) {
+            const auto & s      = refl.descriptors[si];
+            auto         writes = std::vector<vk::WriteDescriptorSet>();
+            for (uint32_t i = 0; i < s.size(); ++i) {
+                if (s[i].empty()) continue;
+                const auto & b = s[i].binding;
+                auto         w = vk::WriteDescriptorSet {};
+                w.setDstBinding(b.binding);
+                w.setDescriptorType(b.descriptorType);
+
+                // Locate the argument for this binding slot.
+                auto a = find({si, i});
+                if (!a) {
+                    RVI_LOGE("Drawable (%s) validation error: set %u binding %u is not set.", _owner.name().c_str(), si, i);
+                    return false;
+                }
+
+                // verify that the argument type is compatible with the descriptor type
+                if (!a->typeCompatibleWith(b.descriptorType)) {
+                    RVI_LOGE("Drawable (%s) validation error: : set %u binding %u is of type %s, but the argument is of type %s.", _owner.name().c_str(), si, i,
+                             vk::to_string(b.descriptorType).c_str(), a->type());
+                    return false;
+                }
+
+                // verify that there're enough descriptors in the argument.
+                if (a->count() < b.descriptorCount) {
+                    RVI_LOGE("Drawable (%s) validation error: : set %u binding %u requires %u descriptors, but the argument has only %zu.",
+                             _owner.name().c_str(), si, i, b.descriptorCount, a->count());
+                    return false;
+                }
+
+                auto & value = a->value();
+                if (auto buf = std::get_if<Argument::Impl::BufferArgs>(&value)) {
+                    w.setBufferInfo(buf->infos);
+                    for (size_t j = 0; j < buf->buffers.size(); ++j) {
+                        const auto & v = buf->buffers[j];
+                        if (!v.buffer) {
+                            RVI_LOGE("Drawable (%s) validation error: : set %u binding %u contains empty buffer descriptor at index %zu", _owner.name().c_str(),
+                                     si, i, j);
+                            return false;
+                        }
+                    }
+                } else if (auto img = std::get_if<Argument::Impl::ImageArgs>(&value)) {
+                    w.setImageInfo(img->infos);
+                    for (size_t j = 0; j < img->images.size(); ++j) {
+                        const auto & v = img->images[j];
+                        if (!v.imageView) {
+                            RVI_LOGE("Drawable (%s) validation error: : set %u binding %u contains empty image view at index %zu", _owner.name().c_str(), si, i,
+                                     j);
+                            return false;
+                        }
+                        // TODO: add the image to pack.images array to avoid it being released too early.
+                    }
+                } else {
+                    // we should not reach here, since we have already checked the type compatibility.
+                    RAPID_VULKAN_ASSERT(false, "should never reach here.");
+                }
+
+                // this is a valid write
+                writes.push_back(w);
+            }
+            pack.descriptors[si] = std::move(writes);
+        }
+        return true;
+    }
+
+    bool compileConstants(DrawPack & pack) const {
+        pack.constants.clear();
+        const auto & reflection = _pipeline->reflection();
+        for (const auto & kv : reflection.constants) {
+            if (kv.second.empty()) continue;
+            auto v = getConstant(kv.first, kv.second.begin, kv.second.end);
+            if (v.empty()) {
+                RVI_LOGW("Drawable (%s) validate error: push constant range %s is not set.", _owner.name().c_str(), vk::to_string(kv.first).c_str());
+                return false;
+            }
+            for (const auto & [pcr, data] : v) pack.constants.push_back({pcr.stageFlags, pcr.offset, {data, data + pcr.size}});
+        }
+        return true;
+    }
+
+    bool compileGraphics(DrawPack & pack) const {
+        // TODO: more validations, such as length of vertex buffers, etc.
+        pack.vertexBuffers.clear();
+        pack.vertexOffsets.clear();
+        for (size_t i = 0; i < _vertexBuffers.size(); ++i) {
+            const auto & v = _vertexBuffers[i];
+            if (!v.buffer) {
+                RVI_LOGE("Drawable (%s) validation error: vertex buffer %zu is not set.", _owner.name().c_str(), i);
+                return false;
+            }
+            pack.vertexBuffers.push_back(v.buffer);
+            pack.vertexOffsets.push_back(v.offset);
+        }
+
+        if (_drawParameters.indexCount > 0) {
+            // this is an indexed draw, thus requires an index buffer.
+            if (!_indexBuffer.buffer) {
+                RVI_LOGE("Drawable (%s) validation error: index buffer is not set.", _owner.name().c_str());
+                return false;
+            }
+            pack.indexBuffer = _indexBuffer;
+            pack.indexType   = _indexType;
+        }
+
+        // done
+        pack.draw = _drawParameters;
+        return true;
+    }
+
+    bool compileCompute(DrawPack & pack) const {
+        if (0 == _dispatchParameters.width || 0 == _dispatchParameters.height || 0 == _dispatchParameters.depth) {
+            RVI_LOGE("Drawable (%s) validation error: dispatch dimension can't be zero.", _owner.name().c_str());
+            return false;
+        }
+        pack.dispatch = _dispatchParameters;
+        return true;
+    }
+};
+
+Drawable::Drawable(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this, cp); }
+Drawable::~Drawable() {
+    delete _impl;
+    _impl = nullptr;
+}
+auto Drawable::clear() -> Drawable & {
+    _impl->clear();
+    return *this;
+}
+auto Drawable::b(DescriptorIdentifier id, vk::ArrayProxy<const BufferView> v) -> Drawable & {
+    _impl->set(id, v);
+    return *this;
+}
+auto Drawable::t(DescriptorIdentifier id, vk::ArrayProxy<const ImageSampler> v) -> Drawable & {
+    _impl->set(id, v);
+    return *this;
+}
+auto Drawable::c(size_t offset, size_t size, const void * data, vk::ShaderStageFlags stages) -> Drawable & {
+    _impl->set(offset, size, data, stages);
+    return *this;
+}
+auto Drawable::v(vk::ArrayProxy<const BufferView> v) -> Drawable & {
+    _impl->set(v);
+    return *this;
+}
+auto Drawable::i(const BufferView & v, vk::IndexType t) -> Drawable & {
+    _impl->set(v, t);
+    return *this;
+}
+auto Drawable::dp(const GraphicsPipeline::DrawParameters & v) -> Drawable & {
+    _impl->set(v);
+    return *this;
+}
+auto Drawable::dp(const ComputePipeline::DispatchParameters & v) -> Drawable & {
+    _impl->set(v);
+    return *this;
+}
+auto Drawable::compile() const -> std::shared_ptr<const DrawPack> { return _impl->compile(); };
+
+// *********************************************************************************************************************
+// DescriptorPool
+// *********************************************************************************************************************
+
+class DescriptorPool : public Root {
+public:
+    struct ConstructParameters : public Root::ConstructParameters {
+        const GlobalInfo *                                   gi = nullptr;
+        vk::ArrayProxy<const vk::DescriptorSetLayoutBinding> bindings {};
+        size_t                                               maxSets = 1024;
+    };
+
+    DescriptorPool(const ConstructParameters & cp): Root(cp) { construct(cp); }
+
+    ~DescriptorPool() { destruct(); }
+
+    vk::DescriptorSet allocate() {
+        if (_availableSets == 0) {
+            if (_pool) _full.push_back(_pool), _pool = VK_NULL_HANDLE;
+            _pool          = _gi->device.createDescriptorPool(vk::DescriptorPoolCreateInfo().setPoolSizes(_sizes).setMaxSets(_maxSets), _gi->allocator);
+            _availableSets = _maxSets;
+        }
+        --_availableSets;
+        return _gi->device.allocateDescriptorSets({_pool, 1, &_layout})[0];
+    }
+
+    /// Release all already-full descriptor pools.
+    void purge() {
+        for (auto & p : _full) { _gi->safeDestroy(p); }
+        _full.clear();
+    }
+
+protected:
+    void onNameChanged(const std::string &) override { updateName(); }
+
+private:
+    const GlobalInfo *                  _gi {};
+    uint32_t                            _maxSets {};
+    std::vector<vk::DescriptorPoolSize> _sizes;
+    vk::DescriptorSetLayout             _layout {};
+    vk::DescriptorPool                  _pool {};
+    size_t                              _availableSets {}; ///< number of sets that are available for allocation in the pool.
+    std::vector<vk::DescriptorPool>     _full;             ///< pools that are full already.
+
+private:
+    void updateName() {
+        setVkHandleName(_gi->device, _layout, name() + ".layout");
+        setVkHandleName(_gi->device, _pool, name() + ".pool");
+    }
+
+    void construct(const ConstructParameters & cp) {
+        RVI_REQUIRE(cp.gi);
+        RVI_REQUIRE(!cp.bindings.empty());
+        RVI_REQUIRE(cp.maxSets > 0);
+
+        _gi      = cp.gi;
+        _maxSets = (uint32_t) cp.maxSets;
+
+        auto bindings = std::vector<vk::DescriptorSetLayoutBinding> {};
+        auto sizesMap = std::map<vk::DescriptorType, uint32_t> {};
+        for (const auto & b : cp.bindings) {
+            if (0 == b.descriptorCount) continue; // skip empty descriptor
+            bindings.push_back(b);
+            sizesMap[b.descriptorType] += b.descriptorCount;
+        }
+        if (bindings.empty()) return; // no descriptor to allocate
+
+        // create set layout
+        _layout = _gi->device.createDescriptorSetLayout(vk::DescriptorSetLayoutCreateInfo {}.setBindings(bindings), _gi->allocator);
+
+        // create pool
+        _sizes.reserve(sizesMap.size());
+        for (const auto & kv : sizesMap) _sizes.push_back({kv.first, kv.second});
+
+        // done
+        updateName();
+    }
+
+    void destruct() {
+        if (!_gi) return;
+        _gi->safeDestroy(_layout);
+        _gi->safeDestroy(_pool);
+        for (auto & p : _full) { _gi->safeDestroy(p); }
+        _full.clear();
+        _gi = nullptr;
+    }
+};
+
+// *********************************************************************************************************************
+// Command Buffer/Pool/Queue
+// *********************************************************************************************************************
+
+class CommandBuffer::Impl : public CommandBuffer {
+public:
+    Impl(CommandQueue & queue, const std::string & name_, vk::CommandBufferLevel level): _queue(queue), _name(name_), _level(level) {
+        const auto & d = queue.desc();
+        _pool          = d.gi->device.createCommandPool(vk::CommandPoolCreateInfo().setQueueFamilyIndex(d.family), d.gi->allocator);
+        wakeup();
+    }
+
+    ~Impl() {
+        clear();
+        _queue.desc().gi->safeDestroy(_pool);
+    }
+
+    void wakeup() {
+        clear();
+        _state = RECORDING;
+        vk::CommandBufferAllocateInfo info;
+        info.commandPool        = _pool;
+        info.level              = _level;
+        info.commandBufferCount = 1;
+        _handle                 = _queue.desc().gi->device.allocateCommandBuffers(info)[0];
+        setVkHandleName(_queue.desc().gi->device, _handle, _name);
+        _handle.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+    }
+
+    void hibernate() {
+        _state = FINISHED;
+        clear();
+    }
+
+    void render(const DrawPack & d) {
+        if (RECORDING != _state) {
+            RVI_LOGE("Failed to enqueue drawable: command buffer %s is not in RECORDING state!", _name.c_str());
+            return;
+        }
+
+        // TODO: calculate diff to minimize the number of pipeline bindings and descriptor set bindings/updates.
+
+        // render the draw pack
+        d.cmdRender(_queue.desc().gi->device, _handle, [&](const Pipeline & p, uint32_t i) { return allocateDescriptorSet(p, i); });
+    }
+
+    const std::string & name() const { return _name; }
+
+    vk::CommandBuffer handle() const { return _handle; }
+
+    bool end() {
+        if (_state == RECORDING) {
+            // end the command buffer
+            _handle.end();
+            _state = ENDED;
+        } else if (_state != ENDED) {
+            RVI_LOGE("Command buffer %s is not in RECORDING or ENDED state!", _name.c_str());
+            return false;
+        }
+        return true;
+    }
+
+    void setPending() {
+        RVI_ASSERT(_state == ENDED);
+        _state = EXECUTING;
+    }
+
+private:
+    enum State {
+        RECORDING,
+        ENDED,
+        EXECUTING,
+        FINISHED,
+    };
+
+    struct DescriptorPoolKey {
+        std::vector<vk::DescriptorSetLayoutBinding> bindings;
+
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4702) // unreachable code
+#endif
+        bool operator<(const DescriptorPoolKey & rhs) const {
+            if (bindings.size() != rhs.bindings.size()) return bindings.size() < rhs.bindings.size();
+            for (size_t i = 0; i < bindings.size(); ++i) {
+                const auto & a = bindings[i];
+                const auto & b = rhs.bindings[i];
+                if (a.binding != b.binding) return a.binding < b.binding;
+                if (a.descriptorType != b.descriptorType) return a.descriptorType < b.descriptorType;
+                if (a.descriptorCount != b.descriptorCount) return a.descriptorCount < b.descriptorCount;
+                return a.stageFlags < b.stageFlags;
+            }
+            return false;
+        }
+    };
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
+
+    typedef std::map<DescriptorPoolKey, DescriptorPool> DescriptorPoolMap;
+
+    CommandQueue &         _queue;
+    std::string            _name;
+    vk::CommandBufferLevel _level {};
+    vk::CommandPool        _pool; // one pool for each command buffer for simplicity and for multithread safety.
+    vk::CommandBuffer      _handle {};
+    State                  _state = RECORDING;
+    DescriptorPoolMap      _descriptorPools;
+
+    friend class CommandBuffer;
+
+private:
+    void clear() {
+        auto gi = _queue.desc().gi;
+        gi->safeDestroy(_handle, _pool);
+        gi->device.resetCommandPool(_pool);
+        for (auto & p : _descriptorPools) p.second.purge();
+    }
+
+    vk::DescriptorSet allocateDescriptorSet(const Pipeline & p, uint32_t setIndex) {
+        const auto & refl = p.reflection();
+        if (setIndex >= refl.descriptors.size()) {
+            RVI_LOGE("Failed to allocate descriptor set: set index %d is out of range!", setIndex);
+            return {};
+        }
+        const auto &      set = refl.descriptors[setIndex];
+        DescriptorPoolKey key;
+        for (const auto & d : set) { key.bindings.push_back(d.binding); }
+        auto iter = _descriptorPools.find(key);
+        if (iter == _descriptorPools.end()) {
+            auto inserted = _descriptorPools.emplace(key, DescriptorPool::ConstructParameters {{_name}, _queue.desc().gi, key.bindings});
+            RVI_REQUIRE(inserted.second);
+            iter = inserted.first;
+        }
+        return iter->second.allocate();
+    }
+};
+
+auto CommandBuffer::name() const -> const std::string & {
+    static const std::string emptyName = ""s;
+    return _impl ? _impl->name() : emptyName;
+}
+auto CommandBuffer::handle() const -> vk::CommandBuffer { return _impl ? _impl->handle() : vk::CommandBuffer {}; }
+bool CommandBuffer::finished() const { return _impl ? Impl::FINISHED == _impl->_state : false; }
+bool CommandBuffer::pending() const { return _impl ? Impl::EXECUTING == _impl->_state : false; }
+bool CommandBuffer::recording() const { return _impl ? Impl::RECORDING == _impl->_state : false; }
+auto CommandBuffer::render(const DrawPack & d) const -> const CommandBuffer & {
+    if (_impl) _impl->render(d);
+    return *this;
+}
+auto CommandBuffer::render(const DrawPack & d) -> CommandBuffer & {
+    if (_impl) _impl->render(d);
+    return *this;
+}
+
+class CommandQueue::Impl {
+public:
+    Impl(CommandQueue & owner, const ConstructParameters & params): _owner(owner) {
+        _desc.gi     = params.gi;
+        _desc.family = params.family;
+        _desc.index  = params.index;
+        _desc.handle = params.gi->device.getQueue(params.family, params.index);
+    }
+
+    ~Impl() { waitIdle(); }
+
+    const Desc & desc() const { return _desc; }
+
+    const std::string & name() const { return _owner.name(); }
+
+    CommandBuffer begin(const char * name, vk::CommandBufferLevel level) {
+        if (!name || !*name) name = "<no-name>";
+        auto                                 lock = std::lock_guard {_mutex};
+        std::shared_ptr<CommandBuffer::Impl> p;
+        if (_finished.empty()) {
+            p = std::make_unique<CommandBuffer::Impl>(_owner, name, level);
+        } else {
+            p = _finished.begin()->second;
+            _finished.erase(_finished.begin());
+            p->wakeup();
+        }
+        auto cb     = p.get();
+        _active[cb] = std::move(p);
+        return cb;
+    }
+
+    SubmissionID submit(const SubmitParameters & sp) {
+        // remove duplicated command buffers
+        auto uniqueCommandBuffers = unique(sp.commandBuffers);
+
+        auto lock    = std::lock_guard {_mutex};
+        auto s       = std::make_unique<InternalSubmission>();
+        auto handles = std::vector<vk::CommandBuffer> {};
+        for (auto c : uniqueCommandBuffers) {
+            auto p = promote(c);
+            if (!p) continue;
+            if (!p->end()) continue;
+            s->commandBuffers.push_back(p);
+            handles.push_back(p->handle());
+        }
+        if (s->commandBuffers.empty()) return {};
+
+        // set submission index
+        s->index = ++_nextSubmissionId;
+        if (0 == s->index) s->index = ++_nextSubmissionId;
+
+        // set fence
+        s->fence = sp.signalFence;
+        if (!s->fence) {
+            s->builtInFence = _desc.gi->device.createFenceUnique({});
+            setVkHandleName(_desc.gi->device, s->builtInFence.get(), name());
+            s->fence = s->builtInFence.get();
+        }
+
+        // submit the command buffer
+        std::vector<vk::PipelineStageFlags> flags(sp.waitSemaphores.size(), vk::PipelineStageFlagBits::eBottomOfPipe);
+        vk::SubmitInfo                      si;
+        si.setWaitSemaphores(sp.waitSemaphores);
+        si.setSignalSemaphores(sp.signalSemaphores);
+        si.setCommandBuffers(handles);
+        si.setPWaitDstStageMask(flags.data());
+        _desc.handle.submit({si}, s->fence);
+
+        // Mark the command buffers as pending. remove them from the active list.
+        for (auto cb : s->commandBuffers) {
+            cb->setPending();
+            _active.erase(cb.get());
+        }
+
+        // going through the pending list in reverse order to find the first submission that is already finished the execution on GPU.
+        for (auto iter = _pending.rbegin(); iter != _pending.rend(); ++iter) {
+            auto status = _desc.gi->device.getFenceStatus((*iter)->fence);
+            if (vk::Result::eNotReady == status) continue; // the submission is still in progress.
+            finishSubmission(iter.base() - 1);
+            break;
+        }
+
+        // add to pending list
+        _pending.push_back(std::move(s));
+
+        // done
+        return {(intptr_t) &_owner, _nextSubmissionId};
+    }
+
+    void drop(const vk::ArrayProxy<const CommandBuffer> & commandBuffers) {
+        // remove duplicated command buffers
+        auto uniqueCommandBuffers = unique(commandBuffers);
+
+        auto lock = std::lock_guard {_mutex};
+        for (auto c : commandBuffers) {
+            auto p = promote(c);
+            if (!p) continue;
+            p->hibernate();
+            _active.erase(p.get());
+            _finished[p.get()] = p;
+        }
+    }
+
+    CommandQueue & wait(const vk::ArrayProxy<const SubmissionID> & submissions) {
+        if (submissions.empty()) return _owner;
+
+        auto lock = std::lock_guard {_mutex};
+
+        // do nothing if pending list is empty.
+        if (_pending.empty()) return _owner;
+
+        // if the submission array is not empty, then find the one with the largest index.
+        std::optional<int64_t> candidate;
+        for (const auto & sid : submissions) {
+            if (sid.queue != (int64_t) (intptr_t) &_owner) {
+                RVI_LOGE("Submission %" PRIi64 " is not from queue (%s)!", sid.index, name().c_str());
+                continue;
+            }
+            auto oldest = _pending.front()->index;
+            if (sid.olderThan(oldest)) {
+                // the workload has finished already.
+                continue;
+            }
+            auto newest = _pending.back()->index;
+            if (sid.newerThan(newest)) {
+                RVI_LOGE("Submission %" PRIi64 " is invalid since it is newer than the newest submission %" PRIi64 "!", sid.index, newest);
+                continue;
+            }
+
+            // this is an valid pending submission.
+            if (!candidate.has_value()) {
+                candidate = sid.index;
+            } else if (sid.newerThan(candidate.value())) {
+                // we only need to save the newest one.
+                candidate = sid.index;
+            }
+        }
+        if (!candidate.has_value()) {
+            RVI_LOGE("No valid submission is found!");
+            return _owner;
+        }
+
+        auto submission = findSubmission(candidate.value());
+        if (submission == _pending.end()) {
+            RVI_LOGE("Submission %" PRIi64 " is invalid since it is not found in the pending list!", (*submission)->index);
+            return _owner;
+        }
+
+        // done
+        waitSubmission(submission);
+        return _owner;
+    }
+
+    CommandQueue & waitIdle() {
+        auto lock = std::lock_guard {_mutex};
+        if (!_pending.empty()) waitSubmission(--_pending.end());
+        return _owner;
+    }
+
+    void setName(const std::string & name) {
+        auto lock = std::lock_guard {_mutex};
+        setVkHandleName(_desc.gi->device, _desc.handle, name.c_str());
+    }
+
+private:
+    struct InternalSubmission {
+        int64_t                                           index {};
+        std::vector<std::shared_ptr<CommandBuffer::Impl>> commandBuffers {};
+        vk::Fence                                         fence {};
+        vk::UniqueFence                                   builtInFence {};
+    };
+
+    typedef std::unordered_map<CommandBuffer::Impl *, std::shared_ptr<CommandBuffer::Impl>> CommandBufferMap;
+    typedef std::deque<std::shared_ptr<InternalSubmission>>                                 PendingList;
+    typedef PendingList::iterator                                                           PendingIterator;
+
+    CommandQueue &   _owner;
+    std::mutex       _mutex;
+    CommandBufferMap _active;   ///< Command buffers in recording state.
+    PendingList      _pending;  ///< Pending submission list.
+    CommandBufferMap _finished; ///< list of finished command buffers. ready for reuse.
+    Desc             _desc;
+    int64_t          _nextSubmissionId {};
+
+private:
+    static std::vector<CommandBuffer> unique(const vk::ArrayProxy<const CommandBuffer> & commandBuffers) {
+        std::vector<CommandBuffer> uniqueCommandBuffers;
+        uniqueCommandBuffers.reserve(commandBuffers.size());
+        std::unique_copy(commandBuffers.begin(), commandBuffers.end(), std::back_inserter(uniqueCommandBuffers));
+        return uniqueCommandBuffers;
+    }
+
+    std::shared_ptr<CommandBuffer::Impl> promote(const CommandBuffer & cb, bool expectedNull = false) const {
+        if (!cb) {
+            if (!expectedNull) RVI_LOGE("Null command buffer.");
+            return {};
+        }
+        auto it = _active.find(cb.impl());
+        if (it == _active.end()) {
+            if (!expectedNull) RVI_LOGE("Command buffer (%s) is not created by queue (%s).", cb.name().c_str(), name().c_str());
+            return {};
+        }
+        return it->second;
+    }
+
+    PendingIterator findSubmission(int64_t index) {
+        return std::find_if(_pending.begin(), _pending.end(), [index](const auto & s) { return s->index == index; });
+    }
+
+    void waitSubmission(PendingIterator iter) {
+        RVI_ASSERT(iter != _pending.end());
+        const auto & submission = **iter;
+        RVI_ASSERT(submission.fence);
+        auto result = _desc.gi->device.waitForFences({submission.fence}, true, UINT64_MAX);
+        if (result != vk::Result::eSuccess) { RVI_LOGE("Submission %" PRIi64 " failed to wait for finish!", submission.index); }
+        finishSubmission(iter);
+    }
+
+    void finishSubmission(PendingIterator iter) {
+        // Move all finished command buffers to finished list.
+        RVI_ASSERT(iter != _pending.end());
+        ++iter;
+        for (auto s = _pending.begin(); s != iter; ++s) {
+            for (auto cb : (*s)->commandBuffers) {
+                cb->hibernate();
+                _finished[cb.get()] = cb;
+            }
+        }
+        // Remove all finished submissions from the pending list. This will also delete the command buffer objects.
+        _pending.erase(_pending.begin(), iter);
+    }
+
+    // void finish(CommandBuffer * p) {
+    //     if (p) {
+    //         p->finish();
+    //         if (CommandBuffer::FINISHED != p->state()) {
+    //             RVI_LOGE("Can't finish command buffer %s: buffer was not in EXECUTING or FINISHED state.", p->name().c_str());
+    //             return;
+    //         }
+    //         RAPID_VULKAN_ASSERT(std::find(_pendings.begin(), _pendings.end(), p) != _pendings.end());
+    //     }
+
+    //     // Mark this command buffer and all command buffers submitted before it as finished.
+    //     auto end = p ? p->pending : _pendings.end();
+    //     if (p) end++;
+    //     for (auto iter = _pendings.begin(); iter != end; ++iter) {
+    //         auto cb = *iter;
+    //         cb->setFinished();
+    //         // TODO: move the command buffer to the finished list.
+    //         // _finished.push_back(std::move(*iter));
+
+    //         // Remove from all list, which will automatically delete the command buffer instance.
+    //         _all.erase(_all.find(cb->handle()));
+    //     }
+    //     // Then remove them from the pending list.
+    //     _pendings.erase(_pendings.begin(), end);
+    // }
+
+    // void waitIdle() {
+    //     try {
+    //         _desc.handle.waitIdle();
+    //     } catch (vk::SystemError & error) { RVI_LOGE("%s", error.what()); }
+
+    //     // then mark all command buffers as finished.
+    //     finish(nullptr);
+    // }
+};
+
+CommandQueue::CommandQueue(const ConstructParameters & params): Root(params), _impl(new Impl(*this, params)) { _impl->setName(name()); }
+CommandQueue::~CommandQueue() {
+    delete _impl;
+    _impl = nullptr;
+}
+auto CommandQueue::desc() const -> const Desc & { return _impl->desc(); }
+auto CommandQueue::begin(const char * purpose, vk::CommandBufferLevel level) -> CommandBuffer { return _impl->begin(purpose, level); }
+auto CommandQueue::submit(const SubmitParameters & sp) -> SubmissionID { return _impl->submit(sp); }
+void CommandQueue::drop(vk::ArrayProxy<const CommandBuffer> commandBuffers) { _impl->drop(commandBuffers); }
+auto CommandQueue::wait(const vk::ArrayProxy<const SubmissionID> & s) -> CommandQueue & { return _impl->wait(s); }
+auto CommandQueue::waitIdle() -> CommandQueue & { return _impl->waitIdle(); }
+void CommandQueue::onNameChanged(const std::string &) { _impl->setName(name()); }
 
 // *********************************************************************************************************************
 // Swapchain
@@ -2421,7 +2799,7 @@ public:
 
         // present current frame
         if (_handle) {
-            _graphicsQueue->submit({cb, {}, {frame.renderFinished}, {frame.frameEndSemaphore}});
+            frame.frameEndSubmission = _graphicsQueue->submit({cb, {}, {frame.renderFinished}, {frame.frameEndSemaphore}});
 
             auto presentInfo = vk::PresentInfoKHR()
                                    .setSwapchainCount(1)
@@ -2430,20 +2808,17 @@ public:
                                    .setWaitSemaphoreCount(1)
                                    .setPWaitSemaphores(&frame.frameEndSemaphore);
             auto result = _presentQueue.presentKHR(&presentInfo);
-            if (vk::Result::eSuccess == result) {
-                // Store the command buffer. This will be used later to wait for the frame to be available for reuse.
-                frame.frameEndCommands = cb;
-            } else if (result == vk::Result::eSuboptimalKHR || result == vk::Result::eErrorOutOfDateKHR) {
+            if (result == vk::Result::eSuboptimalKHR || result == vk::Result::eErrorOutOfDateKHR) {
                 // this means window/surface size is changed, we need to recreate the swapchain.
-                _graphicsQueue->wait();
+                _graphicsQueue->wait(frame.frameEndSubmission);
+                frame.frameEndSubmission = {};
                 recreateWindowSwapchain();
-            } else {
+            } else if (vk::Result::eSuccess != result) {
                 RVI_THROW("Failed to present swapchain image. result = %s", vk::to_string((vk::Result) result).c_str());
             }
         } else {
             // headless swapchain.
-            _graphicsQueue->submit({cb, {}, {frame.renderFinished}, {frame.imageAvailable}});
-            frame.frameEndCommands = cb;
+            frame.frameEndSubmission = _graphicsQueue->submit({cb, {}, {frame.renderFinished}, {frame.imageAvailable}});
         }
 
         // then start a new frame.
@@ -2453,10 +2828,10 @@ public:
 
 private:
     struct FrameImpl : public Frame {
-        uint32_t          imageIndex {};
-        vk::Semaphore     frameEndSemaphore {};
-        vk::CommandBuffer frameEndCommands {};
-        Ref<Image>        headlessImage; ///< the image that is used as the backbuffer for headless swapchain.
+        uint32_t                   imageIndex {};
+        vk::Semaphore              frameEndSemaphore {};
+        CommandQueue::SubmissionID frameEndSubmission {};
+        Ref<Image>                 headlessImage; ///< the image that is used as the backbuffer for headless swapchain.
     };
 
     struct BackbufferImpl : public Backbuffer {
@@ -2561,10 +2936,15 @@ private:
         clearSwapchain();
         auto gi = _cp.gi;
 
-        // determine the swapchain size
+        // verify surface caps.
         auto surfaceCaps = gi->physical.getSurfaceCapabilitiesKHR(_cp.surface);
-        auto w           = (uint32_t) _cp.width;
-        auto h           = (uint32_t) _cp.height;
+        if (0 == surfaceCaps.maxImageExtent.width || 0 == surfaceCaps.maxImageExtent.height) {
+            RVI_THROW("Can't create swapchain, since the surface is minimized.");
+        }
+
+        // determine the swapchain size
+        auto w = (uint32_t) _cp.width;
+        auto h = (uint32_t) _cp.height;
         if (0 == w) w = (uint32_t) surfaceCaps.currentExtent.width;
         if (0 == h) h = (uint32_t) surfaceCaps.currentExtent.height;
         RVI_LOGI("Swapchain resolution = %ux%u", w, h);
@@ -2643,8 +3023,8 @@ private:
                                                                   {w, h, 1},
                                                               }}));
             bb.view = bb.image->getView({vk::ImageViewType::e2D, swapchainCreateInfo.imageFormat});
-            setVkObjectName(gi->device, images[i], format("back buffer image %zu", i));
-            setVkObjectName(gi->device, bb.view, format("back buffer view %zu", i));
+            setVkHandleName(gi->device, images[i], format("back buffer image %zu", i));
+            setVkHandleName(gi->device, bb.view, format("back buffer view %zu", i));
 
             // create frame buffer
             auto fbcp = Framebuffer::ConstructParameters {{format("swapchain framebuffer %zu", i)}, gi}.addImageView(bb.view).setExtent(w, h).setRenderPass(
@@ -2662,8 +3042,7 @@ private:
         }
 
         // execute the command buffer to update image layout
-        _graphicsQueue->submit({c});
-        _graphicsQueue->wait();
+        _graphicsQueue->submit({c}).wait();
 
         // initialize frame array.
         RVI_ASSERT(_backbuffers.size() > surfaceCaps.minImageCount);
@@ -2673,9 +3052,9 @@ private:
             f.imageAvailable    = gi->device.createSemaphore({}, gi->allocator);
             f.renderFinished    = gi->device.createSemaphore({}, gi->allocator);
             f.frameEndSemaphore = gi->device.createSemaphore({}, gi->allocator);
-            setVkObjectName(gi->device, f.imageAvailable, format("image available semaphore %zu", i));
-            setVkObjectName(gi->device, f.renderFinished, format("render finished semaphore %zu", i));
-            setVkObjectName(gi->device, f.frameEndSemaphore, format("frame end semaphore %zu", i));
+            setVkHandleName(gi->device, f.imageAvailable, format("image available semaphore %zu", i));
+            setVkHandleName(gi->device, f.renderFinished, format("render finished semaphore %zu", i));
+            setVkHandleName(gi->device, f.frameEndSemaphore, format("frame end semaphore %zu", i));
         }
     }
 
@@ -2717,9 +3096,9 @@ private:
                                                 .setFormat(_cp.backbufferFormat)
                                                 .set2D(w, h)
                                                 .addUsage(vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst)));
-            setVkObjectName(gi->device, f.imageAvailable, format("image available semaphore %u", i));
-            setVkObjectName(gi->device, f.renderFinished, format("render finished semaphore %u", i));
-            setVkObjectName(gi->device, f.frameEndSemaphore, format("frame end semaphore %u", i));
+            setVkHandleName(gi->device, f.imageAvailable, format("image available semaphore %u", i));
+            setVkHandleName(gi->device, f.renderFinished, format("render finished semaphore %u", i));
+            setVkHandleName(gi->device, f.frameEndSemaphore, format("frame end semaphore %u", i));
 
             // transfer the image into desired layout.
             Barrier()
@@ -2733,7 +3112,7 @@ private:
 
             // create back buffer view
             bb.view = bb.image->getView({vk::ImageViewType::e2D, _cp.backbufferFormat});
-            setVkObjectName(gi->device, bb.view, format("back buffer view %u", i));
+            setVkHandleName(gi->device, bb.view, format("back buffer view %u", i));
 
             // create frame buffer
             auto fbcp = Framebuffer::ConstructParameters {{format("swapchain framebuffer %u", i)}, gi}.addImageView(bb.view).setExtent(w, h).setRenderPass(
@@ -2752,7 +3131,7 @@ private:
             _graphicsQueue->submit({cb, {}, {}, {f.imageAvailable}});
         }
 
-        _graphicsQueue->wait();
+        _graphicsQueue->waitIdle();
     }
 
     void beginFrame() {
@@ -2760,9 +3139,9 @@ private:
         frame.index  = _frameIndex;
 
         // wait for the frame to be available again.
-        if (frame.frameEndCommands) {
-            _graphicsQueue->wait(frame.frameEndCommands);
-            frame.frameEndCommands = nullptr; // Clear the command buffer. So we only wait it once.
+        if (frame.frameEndSubmission) {
+            _graphicsQueue->wait({frame.frameEndSubmission});
+            frame.frameEndSubmission = {}; // Clear the command buffer. So we only wait it once.
         }
 
         // Acquire the next available swapchain image. Only do this if we are not in headless mode.
@@ -3593,6 +3972,14 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
 // ---------------------------------------------------------------------------------------------------------------------
 //
 Instance::~Instance() {
+#if RAPID_VULKAN_ENABLE_LOADER
+    // This is a hack to ensure that all instance function pointers are valid,
+    // specially when there are multiple instances
+    if (_instance) {
+        // load all function pointers.
+        VULKAN_HPP_DEFAULT_DISPATCHER.init(_instance);
+    }
+#endif
     if (_debugReport) {
         _instance.destroyDebugReportCallbackEXT(_debugReport);
         _debugReport = VK_NULL_HANDLE;
