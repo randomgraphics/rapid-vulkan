@@ -70,41 +70,49 @@ int main() {
     return 0;
 }
 ```
-This is the simplist form of an app created out of the rapid-vulkan library. It creates a Vulkan instance using default options. Then creates a Vulkan device out of that instance.
+This is the simplest form of an app created out of the rapid-vulkan library. It creates a Vulkan instance using default options. Then creates a Vulkan device out of that instance.
 
-# Pipeline
-VkPipeline sits at the center of Vulkan architecture that defines how GPU pipeline should be configured to render the scene. It is powerful but tediours to use. You'll have to create and manage an whole series of supporting objects, such as pipeline layout, descriptor set layout, descriptor set, descriptor pool to use it. To simplify this task, the rapid-vulkan library wraps all of them into 2 easy to use classes: **Pipeline** and **ArgumentPack**
+# Pipeline, Drawable, CommandBuffer and CommandQueue
+VkPipeline sits at the center of Vulkan architecture that defines how GPU pipeline should be configured to render the scene. It is powerful but tedious to use. You'll have to create and manage an whole series of supporting objects, such as pipeline layout, descriptor set layout, descriptor set, descriptor pool to use it. On top of that, you'll also need to carefully manage the async execution of the pipeline maximize CPU & GPU parallelism while not deleting anything that is still being used by GPU. The rapid-vulkan library tries to simplify all these by wrapping the most common use cases into 4 core classes: **Pipeline**, **Drawable**, **CommandBuffer** and **CommandQueue**
 
-Here is an simplified example of using these classes to issue a draw command. See [pipeline-args](dev/sample/pipeline-args.cpp) for full source code.
+Here is an simplified example of using these classes to issue a draw command. See [drawable](dev/sample/drawable.cpp) sample for full source code.
 
 ```c++
     GlobalInfo     gi = getVulkanGlobalInfo(...); // get vulkan global information, usually from a Device object.
-    vk::RenderPass rp = getYourRenderPass(...); // get a render pass, usually from a Swapchian class.
+    vk::RenderPass rp = getYourRenderPass(...); // get a render pass, usually from a Swapchain class.
     Shader         vs(...); // construct your vertex shader
     Shader         fs(...); // construct your fragment shader.
 
-    // Config the pipeline via the construction parameters
+    // Create a pipeline object
     GraphicsPipeline::ConstructParameters gcp {"my pipeline", gi};
     gcp.set.setRenderPass(rp).setVS(&vs).setFS(&fs);
+    auto p = makeRef<GraphicsPipeline>(gcp);
 
-    // create the pipeline object
-    auto p = GraphicsPipeline(gcp);
-
-    // create argument pack
-    auto args = ArgumentPack({"name"});
-    args.b({0, 0}, {buffer1}); // bind buffer 1 to set 0, binding 0
-    args.i({1, 2}, {image1, image2}); // bind image1 and image2 to set 1, binding 2
+    // Create a drawable out of the pipeline object. Then attach resources to the drawable as inputs to the pipeline.
+    auto d = makeRef<Drawable>({{"name"}, p});
+    d->b({0, 0}, {buffer1}); // bind buffer 1 to set 0, binding 0
+    d->i({1, 2}, {image1, image2}); // bind image1 and image2 to set 1, binding 2
 
     // issue the draw
-    ...
-    p.cmdBind(commandBuffer, args);
-    p.draw(commandBufer, ...);
-    ...
+    auto c = gi.device->graphics()->begin(); // allocate a new command buffer to record rendering commands.
+    c->render(d.compile());
+
+    // submit the command buffer to GPU.
+    auto s = gi.device->graphics()->submit({c});
+
+    // optionally, wait for the submission to finish.
+    s.wait();
 ```
 
-**Pipeline** class is basically a wrapper of VkPipeline object. It has 2 sub classes for compute and graphcis pipeline. It comes with utility methods that makes constructing a pipeline object more intuitive. Similar as the native vk::Pipeline handle, it is **immutable** once constructured.
+**Pipeline** class is basically a wrapper of VkPipeline object. It has 2 sub classes for compute and graphics pipeline. It comes with utility methods that makes constructing a pipeline object more intuitive. Similar as the native vk::Pipeline handle, the pipeline object is **immutable** once constructed.
 
-**ArgumentPack** class stores the data used for rendering, such as buffer, image and constants. It is basically a map from resource location (set and binding), to resource handles. Note that Vulkan allows an array of resource of same type to be bound to a single bind location. This is why the second parameter of method `b()` and `i()` is an array.
+**Drawable** class stores reference to a pipeline and the data used by the pipeline line for rendering, such as buffer, image and constants. It is a self contained container that can be submit to command queue for rendering.
+
+**CommandQueue**
+TBW
+
+**CommandBuffer**
+TBW
 
 # License
 The library is released under MIT license. See [LICENSE](LICENSE) file for details.

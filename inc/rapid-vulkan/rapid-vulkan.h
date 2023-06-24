@@ -528,7 +528,7 @@ public:
     /// destroyed automatically along with the stack frame, regardless if there are still references to it.
     /// So it is the caller's responsibility to make sure that all references are gone before the stack frame is
     /// destroyed.
-    void markAsNotDeleteable() { _noDeleteOnZeroRef = true; }
+    void doNotDeleteOnZeroRef() { _noDeleteOnZeroRef = true; }
 
     /// @brief Get the reference count of the object.
     uint64_t refCount() const { return _ref; }
@@ -585,7 +585,7 @@ class Ref : public RefBase {
 public:
     /// @brief Create a Ref instance from an object instance allocated on stack.
     static Ref fromStack(T & t) {
-        t.markAsNotDeleteable();
+        t.doNotDeleteOnZeroRef();
         return Ref(t);
     }
 

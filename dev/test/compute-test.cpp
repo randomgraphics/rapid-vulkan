@@ -24,7 +24,7 @@ TEST_CASE("cs-buffer-args") {
     auto gi   = dev->gi();
     auto noop = Shader(Shader::ConstructParameters {{"cs-buffer-args"}, gi}.setSpirv(argument_test_comp));
     auto p    = ComputePipeline({{"cs-buffer-args"}, &noop});
-    p.markAsNotDeleteable();
+    p.doNotDeleteOnZeroRef();
 
     auto rdc = RenderDocCapture();
     if (rdc) rdc.begin("cs-buffer-args");

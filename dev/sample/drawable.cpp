@@ -38,7 +38,7 @@ struct Options {
 };
 
 void entry(const Options & options) {
-    // Standard boilerplate of creating instance, device, swapchain, etc. It is basicaly the same as simple-triangle.cpp.
+    // Standard boilerplate of creating instance, device, swapchain, etc. It is basically the same as simple-triangle.cpp.
     using namespace rapid_vulkan;
     auto w        = uint32_t(1280);
     auto h        = uint32_t(720);
@@ -58,7 +58,7 @@ void entry(const Options & options) {
                                          .dynamicViewport()
                                          .addVertexAttribute(0, 0, vk::Format::eR32G32Sfloat)
                                          .addVertexBuffer(2 * sizeof(float)));
-    p.markAsNotDeleteable(); // Make the stack-allocated pipeline instance compatible with Ref<>
+    p.doNotDeleteOnZeroRef(); // Make the stack-allocated pipeline instance compatible with Ref<>
 
     // This part is what this sample is about. We create some buffers and bind them to the drawable.
     auto u0 = Buffer(Buffer::ConstructParameters {{"ub0"}, gi}.setUniform().setSize(sizeof(float) * 2));
@@ -71,7 +71,7 @@ void entry(const Options & options) {
 
     glfw.show();
     for (;;) {
-        // Standard boilerplate of rendering a frame. It is basicaly the same as simple-triangle.cpp.
+        // Standard boilerplate of rendering a frame. It is basically the same as simple-triangle.cpp.
         if (options.headless) {
             if (sw.currentFrame().index > 10) break; // render 10 frames in headless mode.
             std::cout << "Frame " << sw.currentFrame().index << std::endl;
