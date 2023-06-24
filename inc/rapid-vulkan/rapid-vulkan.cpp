@@ -2216,10 +2216,9 @@ private:
 
 class CommandBuffer::Impl : public CommandBuffer {
 public:
-    Impl(CommandQueue & queue, const std::string & name_, vk::CommandBufferLevel level)
-        : _queue(queue), _name(name_), _level(level) {
-        const auto & d  = queue.desc();
-        _pool = d.gi->device.createCommandPool(vk::CommandPoolCreateInfo().setQueueFamilyIndex(d.family), d.gi->allocator);
+    Impl(CommandQueue & queue, const std::string & name_, vk::CommandBufferLevel level): _queue(queue), _name(name_), _level(level) {
+        const auto & d = queue.desc();
+        _pool          = d.gi->device.createCommandPool(vk::CommandPoolCreateInfo().setQueueFamilyIndex(d.family), d.gi->allocator);
         wakeup();
     }
 
@@ -2887,8 +2886,8 @@ private:
         }
 
         // determine the swapchain size
-        auto w           = (uint32_t) _cp.width;
-        auto h           = (uint32_t) _cp.height;
+        auto w = (uint32_t) _cp.width;
+        auto h = (uint32_t) _cp.height;
         if (0 == w) w = (uint32_t) surfaceCaps.currentExtent.width;
         if (0 == h) h = (uint32_t) surfaceCaps.currentExtent.height;
         RVI_LOGI("Swapchain resolution = %ux%u", w, h);
