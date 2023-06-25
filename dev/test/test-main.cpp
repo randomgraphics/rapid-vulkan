@@ -41,8 +41,7 @@ struct TestVulkanInstanceImpl : public TestVulkanInstance {
         using namespace rapid_vulkan;
         auto icp = Instance::ConstructParameters {.validation = Instance::BREAK_ON_VK_ERROR};
         instance = std::make_unique<Instance>(icp);
-        auto dcp = instance->dcp();
-        device   = std::make_unique<Device>(dcp);
+        device   = std::make_unique<Device>(Device::ConstructParameters {*instance});
     }
 
     ~TestVulkanInstanceImpl() {

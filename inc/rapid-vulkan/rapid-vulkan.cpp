@@ -1411,7 +1411,10 @@ class PipelineLayout::Impl {
 public:
     Impl(PipelineLayout & owner, vk::ArrayProxy<const Shader * const> shaders): _owner(owner) {
         // make sure shader array is not empty and the first shader is not null.
-        RVI_REQUIRE(shaders.size() > 0 && shaders.front());
+        if (0 == shaders.size() || !shaders.front()) {
+            RVI_LOGE("empty shader array");
+            return;
+        }
 
         _gi         = shaders.front()->gi();
         _reflection = reflectShaders(owner.name(), shaders);
@@ -1479,33 +1482,32 @@ void PipelineLayout::onNameChanged(const std::string &) { _impl->onNameChanged()
 
 class Pipeline::Impl {
 public:
-    vk::Pipeline          handle {};
-    vk::PipelineBindPoint bindPoint;
+    vk::UniquePipeline handle {};
 
-    Impl(Pipeline & owner, vk::ArrayProxy<const Shader * const> shaders) {
-        // The first shader must be valid.
-        RVI_REQUIRE(shaders.size() > 0 && shaders.front(), "Failed to create pipeline layout: the first shader in the shader array must be valid.");
-        _gi = shaders.front()->gi();
-        // TODO: reuse layout via a cache object?
+    Impl(Pipeline & owner, vk::PipelineBindPoint bindPoint, vk::ArrayProxy<const Shader * const> shaders): _bindPoint(bindPoint) {
         _layout.reset(new PipelineLayout({{owner.name()}, shaders}));
     }
 
-    ~Impl() { _gi->device.destroy(handle); }
+    ~Impl() {}
+
+    vk::PipelineBindPoint bindPoint() const { return _bindPoint; }
 
     PipelineLayout & layout() const { return *_layout; }
 
 private:
-    const GlobalInfo *  _gi = nullptr;
-    Ref<PipelineLayout> _layout;
+    vk::PipelineBindPoint _bindPoint;
+    Ref<PipelineLayout>   _layout;
 };
 
-Pipeline::Pipeline(const std::string & name, vk::ArrayProxy<const Shader * const> shaders): Root({name}) { _impl = new Impl(*this, shaders); }
+Pipeline::Pipeline(const std::string & name, vk::PipelineBindPoint bindPoint, vk::ArrayProxy<const Shader * const> shaders): Root({name}) {
+    _impl = new Impl(*this, bindPoint, shaders);
+}
 Pipeline::~Pipeline() {
     delete _impl;
     _impl = nullptr;
 }
-auto Pipeline::bindPoint() const -> vk::PipelineBindPoint { return _impl->bindPoint; }
-auto Pipeline::handle() const -> vk::Pipeline { return _impl->handle; }
+auto Pipeline::bindPoint() const -> vk::PipelineBindPoint { return _impl->bindPoint(); }
+auto Pipeline::handle() const -> vk::Pipeline { return _impl->handle.get(); }
 auto Pipeline::layout() const -> vk::PipelineLayout { return _impl->layout().handle(); }
 auto Pipeline::reflection() const -> const PipelineReflection & { return _impl->layout().reflection(); }
 
@@ -1513,7 +1515,7 @@ auto Pipeline::reflection() const -> const PipelineReflection & { return _impl->
 // Graphics Pipeline
 // *********************************************************************************************************************
 
-GraphicsPipeline::GraphicsPipeline(const ConstructParameters & params): Pipeline(params.name, {params.vs, params.fs}) {
+GraphicsPipeline::GraphicsPipeline(const ConstructParameters & params): Pipeline(params.name, vk::PipelineBindPoint::eGraphics, {params.vs, params.fs}) {
     // create shader stage array
     RVI_REQUIRE(params.vs, "Vertex shader is required for graphics pipeline.");
     auto gi           = params.vs->gi();
@@ -1587,15 +1589,12 @@ GraphicsPipeline::GraphicsPipeline(const ConstructParameters & params): Pipeline
                                              params.subpass, params.baseHandle, params.baseIndex);
 
     // create the shader.
-    _impl->handle    = gi->device.createGraphicsPipeline(nullptr, ci, gi->allocator).value;
-    _impl->bindPoint = vk::PipelineBindPoint::eGraphics;
+    _impl->handle = std::move(gi->device.createGraphicsPipelinesUnique(nullptr, ci, gi->allocator).value[0]);
 }
 
 void GraphicsPipeline::cmdDraw(vk::CommandBuffer cb, const DrawParameters & dp) const {
     if (!_impl->handle) return;
-
-    cb.bindPipeline(vk::PipelineBindPoint::eGraphics, _impl->handle);
-
+    cb.bindPipeline(vk::PipelineBindPoint::eGraphics, _impl->handle.get());
     if (dp.indexCount) {
         // indexed draw
         cb.drawIndexed(dp.indexCount, dp.instanceCount, dp.firstIndex, dp.vertexOffset, dp.firstInstance);
@@ -1609,17 +1608,16 @@ void GraphicsPipeline::cmdDraw(vk::CommandBuffer cb, const DrawParameters & dp) 
 // Compute Pipeline
 // *********************************************************************************************************************
 
-ComputePipeline::ComputePipeline(const ConstructParameters & params): Pipeline(params.name, {params.cs}) {
+ComputePipeline::ComputePipeline(const ConstructParameters & params): Pipeline(params.name, vk::PipelineBindPoint::eCompute, {params.cs}) {
     vk::ComputePipelineCreateInfo ci;
     ci.setStage({{}, vk::ShaderStageFlagBits::eCompute, params.cs->handle(), params.cs->entry().c_str()});
     ci.setLayout(_impl->layout().handle());
-    auto gi          = params.cs->gi();
-    _impl->handle    = gi->device.createComputePipeline(nullptr, ci, gi->allocator).value;
-    _impl->bindPoint = vk::PipelineBindPoint::eCompute;
+    auto gi       = params.cs->gi();
+    _impl->handle = gi->device.createComputePipelineUnique(nullptr, ci, gi->allocator).value;
 }
 
 void ComputePipeline::cmdDispatch(vk::CommandBuffer cb, const DispatchParameters & dp) const {
-    cb.bindPipeline(vk::PipelineBindPoint::eCompute, _impl->handle);
+    cb.bindPipeline(vk::PipelineBindPoint::eCompute, _impl->handle.get());
     cb.dispatch((uint32_t) dp.width, (uint32_t) dp.height, (uint32_t) dp.depth);
 }
 
@@ -1874,18 +1872,14 @@ public:
 
 class Drawable::Impl {
 public:
-    Impl(Drawable & o, const ConstructParameters & cp): _owner(o), _pipeline(cp.pipeline) {
-        _pack           = std::make_shared<DrawPack>();
-        _pack->pipeline = _pipeline;
-        _dirty.setAll();
-    }
+    Impl(Drawable & o, const ConstructParameters & cp): _owner(o), _pipeline(cp.pipeline) { reset(); }
 
     ~Impl() {}
 
-    void clear() {
+    void reset() {
         _descriptors.clear();
         _constants.clear();
-        _pack.reset();
+        _cachedPack.reset();
         _dirty.setAll();
     }
 
@@ -1932,32 +1926,48 @@ public:
         _dirty.graphicsOrDispatch = true;
     }
 
-    std::shared_ptr<DrawPack> compile() const {
+    std::shared_ptr<const DrawPack> compile() const {
         // if the pipeline is not ready, return a failsafe pack.
         if (!_pipeline) return failsafe();
 
-        // if the pack is not dirty, return the cached pack.
-        if (!_dirty.all) return _pack;
+        // if the drawable is not dirty, return the cached pack.
+        if (!_dirty.all) {
+            RVI_ASSERT(_cachedPack);
+            return _cachedPack;
+        }
+
+        // The drawable is changed since the last call to compile(0). We can't directly
+        // modify the cached pack, since it may be used for rendering. Instead, we'll
+        // create a new pack to store the compile result.
+        auto newPack = std::make_shared<DrawPack>();
+        if (_cachedPack) {
+            // copy content of the cached pack to the new one.
+            *newPack = *_cachedPack;
+        } else {
+            newPack->pipeline = _pipeline;
+            _dirty.setAll();
+        }
 
         if (_dirty.descriptors) {
-            if (!compileDescriptors(*_pack)) return failsafe();
+            if (!compileDescriptors(*newPack)) return failsafe();
         }
 
         if (_dirty.constants) {
-            if (!compileConstants(*_pack)) return failsafe();
+            if (!compileConstants(*newPack)) return failsafe();
         }
 
         if (_dirty.graphicsOrDispatch) {
             if (_pipeline->bindPoint() == vk::PipelineBindPoint::eGraphics) {
-                if (!compileGraphics(*_pack)) return failsafe();
+                if (!compileGraphics(*newPack)) return failsafe();
             } else if (_pipeline->bindPoint() == vk::PipelineBindPoint::eCompute) {
-                if (!compileCompute(*_pack)) return failsafe();
+                if (!compileCompute(*newPack)) return failsafe();
             }
         }
 
         // done
+        _cachedPack = newPack;
         _dirty.clearAll();
-        return _pack;
+        return _cachedPack;
     }
 
 private:
@@ -1984,7 +1994,7 @@ private:
     vk::IndexType                                          _indexType = vk::IndexType::eUint16;
     GraphicsPipeline::DrawParameters                       _drawParameters;
     ComputePipeline::DispatchParameters                    _dispatchParameters;
-    mutable std::shared_ptr<DrawPack>                      _pack;
+    mutable std::shared_ptr<const DrawPack>                _cachedPack;
     mutable DirtyFlags                                     _dirty {};
 
 private:
@@ -2146,8 +2156,8 @@ Drawable::~Drawable() {
     delete _impl;
     _impl = nullptr;
 }
-auto Drawable::clear() -> Drawable & {
-    _impl->clear();
+auto Drawable::reset() -> Drawable & {
+    _impl->reset();
     return *this;
 }
 auto Drawable::b(DescriptorIdentifier id, vk::ArrayProxy<const BufferView> v) -> Drawable & {
@@ -2170,11 +2180,11 @@ auto Drawable::i(const BufferView & v, vk::IndexType t) -> Drawable & {
     _impl->set(v, t);
     return *this;
 }
-auto Drawable::dp(const GraphicsPipeline::DrawParameters & v) -> Drawable & {
+auto Drawable::draw(const GraphicsPipeline::DrawParameters & v) -> Drawable & {
     _impl->set(v);
     return *this;
 }
-auto Drawable::dp(const ComputePipeline::DispatchParameters & v) -> Drawable & {
+auto Drawable::dispatch(const ComputePipeline::DispatchParameters & v) -> Drawable & {
     _impl->set(v);
     return *this;
 }
@@ -3473,20 +3483,18 @@ static std::vector<const char *> validateExtensions(const std::vector<vk::Extens
 // ---------------------------------------------------------------------------------------------------------------------
 //
 Device::Device(const ConstructParameters & cp): _cp(cp) {
-    // check API version
-    if (0 == _cp.apiVersion) _cp.apiVersion = vk::enumerateInstanceVersion();
-    _gi.apiVersion = _cp.apiVersion;
-
     // check instance pointer
     RVI_REQUIRE(cp.instance);
     _gi.instance = cp.instance;
 
-    // enumerate physical devices
-    auto phydevs = enumeratePhysicalDevices(_gi.instance);
-
+    // select physical device
     // TODO: pick the one specified by user.
+    auto phydevs = enumeratePhysicalDevices(_gi.instance);
     _gi.physical = selectTheMostPowerfulPhysicalDevice(phydevs);
-    bool verbose = cp.printVkInfo == VERBOSE;
+
+    // Retrieve physical device properties
+    _gi.apiVersion = _gi.physical.getProperties().apiVersion;
+    bool verbose   = cp.printVkInfo == VERBOSE;
     if (cp.printVkInfo) printPhysicalDeviceInfo(phydevs, _gi.physical, verbose);
 
     // query queues
@@ -3504,7 +3512,7 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
     askedDeviceExtensions[VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME] = true;
     askedDeviceExtensions[VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME]    = true;
 
-    // enable swapchian extension regardless to support VK_IMAGE_LAYOUT_PRESENT_SRC.
+    // enable swapchain extension regardless to support VK_IMAGE_LAYOUT_PRESENT_SRC.
     askedDeviceExtensions[VK_KHR_SWAPCHAIN_EXTENSION_NAME] = true;
 
     // #if PH_ANDROID == 0

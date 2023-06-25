@@ -13,7 +13,7 @@ The library is aiming for decreasing the code you have to write yourself to use 
 int main() {
   using namespace rapid_vulkan;
   auto instance = Instance({});
-  auto device   = Device(instance.dcp()};
+  auto device   = Device({instance.handle()});
   auto spv      = loadSPRIV(...); // load spirv shader binary into std::vector container.
   auto cs       = Shader(Shader::ConstructParameters{{"my shader"}, device->gi}.setSpriv(spv));
   auto pipeline = ComputePipeline({{"my pipline"}, &cs});
@@ -66,7 +66,7 @@ After everything is built. You can use `cit` command to launch the check-in-test
 #include <rapid-vulkan/rapid-vulkan.h>
 int main() {
     auto instance = rapid_vulkan::Instance({});
-    auto device   = rapid_vulkan::Device(instance.dcp());
+    auto device   = rapid_vulkan::Device({instance.handle()});
     return 0;
 }
 ```

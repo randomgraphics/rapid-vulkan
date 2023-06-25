@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identify the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 14
+#define RAPID_VULKAN_HEADER_REVISION 15
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -302,9 +302,9 @@ using namespace std::string_literals;
 /// A utility class used to pass commonly used Vulkan global information around.
 struct GlobalInfo {
     const vk::AllocationCallbacks * allocator           = nullptr;
-    uint32_t                        apiVersion          = 0;
     vk::Instance                    instance            = nullptr;
     vk::PhysicalDevice              physical            = nullptr;
+    uint32_t                        apiVersion          = 0;
     vk::Device                      device              = nullptr;
     uint32_t                        graphicsQueueFamily = VK_QUEUE_FAMILY_IGNORED;
 #if RAPID_VULKAN_ENABLE_VMA
@@ -1524,7 +1524,7 @@ public:
     const PipelineReflection & reflection() const;
 
 protected:
-    Pipeline(const std::string & name, vk::ArrayProxy<const Shader * const> shaders);
+    Pipeline(const std::string & name, vk::PipelineBindPoint bindPoint, vk::ArrayProxy<const Shader * const> shaders);
 
     class Impl;
     Impl * _impl = nullptr;
@@ -1791,37 +1791,14 @@ public:
         Ref<const Pipeline> pipeline {};
     };
 
-    // struct IndexBuffer {
-    //     /// @brief Handle of the index buffer.
-    //     vk::Buffer buffer = VK_NULL_HANDLE;
-
-    //     /// @brief Byte offset of the first index. Ignored if buffer is empty.
-    //     vk::DeviceSize offset = 0;
-
-    //     /// @brief Index type;
-    //     vk::IndexType indexType = vk::IndexType::eUint16;
-
-    //     /// @brief Get size/stride of the index based on the type.
-    //     size_t indexStride() const {
-    //         switch (indexType) {
-    //         case vk::IndexType::eUint16:
-    //             return sizeof(uint16_t);
-    //         case vk::IndexType::eUint32:
-    //             return sizeof(uint32_t);
-    //         case vk::IndexType::eUint8EXT:
-    //             return 1;
-    //         default:
-    //             return 0;
-    //         }
-    //     }
-    // };
-
+    /// @brief Construct a drawable object.
     Drawable(const ConstructParameters &);
 
+    /// @brief Destruct the drawable object.
     ~Drawable();
 
-    /// @brief clear all draw arguments.
-    Drawable & clear();
+    /// @brief reset the drawable back to default state.
+    Drawable & reset();
 
     /// @brief Set value of buffer argument. Do nothing if the argument is not used by the pipeline.
     Drawable & b(DescriptorIdentifier id, vk::ArrayProxy<const BufferView>);
@@ -1844,9 +1821,11 @@ public:
     /// @brief Set index buffer
     Drawable & i(const BufferView & buffer, vk::IndexType type = vk::IndexType::eUint16);
 
-    Drawable & dp(const GraphicsPipeline::DrawParameters &);
+    /// @brief Set draw parameters
+    Drawable & draw(const GraphicsPipeline::DrawParameters &);
 
-    Drawable & dp(const ComputePipeline::DispatchParameters &);
+    /// @brief Set dispatch parameters
+    Drawable & dispatch(const ComputePipeline::DispatchParameters &);
 
     /// @brief Create a compat snapshot of the drawable.
     std::shared_ptr<const DrawPack> compile() const;
@@ -2225,27 +2204,23 @@ public:
     };
 
     struct ConstructParameters {
-        /// The API version that this device will work with. Ideally, it should be equal to the version you passed to VkInstanceCreateInfo
-        /// when creating your instance. Leaving it as zero is equivalent as set to return value of vk::enumerateInstanceVersion().
-        uint32_t apiVersion = 0;
-
         /// Handle to Vulkan instance.
         vk::Instance instance;
 
         /// Leave it at zero to create an headless device w/o presentation support.
-        vk::SurfaceKHR surface;
+        vk::SurfaceKHR surface {};
 
         /// Specify extra extension to initialize VK device. Value indicate if the extension is required or not.
-        std::map<std::string, bool> deviceExtensions;
+        std::map<std::string, bool> deviceExtensions {};
 
         // /// Set to true to defer to VMA for device memory allocations.
         // bool useVmaAllocator = false;
 
         /// Basic device feature list defined by Vulkan 1.0
-        vk::PhysicalDeviceFeatures features1;
+        vk::PhysicalDeviceFeatures features1 {};
 
         /// Extensible device feature list defined Vulkan 1.1
-        std::vector<StructureChain> features2;
+        std::vector<StructureChain> features2 {};
 
         /// Pointer of an already-built feature chain. If not empty, this will be attached after feature1 and feature2.
         void * features3 = nullptr;
@@ -2255,11 +2230,6 @@ public:
 
         /// set to false to make the creation log less verbose.
         Verbosity printVkInfo = BRIEF;
-
-        ConstructParameters & setApiVersion(uint32_t v) {
-            apiVersion = v;
-            return *this;
-        }
 
         ConstructParameters & setInstance(vk::Instance i) {
             instance = i;
@@ -2423,15 +2393,6 @@ public:
     operator VkInstance() const { return _instance; }
 
     vk::Instance operator->() const { return _instance; }
-
-    /// Return a device construct parameter that works with this instance.
-    Device::ConstructParameters dcp() const {
-        auto                        cp_ = cp();
-        Device::ConstructParameters r;
-        r.apiVersion = cp_.apiVersion;
-        r.instance   = handle();
-        return r;
-    }
 
 private:
     ConstructParameters _cp;

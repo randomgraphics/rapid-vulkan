@@ -4,6 +4,6 @@
 
 int main() {
     auto instance = test_namespace::Instance({});
-    auto device   = test_namespace::Device(instance.dcp());
+    auto device   = test_namespace::Device({instance.handle()});
     return 0;
 }
