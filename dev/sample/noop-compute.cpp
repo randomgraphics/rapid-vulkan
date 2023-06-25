@@ -3,7 +3,7 @@
 int main() {
     using namespace rapid_vulkan;
     auto instance = Instance({});
-    auto device   = Device(instance.dcp());
+    auto device   = Device({instance.handle()});
     auto gi       = device.gi();
     auto noop     = Shader(Shader::ConstructParameters {{"noop"}, gi}.setSpirv(noop_comp));
     auto p        = ComputePipeline({{"noop"}, &noop});

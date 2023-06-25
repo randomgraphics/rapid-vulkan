@@ -44,7 +44,7 @@ void entry(const Options & options) {
     auto h        = uint32_t(720);
     auto instance = Instance(Instance::ConstructParameters {}.setValidation(Instance::BREAK_ON_VK_ERROR));
     auto glfw     = GLFWInit(options.headless, instance, w, h, "pipeline-args");
-    auto device   = Device(instance.dcp().setSurface(glfw.surface));
+    auto device   = Device(Device::ConstructParameters {instance.handle()}.setSurface(glfw.surface));
     auto gi       = device.gi();
     auto q        = CommandQueue({{"main"}, gi, device.graphics()->family(), device.graphics()->index()});
     auto sw       = Swapchain(Swapchain::ConstructParameters {{"swapchain"}}.setDevice(device).setDimensions(w, h));
@@ -67,7 +67,7 @@ void entry(const Options & options) {
     auto vb = Buffer(Buffer::ConstructParameters {{"vb"}, gi}.setVertex().setSize(sizeof(float) * 2 * 3));
     vb.setContent(bc.setData<float>({-0.5f, -0.5f, 0.5f, -0.5f, 0.5f, 0.5f}));
     auto dr = Drawable({{}, &p});
-    dr.b({0, 0}, {{u0.handle()}}).b({0, 1}, {{u1.handle()}}).v({{vb.handle()}}).dp(GraphicsPipeline::DrawParameters {}.setNonIndexed(3));
+    dr.b({0, 0}, {{u0.handle()}}).b({0, 1}, {{u1.handle()}}).v({{vb.handle()}}).draw(GraphicsPipeline::DrawParameters {}.setNonIndexed(3));
 
     glfw.show();
     for (;;) {

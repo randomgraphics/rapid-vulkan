@@ -38,7 +38,7 @@ TEST_CASE("cs-buffer-args") {
     ap.b({0, 0}, {{b1}});
     ap.b({0, 1}, {{b2}});
     ap.c(0, vk::ArrayProxy<const float> {1.0f});
-    ap.dp(ComputePipeline::DispatchParameters {1, 1, 1});
+    ap.dispatch(ComputePipeline::DispatchParameters {1, 1, 1});
 
     // run the compute shader to copy data from b1 to b2
     auto q = dev->graphics();

@@ -30,22 +30,29 @@ struct GLFWInit {
 };
 
 struct Options {
-    bool headless        = false;
-    bool dynamicViewport = true;
+    vk::Instance                    inst            = VK_NULL_HANDLE;
+    bool                            headless        = false;
+    bool                            dynamicViewport = true;
+    rapid_vulkan::Device::Verbosity verbosity       = rapid_vulkan::Device::BRIEF;
 };
 
 void entry(const Options & options) {
     using namespace rapid_vulkan;
-    auto w        = uint32_t(1280);
-    auto h        = uint32_t(720);
-    auto instance = Instance(Instance::ConstructParameters {}.setValidation(Instance::BREAK_ON_VK_ERROR));
-    auto glfw     = GLFWInit(options.headless, instance, w, h, "simple-triangle");
-    auto device   = Device(instance.dcp().setSurface(glfw.surface));
-    auto gi       = device.gi();
-    auto vs       = Shader(Shader::ConstructParameters {{"simple-triangle-vs"}}.setGi(gi).setSpirv(simple_triangle_vert));
-    auto fs       = Shader(Shader::ConstructParameters {{"simple-triangle-fs"}, gi}.setSpirv(simple_triangle_frag));
-    auto q        = CommandQueue({{"main"}, gi, device.graphics()->family(), device.graphics()->index()});
-    auto sw       = Swapchain(Swapchain::ConstructParameters {{"simple-triangle"}}.setDevice(device).setDimensions(w, h));
+    auto                      instance = options.inst;
+    std::unique_ptr<Instance> instancePtr;
+    if (!instance) {
+        instancePtr = std::make_unique<Instance>(Instance::ConstructParameters {}.setValidation(Instance::BREAK_ON_VK_ERROR));
+        instance    = instancePtr->handle();
+    }
+    auto w      = uint32_t(1280);
+    auto h      = uint32_t(720);
+    auto glfw   = GLFWInit(options.headless, instance, w, h, "simple-triangle");
+    auto device = Device(Device::ConstructParameters {instance}.setSurface(glfw.surface).setPrintVkInfo(options.verbosity));
+    auto gi     = device.gi();
+    auto vs     = Shader(Shader::ConstructParameters {{"simple-triangle-vs"}}.setGi(gi).setSpirv(simple_triangle_vert));
+    auto fs     = Shader(Shader::ConstructParameters {{"simple-triangle-fs"}, gi}.setSpirv(simple_triangle_frag));
+    auto q      = CommandQueue({{"main"}, gi, device.graphics()->family(), device.graphics()->index()});
+    auto sw     = Swapchain(Swapchain::ConstructParameters {{"simple-triangle"}}.setDevice(device).setDimensions(w, h));
 
     // create the graphics pipeline
     auto gcp = GraphicsPipeline::ConstructParameters {{"simple-triangle"}}.setRenderPass(sw.renderPass()).setVS(&vs).setFS(&fs);
