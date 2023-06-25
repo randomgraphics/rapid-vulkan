@@ -26,7 +26,7 @@ SOFTWARE.
 #include "rapid-vulkan.h"
 
 #ifdef _MSC_VER
-#pragma warning(push, 0)
+#pragma warning(push, 1)
 #elif defined(__GNUC__)
 #pragma GCC diagnostic push
 #ifdef __clang__
@@ -76,8 +76,9 @@ extern "C" __declspec(dllimport) void __stdcall DebugBreak();
 
 namespace RAPID_VULKAN_NAMESPACE {
 
-#if !RAPID_VULKAN_ENABLE_VMA
-using VmaAllocation = int;
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4201) // nonstandard extension used: nameless struct/union
 #endif
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -337,9 +338,11 @@ private:
     Desc               _desc;
     vk::Buffer         _handle {}; // this is the handle that we created. when importing buffer handle, this one is left empty.
     vk::DeviceMemory   _memory {}; // this is the memory that we allocated. when importing buffer handle, this one is left empty.
-    VmaAllocation      _allocation {};
-    bool               _mapped {false};
-    std::mutex         _mutex;
+#if RAPID_VULKAN_ENABLE_VMA
+    VmaAllocation _allocation {};
+#endif
+    bool       _mapped {false};
+    std::mutex _mutex;
 
 private:
     bool imported() const { return _desc.handle && !_handle; }
@@ -3995,5 +3998,9 @@ Instance::~Instance() {
     if (_instance) _instance.destroy(), _instance = VK_NULL_HANDLE;
     RVI_LOGI("Vulkan instance destroyed.");
 }
+
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 
 } // namespace RAPID_VULKAN_NAMESPACE
