@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identify the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 15
+#define RAPID_VULKAN_HEADER_REVISION 16
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -2107,8 +2107,8 @@ public:
         BackbufferStatus backbufferStatus = {vk::ImageLayout::ePresentSrcKHR, vk::AccessFlagBits::eMemoryRead, vk::PipelineStageFlagBits::eBottomOfPipe};
 
         BeginRenderPassParameters & setClearColorF(vk::ArrayProxy<const float> color) {
-            clearColor = vk::ClearColorValue(color.size() > 0 ? color.data()[0] : 0.f, color.size() > 1 ? color.data()[1] : 0.f,
-                                             color.size() > 2 ? color.data()[2] : 0.f, color.size() > 3 ? color.data()[3] : 1.f);
+            clearColor.setFloat32({color.size() > 0 ? color.data()[0] : 0.f, color.size() > 1 ? color.data()[1] : 0.f, color.size() > 2 ? color.data()[2] : 0.f,
+                                   color.size() > 3 ? color.data()[3] : 1.f});
             return *this;
         }
 
