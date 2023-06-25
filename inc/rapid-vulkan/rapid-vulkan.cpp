@@ -2574,7 +2574,7 @@ public:
             }
         }
         if (!candidate.has_value()) {
-            RVI_LOGE("No valid submission is found!");
+            // nothing to wait for. we are done.
             return _owner;
         }
 
