@@ -28,30 +28,33 @@ TEST_CASE("texture-array", "[perf]") {
     auto h      = uint32_t(72);
     auto sw     = Swapchain(Swapchain::ConstructParameters {{"vertex-buffer-test"}}.setDevice(*device).setDimensions(w, h));
     auto p      = createPipeline("texture-array", sw.renderPass(), full_screen_vert, texture_array_frag);
-    auto u      = Buffer(Buffer::ConstructParameters {{"texture-array"}, gi}.setSize(sizeof(TextureArrayUniform)).setUniform());
-    auto d      = Drawable({{"texture-array"}}, p);
 
     // create texture array
+    auto N = 1000u;
     auto t = Image(Image::ConstructParameters {{"texture-array"}, gi}
                        .set2D(2, 2)
                        .setFormat(vk::Format::eR8G8B8A8Unorm)
                        .setInitialLayout(vk::ImageLayout::eShaderReadOnlyOptimal));
     auto s = Sampler(Sampler::ConstructParameters {{"texture-array"}, gi}.setLinear());
-    auto a = std::vector<ImageSampler>(1024);
-    for (uint32_t i = 0; i < 1024; ++i) {
+    auto a = std::vector<ImageSampler>(N);
+    for (uint32_t i = 0; i < N; ++i) {
         ImageSampler & is = a[i];
         is.imageView      = {t};
         is.imageLayout    = vk::ImageLayout::eShaderReadOnlyOptimal;
         is.sampler        = s;
     }
 
+    // create drawable
+    auto u = Buffer(Buffer::ConstructParameters {{"texture-array"}, gi}.setSize(sizeof(TextureArrayUniform)).setUniform());
+    auto d = Drawable({{"texture-array"}}, p);
     d.b({0, 0}, {b});
     d.t({0, 1}, {t, s});
 
     auto c = q.begin("texture-array");
     sw.cmdBeginBuiltInRenderPass();
-    for(size_t i = 0; i < 1000; ++i) {
-        c.enqueue(d.compile());
+    {
+        ScopedTimer t("render-drawbles");
+        for (size_t i = 0; i < 1000; ++i) { c.enqueue(d.compile()); }
     }
     sw.cmdEndBuiltInRenderPass(c);
     q.submit({c}).wait();
