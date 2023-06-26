@@ -1320,8 +1320,8 @@ private:
 class Sampler : public Root {
 public:
     struct ConstructParameters : public Root::ConstructParameters {
-        const GlobalInfo *    gi = {};
-        vk::SamplerCreateInfo info;
+        const GlobalInfo *    gi {};
+        vk::SamplerCreateInfo info {};
 
         ConstructParameters & setLinear() {
             info.magFilter = info.minFilter = vk::Filter::eLinear;
@@ -1387,11 +1387,11 @@ public:
             return *this;
         }
 
-        // template<typename T>
-        // ConstructParameters & setSpirv(vk::ArrayProxy<const T> blob) {
-        //     spirv = vk::ArrayProxy<const uint32_t>(blob.size() * sizeof(T) / sizeof(uint32_t), (const uint32_t*)blob.data());
-        //     return *this;
-        // }
+        template<typename T>
+        ConstructParameters & setSpirv(vk::ArrayProxy<const T> blob) {
+            spirv = vk::ArrayProxy<const uint32_t>((uint32_t)(blob.size() * sizeof(T) / sizeof(uint32_t)), (const uint32_t*)blob.data());
+            return *this;
+        }
     };
 
     Shader(const ConstructParameters &);

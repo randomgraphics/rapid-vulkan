@@ -6,11 +6,11 @@
 
 using namespace rapid_vulkan;
 
-Ref<Pipeline> createPipeline(std::string name, vk::RenderPass renderPass, vk::ArrayProxy<const unsigned char> vs, vk::ArrayProxy<const unsigned char> fs) {
+Ref<Pipeline> createPipeline(std::string name, vk::RenderPass renderPass, vk::ArrayProxy<const unsigned char> vs_, vk::ArrayProxy<const unsigned char> fs_) {
     auto device = TestVulkanInstance::device.get();
     auto gi     = device->gi();
-    auto vs     = Shader(Shader::ConstructParameters {{name + "-vs"}, gi}.setSpirv(vs));
-    auto fs     = Shader(Shader::ConstructParameters {{name + "-fs"}, gi}.setSpirv(fs));
+    auto vs     = Shader(Shader::ConstructParameters {{name + "-vs"}, gi}.setSpirv(vs_));
+    auto fs     = Shader(Shader::ConstructParameters {{name + "-fs"}, gi}.setSpirv(fs_));
     auto gcp    = GraphicsPipeline::ConstructParameters {{name}};
     gcp.setRenderPass(renderPass).setVS(&vs).setFS(&fs);
     return new GraphicsPipeline(gcp);
@@ -27,7 +27,7 @@ TEST_CASE("texture-array", "[perf]") {
     auto w      = uint32_t(128);
     auto h      = uint32_t(72);
     auto sw     = Swapchain(Swapchain::ConstructParameters {{"vertex-buffer-test"}}.setDevice(*device).setDimensions(w, h));
-    auto p      = createPipeline("texture-array", sw.renderPass(), full_screen_vert, texture_array_frag);
+    auto q      = device->graphics();
 
     // create texture array
     auto N = 1000u;
@@ -39,23 +39,24 @@ TEST_CASE("texture-array", "[perf]") {
     auto a = std::vector<ImageSampler>(N);
     for (uint32_t i = 0; i < N; ++i) {
         ImageSampler & is = a[i];
-        is.imageView      = {t};
+        is.imageView      = t.getView({});
         is.imageLayout    = vk::ImageLayout::eShaderReadOnlyOptimal;
-        is.sampler        = s;
+        is.sampler        = s.handle();
     }
 
     // create drawable
+    auto p = createPipeline("texture-array", sw.renderPass(), full_screen_vert, texture_array_frag);
+    auto d = Drawable({{"texture-array"}, p});
     auto u = Buffer(Buffer::ConstructParameters {{"texture-array"}, gi}.setSize(sizeof(TextureArrayUniform)).setUniform());
-    auto d = Drawable({{"texture-array"}}, p);
-    d.b({0, 0}, {b});
-    d.t({0, 1}, {t, s});
+    d.b({0, 0}, {{u}});
+    d.t({0, 1}, a);
 
-    auto c = q.begin("texture-array");
-    sw.cmdBeginBuiltInRenderPass();
+    auto c = q->begin("texture-array");
+    sw.cmdBeginBuiltInRenderPass({c.handle(), {}});
     {
         ScopedTimer t("render-drawbles");
         for (size_t i = 0; i < 1000; ++i) { c.enqueue(d.compile()); }
     }
-    sw.cmdEndBuiltInRenderPass(c);
-    q.submit({c}).wait();
+    sw.cmdEndBuiltInRenderPass(c.handle());
+    q->submit({c}).wait();
 }
