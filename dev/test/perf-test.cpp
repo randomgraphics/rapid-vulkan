@@ -52,10 +52,10 @@ TEST_CASE("texture-array", "[perf]") {
     d.t({0, 1}, a);
 
     auto c = q->begin("texture-array");
-    sw.cmdBeginBuiltInRenderPass({c.handle(), {}});
+    sw.cmdBeginBuiltInRenderPass(c.handle(), {});
     {
-        ScopedTimer t("render-drawbles");
-        for (size_t i = 0; i < 1000; ++i) { c.enqueue(d.compile()); }
+        ScopedTimer timer("render-drawbles");
+        for (size_t i = 0; i < 1000; ++i) { c.render(*d.compile()); }
     }
     sw.cmdEndBuiltInRenderPass(c.handle());
     q->submit({c}).wait();
