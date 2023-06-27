@@ -1644,7 +1644,7 @@ static inline bool sameDescriptorSet(const std::vector<vk::WriteDescriptorSet> &
         case vk::DescriptorType::eSampledImage:
         case vk::DescriptorType::eStorageImage:
         case vk::DescriptorType::eInputAttachment:
-            for(uint32_t j = 0; j < wa.descriptorCount; ++j) {
+            for (uint32_t j = 0; j < wa.descriptorCount; ++j) {
                 if (wa.pImageInfo[j] != wb.pImageInfo[j]) return false;
             }
             break;
@@ -1664,7 +1664,7 @@ static inline bool sameDescriptorSet(const std::vector<vk::WriteDescriptorSet> &
             break;
         default:
             // unsupported descriptor type
-            RVI_LOGW("the descriptor type (%d) is not supported.", (int)wa.descriptorType);
+            RVI_LOGW("the descriptor type (%d) is not supported.", (int) wa.descriptorType);
             return false;
         }
     }

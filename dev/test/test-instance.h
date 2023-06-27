@@ -12,9 +12,7 @@ struct ScopedTimer {
     std::string                                    name;
     std::chrono::high_resolution_clock::time_point start;
 
-    ScopedTimer(std::string name_) : name(name_) {
-        start = std::chrono::high_resolution_clock::now();
-    }
+    ScopedTimer(std::string name_): name(name_) { start = std::chrono::high_resolution_clock::now(); }
 
     ~ScopedTimer() {
         auto end = std::chrono::high_resolution_clock::now();
