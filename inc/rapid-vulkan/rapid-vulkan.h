@@ -1472,6 +1472,7 @@ struct PipelineReflection {
         /// If the descriptor count is empty, then the whole structure is considered empty/invalid.
         vk::DescriptorSetLayoutBinding binding;
 
+        /// @TODO checking count against 0 does not work for array of descriptors with dynamic count.
         bool empty() const { return names.empty() || 0 == binding.descriptorCount; }
     };
 
@@ -1759,7 +1760,15 @@ struct DrawPack {
 
     ~DrawPack() {}
 
-    void cmdRender(vk::Device device, vk::CommandBuffer cb, std::function<vk::DescriptorSet(const Pipeline &, uint32_t setIndex)> descriptorSetAllocator) const;
+    typedef std::function<vk::DescriptorSet(const Pipeline &, uint32_t setIndex)> DescriptorSetAllocator;
+
+    struct RenderParameters {
+        vk::Device             device {};
+        DescriptorSetAllocator descriptorSetAllocator {};
+        const DrawPack *       previous {};
+    };
+
+    void cmdRender(vk::CommandBuffer cb, const RenderParameters &) const;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------

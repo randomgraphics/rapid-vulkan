@@ -1628,8 +1628,50 @@ void ComputePipeline::cmdDispatch(vk::CommandBuffer cb, const DispatchParameters
 // Drawable & DrawPack
 // *********************************************************************************************************************
 
-void DrawPack::cmdRender(vk::Device device, vk::CommandBuffer cb,
-                         std::function<vk::DescriptorSet(const Pipeline &, uint32_t setIndex)> descriptorSetAllocator) const {
+static inline bool sameDescriptorSet(const std::vector<vk::WriteDescriptorSet> & a, const std::vector<vk::WriteDescriptorSet> & b) {
+    if (a.size() != b.size()) return false;
+    for (uint32_t i = 0; i < a.size(); ++i) {
+        const auto & wa = a[i];
+        const auto & wb = b[i];
+        // do not compare dstSet here.
+        if (wa.dstBinding != wb.dstBinding) return false;
+        if (wa.dstArrayElement != wb.dstArrayElement) return false;
+        if (wa.descriptorCount != wb.descriptorCount) return false;
+        if (wa.descriptorType != wb.descriptorType) return false;
+        switch (wa.descriptorType) {
+        case vk::DescriptorType::eSampler:
+        case vk::DescriptorType::eCombinedImageSampler:
+        case vk::DescriptorType::eSampledImage:
+        case vk::DescriptorType::eStorageImage:
+        case vk::DescriptorType::eInputAttachment:
+            for(uint32_t j = 0; j < wa.descriptorCount; ++j) {
+                if (wa.pImageInfo[j] != wb.pImageInfo[j]) return false;
+            }
+            break;
+        case vk::DescriptorType::eUniformTexelBuffer:
+        case vk::DescriptorType::eStorageTexelBuffer:
+            for (uint32_t j = 0; j < wa.descriptorCount; ++j) {
+                if (wa.pTexelBufferView[j] != wb.pTexelBufferView[j]) return false;
+            }
+            break;
+        case vk::DescriptorType::eUniformBuffer:
+        case vk::DescriptorType::eStorageBuffer:
+        case vk::DescriptorType::eUniformBufferDynamic:
+        case vk::DescriptorType::eStorageBufferDynamic:
+            for (uint32_t j = 0; j < wa.descriptorCount; ++j) {
+                if (wa.pBufferInfo[j] != wb.pBufferInfo[j]) return false;
+            }
+            break;
+        default:
+            // unsupported descriptor type
+            RVI_LOGW("the descriptor type (%d) is not supported.", (int)wa.descriptorType);
+            return false;
+        }
+    }
+    return true;
+}
+
+void DrawPack::cmdRender(vk::CommandBuffer cb, const RenderParameters & rp) const {
     if (!pipeline) return;
 
     auto layout = pipeline->layout();
@@ -1640,9 +1682,13 @@ void DrawPack::cmdRender(vk::Device device, vk::CommandBuffer cb,
     for (uint32_t s = 0; s < descriptors.size(); ++s) {
         auto & w = descriptors[s];
         if (w.empty()) continue;
-        auto set = descriptorSetAllocator(*pipeline, s);
+
+        // check if the descriptor set is changed or not compared to the previous draw pack.
+        if (rp.previous && s < rp.previous->descriptors.size() && sameDescriptorSet(rp.previous->descriptors[s], w)) continue;
+
+        auto set = rp.descriptorSetAllocator(*pipeline, s);
         for (auto & d : w) const_cast<vk::WriteDescriptorSet &>(d).dstSet = set;
-        device.updateDescriptorSets(w, {});
+        rp.device.updateDescriptorSets(w, {});
         cb.bindDescriptorSets(bp, layout, s, 1, &set, 0, nullptr);
     }
 
@@ -2320,11 +2366,8 @@ public:
             RVI_LOGE("Failed to enqueue drawable: command buffer %s is not in RECORDING state!", _name.c_str());
             return;
         }
-
-        // TODO: calculate diff to minimize the number of pipeline bindings and descriptor set bindings/updates.
-
-        // render the draw pack
-        d.cmdRender(_queue.desc().gi->device, _handle, [&](const Pipeline & p, uint32_t i) { return allocateDescriptorSet(p, i); });
+        d.cmdRender(_handle, {_queue.desc().gi->device, [&](const Pipeline & p, uint32_t i) { return allocateDescriptorSet(p, i); }, &_last});
+        _last = d;
     }
 
     const std::string & name() const { return _name; }
@@ -2389,6 +2432,7 @@ private:
     vk::CommandBuffer      _handle {};
     State                  _state = RECORDING;
     DescriptorPoolMap      _descriptorPools;
+    DrawPack               _last {};
 
     friend class CommandBuffer;
 

@@ -56,7 +56,7 @@ TEST_CASE("texture-array", "[perf]") {
     sw.cmdBeginBuiltInRenderPass(c.handle(), {});
     {
         ScopedTimer timer("render-drawbles");
-        for (size_t i = 0; i < 1000; ++i) { c.render(*d.compile()); }
+        for (size_t i = 0; i < 100000; ++i) { c.render(*d.compile()); }
     }
     sw.cmdEndBuiltInRenderPass(c.handle());
     q->submit({c}).wait();
