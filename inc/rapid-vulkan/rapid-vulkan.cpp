@@ -2726,8 +2726,10 @@ private:
         RVI_ASSERT(iter != _pending.end());
         const auto & submission = **iter;
         RVI_ASSERT(submission.fence);
-        auto result = _desc.gi->device.waitForFences({submission.fence}, true, UINT64_MAX);
-        if (result != vk::Result::eSuccess) { RVI_LOGE("Submission %" PRIi64 " failed to wait for finish!", submission.index); }
+        auto result = _desc.gi->device.waitForFences(1, &submission.fence, true, UINT64_MAX);
+        if (result != vk::Result::eSuccess) {
+            RVI_LOGE("Submission %" PRIi64 " failed to wait for finish: %s", submission.index, vk::to_string(result).c_str());
+        }
         finishSubmission(iter);
     }
 
