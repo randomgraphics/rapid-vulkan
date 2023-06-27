@@ -2368,6 +2368,10 @@ public:
         }
         d.cmdRender(_handle, {_queue.desc().gi->device, [&](const Pipeline & p, uint32_t i) { return allocateDescriptorSet(p, i); }, &_last});
         _last = d;
+
+        // Do not hold a reference to the pipeline, since it may be destroyed before the command buffer is destroyed.
+        // TODO: use WeakRef
+        _last.pipeline = nullptr;
     }
 
     const std::string & name() const { return _name; }
