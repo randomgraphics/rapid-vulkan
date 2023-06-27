@@ -1389,7 +1389,7 @@ public:
 
         template<typename T>
         ConstructParameters & setSpirv(vk::ArrayProxy<const T> blob) {
-            spirv = vk::ArrayProxy<const uint32_t>((uint32_t)(blob.size() * sizeof(T) / sizeof(uint32_t)), (const uint32_t*)blob.data());
+            spirv = vk::ArrayProxy<const uint32_t>((uint32_t) (blob.size() * sizeof(T) / sizeof(uint32_t)), (const uint32_t *) blob.data());
             return *this;
         }
     };
@@ -2241,16 +2241,16 @@ public:
             return *this;
         }
 
-        ConstructParameters & addDeviceExtension(const std::string & name, bool required = false) {
+        ConstructParameters & addDeviceExtension(const std::string & name, bool required = true) {
             deviceExtensions[name] = required;
             return *this;
         }
 
         /// Add new feature to the feature2 list.
         template<typename T>
-        T & addFeature(const T & feature) {
+        ConstructParameters & addFeature(const T & feature) {
             features2.emplace_back(feature);
-            return *(T *) features2.back().buffer.data();
+            return *this;
         }
 
         /// Set the features3 pointer.

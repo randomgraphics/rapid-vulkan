@@ -12,7 +12,7 @@ Ref<Pipeline> createPipeline(std::string name, vk::RenderPass renderPass, vk::Ar
     auto vs     = Shader(Shader::ConstructParameters {{name + "-vs"}, gi}.setSpirv(vs_));
     auto fs     = Shader(Shader::ConstructParameters {{name + "-fs"}, gi}.setSpirv(fs_));
     auto gcp    = GraphicsPipeline::ConstructParameters {{name}};
-    gcp.setRenderPass(renderPass).setVS(&vs).setFS(&fs);
+    gcp.setRenderPass(renderPass).setVS(&vs).setFS(&fs).dynamicViewport().dynamicScissor();
     return new GraphicsPipeline(gcp);
 }
 
@@ -31,10 +31,7 @@ TEST_CASE("texture-array", "[perf]") {
 
     // create texture array
     auto N = 1000u;
-    auto t = Image(Image::ConstructParameters {{"texture-array"}, gi}
-                       .set2D(2, 2)
-                       .setFormat(vk::Format::eR8G8B8A8Unorm)
-                       .setInitialLayout(vk::ImageLayout::eShaderReadOnlyOptimal));
+    auto t = Image(Image::ConstructParameters {{"texture-array"}, gi}.set2D(2, 2).setFormat(vk::Format::eR8G8B8A8Unorm));
     auto s = Sampler(Sampler::ConstructParameters {{"texture-array"}, gi}.setLinear());
     auto a = std::vector<ImageSampler>(N);
     for (uint32_t i = 0; i < N; ++i) {
@@ -52,6 +49,10 @@ TEST_CASE("texture-array", "[perf]") {
     d.t({0, 1}, a);
 
     auto c = q->begin("texture-array");
+    Barrier()
+        .i(t.handle(), vk::AccessFlagBits::eNone, vk::AccessFlagBits::eShaderRead, vk::ImageLayout::eUndefined, vk::ImageLayout::eShaderReadOnlyOptimal,
+           vk::ImageAspectFlagBits::eColor)
+        .cmdWrite(c);
     sw.cmdBeginBuiltInRenderPass(c.handle(), {});
     {
         ScopedTimer timer("render-drawbles");
