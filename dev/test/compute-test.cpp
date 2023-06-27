@@ -29,7 +29,7 @@ TEST_CASE("cs-buffer-args") {
     auto rdc = RenderDocCapture();
     if (rdc) rdc.begin("cs-buffer-args");
 
-    // create buffers and argument pack
+    // create buffers and drawable
     auto b1 = Buffer({{"buf1"}, TestVulkanInstance::device->gi(), 4, vk::BufferUsageFlagBits::eStorageBuffer});
     b1.setContent(Buffer::SetContentParameters {}.setData(vk::ArrayProxy<const float> {1.0f}));
     auto b2 = Buffer({{"buf2"}, TestVulkanInstance::device->gi(), 4, vk::BufferUsageFlagBits::eStorageBuffer});

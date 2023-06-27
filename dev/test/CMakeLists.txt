@@ -5,6 +5,7 @@ add_executable(rapid-vulkan-test
     drawable-test.cpp
     graphics-test.cpp
     image-test.cpp
+    perf-test.cpp
     queue-test.cpp
     sample-test.cpp
     smoke-test.cpp

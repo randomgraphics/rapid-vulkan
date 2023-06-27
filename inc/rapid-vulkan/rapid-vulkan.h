@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identify the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 16
+#define RAPID_VULKAN_HEADER_REVISION 17
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -1320,8 +1320,8 @@ private:
 class Sampler : public Root {
 public:
     struct ConstructParameters : public Root::ConstructParameters {
-        const GlobalInfo *    gi = {};
-        vk::SamplerCreateInfo info;
+        const GlobalInfo *    gi {};
+        vk::SamplerCreateInfo info {};
 
         ConstructParameters & setLinear() {
             info.magFilter = info.minFilter = vk::Filter::eLinear;
@@ -1387,11 +1387,11 @@ public:
             return *this;
         }
 
-        // template<typename T>
-        // ConstructParameters & setSpirv(vk::ArrayProxy<const T> blob) {
-        //     spirv = vk::ArrayProxy<const uint32_t>(blob.size() * sizeof(T) / sizeof(uint32_t), (const uint32_t*)blob.data());
-        //     return *this;
-        // }
+        template<typename T>
+        ConstructParameters & setSpirv(vk::ArrayProxy<const T> blob) {
+            spirv = vk::ArrayProxy<const uint32_t>((uint32_t) (blob.size() * sizeof(T) / sizeof(uint32_t)), (const uint32_t *) blob.data());
+            return *this;
+        }
     };
 
     Shader(const ConstructParameters &);
@@ -1450,6 +1450,21 @@ struct ImageSampler {
     /// @brief The sampler object.
     vk::Sampler sampler {};
 
+    ImageSampler & setImageView(vk::ImageView v) {
+        imageView = v;
+        return *this;
+    }
+
+    ImageSampler & setImageLayout(vk::ImageLayout v) {
+        imageLayout = v;
+        return *this;
+    }
+
+    ImageSampler & setSampler(vk::Sampler v) {
+        sampler = v;
+        return *this;
+    }
+
     bool operator==(const ImageSampler & rhs) const {
         if (this == &rhs) return true;
         if (imageView != rhs.imageView) return false;
@@ -1472,6 +1487,7 @@ struct PipelineReflection {
         /// If the descriptor count is empty, then the whole structure is considered empty/invalid.
         vk::DescriptorSetLayoutBinding binding;
 
+        /// @TODO checking count against 0 does not work for array of descriptors with dynamic count.
         bool empty() const { return names.empty() || 0 == binding.descriptorCount; }
     };
 
@@ -1759,7 +1775,15 @@ struct DrawPack {
 
     ~DrawPack() {}
 
-    void cmdRender(vk::Device device, vk::CommandBuffer cb, std::function<vk::DescriptorSet(const Pipeline &, uint32_t setIndex)> descriptorSetAllocator) const;
+    typedef std::function<vk::DescriptorSet(const Pipeline &, uint32_t setIndex)> DescriptorSetAllocator;
+
+    struct RenderParameters {
+        vk::Device             device {};
+        DescriptorSetAllocator descriptorSetAllocator {};
+        const DrawPack *       previous {};
+    };
+
+    void cmdRender(vk::CommandBuffer cb, const RenderParameters &) const;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1805,6 +1829,12 @@ public:
 
     /// @brief Set value of texture (image/sampler) argument. Do nothing if the argument is not used by the pipeline.
     Drawable & t(DescriptorIdentifier id, vk::ArrayProxy<const ImageSampler>);
+
+    /// @brief Set value of sampler argument. Do nothing if the argument is not used by the pipeline.
+    Drawable & s(DescriptorIdentifier id, vk::ArrayProxy<const vk::Sampler>);
+
+    /// @brief Set value of sampler argument. Do nothing if the argument is not used by the pipeline.
+    Drawable & s(DescriptorIdentifier id, vk::ArrayProxy<const Ref<const Sampler>>);
 
     /// @brief Set value of push constant.
     Drawable & c(size_t offset, size_t size, const void * data, vk::ShaderStageFlags stages = vk::ShaderStageFlagBits::eAll);
@@ -2241,16 +2271,16 @@ public:
             return *this;
         }
 
-        ConstructParameters & addDeviceExtension(const std::string & name, bool required = false) {
+        ConstructParameters & addDeviceExtension(const std::string & name, bool required = true) {
             deviceExtensions[name] = required;
             return *this;
         }
 
         /// Add new feature to the feature2 list.
         template<typename T>
-        T & addFeature(const T & feature) {
+        ConstructParameters & addFeature(const T & feature) {
             features2.emplace_back(feature);
-            return *(T *) features2.back().buffer.data();
+            return *this;
         }
 
         /// Set the features3 pointer.
