@@ -29,8 +29,11 @@ TEST_CASE("texture-array", "[perf]") {
     auto sw     = Swapchain(Swapchain::ConstructParameters {{"vertex-buffer-test"}}.setDevice(*device).setDimensions(w, h));
     auto q      = device->graphics();
 
+    // Determine how many images we can use in a single draw call. Default is 1000.
+    auto N = std::min(1000u, gi->physical.getProperties().limits.maxPerStageDescriptorSamplers);
+    std::cout << "Using " << N << " images in a single draw call" << std::endl;
+
     // create texture array
-    auto N = 1000u;
     auto t = Image(Image::ConstructParameters {{"texture-array"}, gi}.set2D(2, 2).setFormat(vk::Format::eR8G8B8A8Unorm));
     auto s = Sampler(Sampler::ConstructParameters {{"texture-array"}, gi}.setLinear());
     auto a = std::vector<ImageSampler>(N);
@@ -38,7 +41,6 @@ TEST_CASE("texture-array", "[perf]") {
         ImageSampler & is = a[i];
         is.imageView      = t.getView({});
         is.imageLayout    = vk::ImageLayout::eShaderReadOnlyOptimal;
-        is.sampler        = s.handle();
     }
 
     // create drawable
@@ -47,6 +49,7 @@ TEST_CASE("texture-array", "[perf]") {
     auto u = Buffer(Buffer::ConstructParameters {{"texture-array"}, gi}.setSize(sizeof(TextureArrayUniform)).setUniform());
     d.b({0, 0}, {{u}});
     d.t({0, 1}, a);
+    d.s({0, 2}, {s.handle()});
 
     auto c = q->begin("texture-array");
     Barrier()

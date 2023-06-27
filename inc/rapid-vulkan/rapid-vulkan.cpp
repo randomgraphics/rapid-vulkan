@@ -2124,14 +2124,27 @@ private:
                     }
                 } else if (auto img = std::get_if<Argument::Impl::ImageArgs>(&value)) {
                     w.setImageInfo(img->infos);
-                    for (size_t j = 0; j < img->images.size(); ++j) {
-                        const auto & v = img->images[j];
-                        if (!v.imageView) {
-                            RVI_LOGE("Drawable (%s) validation error: : set %u binding %u contains empty image view at index %zu", _owner.name().c_str(), si, i,
-                                     j);
-                            return false;
+                    if (w.descriptorType == vk::DescriptorType::eSampler || w.descriptorType == vk::DescriptorType::eCombinedImageSampler) {
+                        for (size_t j = 0; j < img->images.size(); ++j) {
+                            const auto & v = img->images[j];
+                            if (!v.sampler) {
+                                RVI_LOGE("Drawable (%s) validation error: : set %u binding %u contains empty sampler at index %zu", _owner.name().c_str(), si, i,
+                                        j);
+                                return false;
+                            }
+                            // TODO: add the image to pack.images array to avoid it being released too early.
                         }
-                        // TODO: add the image to pack.images array to avoid it being released too early.
+                    }
+                    if (w.descriptorType != vk::DescriptorType::eSampler) {
+                        for (size_t j = 0; j < img->images.size(); ++j) {
+                            const auto & v = img->images[j];
+                            if (!v.imageView) {
+                                RVI_LOGE("Drawable (%s) validation error: : set %u binding %u contains empty image view at index %zu", _owner.name().c_str(), si, i,
+                                        j);
+                                return false;
+                            }
+                            // TODO: add the image to pack.images array to avoid it being released too early.
+                        }
                     }
                 } else {
                     // we should not reach here, since we have already checked the type compatibility.
@@ -2215,6 +2228,20 @@ auto Drawable::b(DescriptorIdentifier id, vk::ArrayProxy<const BufferView> v) ->
 }
 auto Drawable::t(DescriptorIdentifier id, vk::ArrayProxy<const ImageSampler> v) -> Drawable & {
     _impl->set(id, v);
+    return *this;
+}
+auto Drawable::s(DescriptorIdentifier id, vk::ArrayProxy<const vk::Sampler> v) -> Drawable & {
+    std::vector<ImageSampler> is;
+    is.reserve(v.size());
+    for (const auto & s : v) is.push_back({{}, {}, s});
+    _impl->set(id, is);
+    return *this;
+}
+auto Drawable::s(DescriptorIdentifier id, vk::ArrayProxy<const Ref<const Sampler>> v) -> Drawable & {
+    std::vector<ImageSampler> is;
+    is.reserve(v.size());
+    for (const auto & s : v) is.push_back({{}, {}, s->handle()});
+    _impl->set(id, is);
     return *this;
 }
 auto Drawable::c(size_t offset, size_t size, const void * data, vk::ShaderStageFlags stages) -> Drawable & {

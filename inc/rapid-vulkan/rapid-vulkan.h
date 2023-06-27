@@ -1450,6 +1450,21 @@ struct ImageSampler {
     /// @brief The sampler object.
     vk::Sampler sampler {};
 
+    ImageSampler & setImageView(vk::ImageView v) {
+        imageView = v;
+        return *this;
+    }
+
+    ImageSampler & setImageLayout(vk::ImageLayout v) {
+        imageLayout = v;
+        return *this;
+    }
+
+    ImageSampler & setSampler(vk::Sampler v) {
+        sampler = v;
+        return *this;
+    }
+
     bool operator==(const ImageSampler & rhs) const {
         if (this == &rhs) return true;
         if (imageView != rhs.imageView) return false;
@@ -1814,6 +1829,12 @@ public:
 
     /// @brief Set value of texture (image/sampler) argument. Do nothing if the argument is not used by the pipeline.
     Drawable & t(DescriptorIdentifier id, vk::ArrayProxy<const ImageSampler>);
+
+    /// @brief Set value of sampler argument. Do nothing if the argument is not used by the pipeline.
+    Drawable & s(DescriptorIdentifier id, vk::ArrayProxy<const vk::Sampler>);
+
+    /// @brief Set value of sampler argument. Do nothing if the argument is not used by the pipeline.
+    Drawable & s(DescriptorIdentifier id, vk::ArrayProxy<const Ref<const Sampler>>);
 
     /// @brief Set value of push constant.
     Drawable & c(size_t offset, size_t size, const void * data, vk::ShaderStageFlags stages = vk::ShaderStageFlagBits::eAll);
