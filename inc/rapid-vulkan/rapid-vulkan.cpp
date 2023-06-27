@@ -2087,8 +2087,6 @@ private:
                 if (s[i].empty()) continue;
                 const auto & b = s[i].binding;
                 auto         w = vk::WriteDescriptorSet {};
-                w.setDstBinding(b.binding);
-                w.setDescriptorType(b.descriptorType);
 
                 // Locate the argument for this binding slot.
                 auto a = find({si, i});
@@ -2124,23 +2122,23 @@ private:
                     }
                 } else if (auto img = std::get_if<Argument::Impl::ImageArgs>(&value)) {
                     w.setImageInfo(img->infos);
-                    if (w.descriptorType == vk::DescriptorType::eSampler || w.descriptorType == vk::DescriptorType::eCombinedImageSampler) {
+                    if (b.descriptorType == vk::DescriptorType::eSampler || b.descriptorType == vk::DescriptorType::eCombinedImageSampler) {
                         for (size_t j = 0; j < img->images.size(); ++j) {
                             const auto & v = img->images[j];
                             if (!v.sampler) {
-                                RVI_LOGE("Drawable (%s) validation error: : set %u binding %u contains empty sampler at index %zu", _owner.name().c_str(), si, i,
-                                        j);
+                                RVI_LOGE("Drawable (%s) validation error: : set %u binding %u contains empty sampler at index %zu", _owner.name().c_str(), si,
+                                         i, j);
                                 return false;
                             }
                             // TODO: add the image to pack.images array to avoid it being released too early.
                         }
                     }
-                    if (w.descriptorType != vk::DescriptorType::eSampler) {
+                    if (b.descriptorType != vk::DescriptorType::eSampler) {
                         for (size_t j = 0; j < img->images.size(); ++j) {
                             const auto & v = img->images[j];
                             if (!v.imageView) {
-                                RVI_LOGE("Drawable (%s) validation error: : set %u binding %u contains empty image view at index %zu", _owner.name().c_str(), si, i,
-                                        j);
+                                RVI_LOGE("Drawable (%s) validation error: : set %u binding %u contains empty image view at index %zu", _owner.name().c_str(),
+                                         si, i, j);
                                 return false;
                             }
                             // TODO: add the image to pack.images array to avoid it being released too early.
@@ -2152,6 +2150,10 @@ private:
                 }
 
                 // this is a valid write
+                w.setDstBinding(b.binding);
+                w.setDescriptorType(b.descriptorType);
+                // must set descriptor count explicitly in case that the argument has more descriptors than the binding requires.
+                if (b.descriptorCount > 0) w.setDescriptorCount(b.descriptorCount);
                 writes.push_back(w);
             }
             pack.descriptors[si] = std::move(writes);
