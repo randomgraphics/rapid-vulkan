@@ -1,5 +1,6 @@
 #version 450
 
+/// Renders a triangle that covers the whole screen.
 void main() {
     // Vertex positions (in Y pointing down manner)
     vec2 vertices[3] = vec2[](vec2(-1.0, 1.0), vec2(3.0, 1.0), vec2(-1.0, -3.0));

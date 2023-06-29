@@ -1,8 +1,12 @@
 # P0
-- Push constant support in pipeline and argument pack
-- Sample:
-  - rotating triangle with uniform value updated once every frame.
-= Pipeline and layout cache
+- A 3D model viewer that as a complex-enough use case of the library.-
+- BUG: simple triangle sample crash when minimized.
+- BUG: drawable sample seems leaking small amount of memory every frame.
+
+# P1
+- A more powerful render pass class that combined vk::RenderPass and vk::Framebuffers together.
+  - this is not a P0 task, since Swapchain's built-in render pass can handle the most common usages already.
+- Pipeline and layout cache
 
 # Resource/Descriptor Design Choices
 
@@ -10,8 +14,7 @@
   
   ### usage #1: multiple (mostly) immutable argument packs
   create multiple instance of ArgumentPack instance, one for each draw call. Each one is bind to different resources.
-  - pros: minimal render time overhead
-  - cons: not intuitive to use.
+  - pros: minimal render time overhead. mimic's the "drwable" concept.
   ```
   // load/creation time
   auto a1 = createArgumentPack(...);
@@ -31,8 +34,7 @@
   pineline->draw()
   ```
 
-  In this case, holding a pool in each arument pack instance is not effecient. So we need another class to hold descriptor pool.
-
+  In this case, resource pool is held by the pipeline object.
 
   ### usage #2: single mutable argument pack
   Only need to create one argument pack instance. The values can change as often as needed.
@@ -65,7 +67,6 @@ To support this case, the ArgumentPack class should just be a collection of name
 
 
 ## Design Choice
-- Pipeline objects holds the descriptor set pool
-- PipelineLayout object holds layout and setlayout.
+- PipelineLayout object holds layout, set layout and descriptor pool.
 - ArgumentPack is just a simple collection of named arguments.
 - Each argument is a container of buffer/image/constant

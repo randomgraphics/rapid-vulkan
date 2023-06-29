@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identify the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 7
+#define RAPID_VULKAN_HEADER_REVISION 17
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -52,10 +52,26 @@ SOFTWARE.
 #define RAPID_VULKAN_ENABLE_VMA 1
 #endif
 
+/// \def RAPID_VULKAN_ENABLE_GLFW3
+/// Set to 1 to enable GLFW3 interation helpers. Disabled by default.
+#ifndef RAPID_VULKAN_ENABLE_GLFW3
+#define RAPID_VULKAN_ENABLE_GLFW3 0
+#endif
+
+/// \def RAPID_VULKAN_GLFW3_HEADER
+/// \brief When RAPID_VULKAN_ENABLE_GLFW3 is enabled, this macro defines the path and name of GLFW3 header file to include.
+/// By default, it is set to <GLFW/glfw3.h>. You can override it by defining it before including rapid-vulkan.h.
+#if RAPID_VULKAN_ENABLE_GLFW3
+#ifndef RAPID_VULKAN_GLFW3_HEADER
+#define RAPID_VULKAN_GLFW3_HEADER <GLFW/glfw3.h>
+#endif
+#endif
+
 /// \def RAPID_VULKAN_THROW
 /// The macro to throw runtime exception.
+/// \param errorString The error string to throw. Can be std::string or const char*.
 #ifndef RAPID_VULKAN_THROW
-#define RAPID_VULKAN_THROW(...) throw std::runtime_error(__VA_ARGS__)
+#define RAPID_VULKAN_THROW(message) throw std::runtime_error(message)
 #endif
 
 /// \def RAPID_VULKAN_BACKTRACE
@@ -64,51 +80,40 @@ SOFTWARE.
 /// quickly identify the source of the error. The default implementation does
 /// nothing but return empty string.
 #ifndef RAPID_VULKAN_BACKTRACE
-#define RAPID_VULKAN_BACKTRACE() std::string("You have to define RAPID_VULKAN_BACKTRACE to retrieve current callstack.")
+#define RAPID_VULKAN_BACKTRACE() std::string("You have to define RAPID_VULKAN_BACKTRACE to retrieve current call stack.")
 #endif
 
 /// \def RAPID_VULKAN_LOG_ERROR
 /// The macro to log error message. The default implementation prints to stderr.
+/// \paam message The error message to log. The type is const char *.
 #ifndef RAPID_VULKAN_LOG_ERROR
-#define RAPID_VULKAN_LOG_ERROR(...)    \
-    do {                               \
-        fprintf(stderr, "[ ERROR ] "); \
-        fprintf(stderr, __VA_ARGS__);  \
-        fprintf(stderr, "\n");         \
-    } while (false)
+#define RAPID_VULKAN_LOG_ERROR(message) fprintf(stderr, "[ ERROR ] %s\n", message)
 #endif
 
-/// \def RAPID_VULKAN_LOG_WARNING
+/// \def RVI_LOGW
 /// The macro to log warning message. The default implementation prints to stderr.
+/// \param message The warning message to log. The type is const char *.
 #ifndef RAPID_VULKAN_LOG_WARNING
-#define RAPID_VULKAN_LOG_WARNING(...)  \
-    do {                               \
-        fprintf(stderr, "[WARNING] "); \
-        fprintf(stderr, __VA_ARGS__);  \
-        fprintf(stderr, "\n");         \
-    } while (false)
+#define RAPID_VULKAN_LOG_WARNING(message) fprintf(stderr, "[WARNING] %s\n", message)
 #endif
 
 /// \def RAPID_VULKAN_LOG_INFO
 /// The macro to log informational message. The default implementation prints to stdout.
+/// \param message The message to log. The type is const char *.
 #ifndef RAPID_VULKAN_LOG_INFO
-#define RAPID_VULKAN_LOG_INFO(...)    \
-    do {                              \
-        fprintf(stdout, __VA_ARGS__); \
-        fprintf(stdout, "\n");        \
-    } while (false)
+#define RAPID_VULKAN_LOG_INFO(message) fprintf(stdout, "%s\n", message)
 #endif
 
 /// \def RAPID_VULKAN_ASSERT
 /// The runtime assert macro for debug build only. This macro has no effect when
 /// RAPID_VULKAN_ENABLE_DEBUG_BUILD is 0.
 #ifndef RAPID_VULKAN_ASSERT
-#define RAPID_VULKAN_ASSERT(expression, ...)                                                     \
-    if (!(expression)) {                                                                         \
-        auto errorMessage__ = RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__);                       \
-        RAPID_VULKAN_LOG_ERROR("Condition " #expression " not met. %s", errorMessage__.c_str()); \
-        assert(false);                                                                           \
-    } else                                                                                       \
+#define RAPID_VULKAN_ASSERT(expression, ...)                                       \
+    if (!(expression)) {                                                           \
+        auto errorMessage__ = RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__);         \
+        RVI_LOGE("Condition " #expression " not met. %s", errorMessage__.c_str()); \
+        assert(false);                                                             \
+    } else                                                                         \
         void(0)
 #endif
 
@@ -137,6 +142,11 @@ SOFTWARE.
 #define VK_NO_PROTOTYPES
 #endif
 
+// check for minimal required vulkan.hpp version.
+#if VK_HEADER_VERSION < 211
+#error "rapid-vulkan library requires Vulkan SDK version 1.3.211 or later."
+#endif
+
 // ---------------------------------------------------------------------------------------------------------------------
 // include VMA header if not already included.
 #if RAPID_VULKAN_ENABLE_VMA
@@ -162,7 +172,7 @@ SOFTWARE.
 // #define VMA_DEBUG_MARGIN            32
 // #endif
 #ifndef VMA_DEBUG_ERROR_LOG
-#define VMA_DEBUG_ERROR_LOG RAPID_VULKAN_LOG_INFO
+#define VMA_DEBUG_ERROR_LOG RVI_LOGI
 #endif
 #define VMA_STATIC_VULKAN_FUNCTIONS  0
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 0
@@ -176,6 +186,16 @@ SOFTWARE.
 #endif // RAPID_VULKAN_ENABLE_VMA
 
 // ---------------------------------------------------------------------------------------------------------------------
+// include GLFW header if asked to do so
+#if RAPID_VULKAN_ENABLE_GLFW3
+#ifdef _glfw3_h_
+// todo issue warnings if GLFW3 header is already included.
+#else
+#include RAPID_VULKAN_GLFW3_HEADER
+#endif
+#endif
+
+// ---------------------------------------------------------------------------------------------------------------------
 // include other standard/system headers
 
 #include <cassert>
@@ -186,12 +206,16 @@ SOFTWARE.
 #include <atomic>
 #include <vector>
 #include <map>
+#include <set>
 #include <string>
+#include <sstream>
 #include <unordered_map>
 #include <tuple>
 #include <optional>
 #include <algorithm>
 #include <exception>
+#include <functional>
+#include <memory>
 
 // ---------------------------------------------------------------------------------------------------------------------
 // RVI stands for Rapid Vulkan Implementation. Macros started with this prefix are reserved for internal use.
@@ -210,12 +234,17 @@ SOFTWARE.
 
 #define RVI_STR_HELPER(x) #x
 
-#define RVI_THROW(...)                                                                                \
-    do {                                                                                              \
-        std::stringstream ss___;                                                                      \
-        ss___ << __FILE__ << "(" << __LINE__ << "): " << RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__); \
-        RAPID_VULKAN_LOG_ERROR("%s", ss___.str().data());                                             \
-        RAPID_VULKAN_THROW(ss___.str());                                                              \
+#define RVI_LOGI(...) RAPID_VULKAN_LOG_INFO(RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
+#define RVI_LOGW(...) RAPID_VULKAN_LOG_WARNING(RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
+#define RVI_LOGE(...) RAPID_VULKAN_LOG_ERROR(RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
+
+#define RVI_THROW(...)                                                                                       \
+    do {                                                                                                     \
+        std::stringstream errorStream_;                                                                      \
+        errorStream_ << __FILE__ << "(" << __LINE__ << "): " << RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__); \
+        auto errorString_ = errorStream_.str();                                                              \
+        RVI_LOGE("%s", errorString_.data());                                                                 \
+        RAPID_VULKAN_THROW(errorString_);                                                                    \
     } while (false)
 
 #if RAPID_VULKAN_ENABLE_DEBUG_BUILD
@@ -262,15 +291,20 @@ SOFTWARE.
 
 namespace RAPID_VULKAN_NAMESPACE {
 
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4201) // nonstandard extension used: nameless struct/union
+#endif
+
 using namespace std::string_literals;
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// A utility class used to pass commonly used Vulkan global information around.
 struct GlobalInfo {
     const vk::AllocationCallbacks * allocator           = nullptr;
-    uint32_t                        apiVersion          = 0;
     vk::Instance                    instance            = nullptr;
     vk::PhysicalDevice              physical            = nullptr;
+    uint32_t                        apiVersion          = 0;
     vk::Device                      device              = nullptr;
     uint32_t                        graphicsQueueFamily = VK_QUEUE_FAMILY_IGNORED;
 #if RAPID_VULKAN_ENABLE_VMA
@@ -297,29 +331,28 @@ struct GlobalInfo {
 // ---------------------------------------------------------------------------------------------------------------------
 /// \def format
 /// \brief A printf like string formatting function.
-#if __clang__
+#ifdef __GNUC__
 __attribute__((format(printf, 1, 2)))
 #endif
 inline std::string
 format(const char * format, ...) {
     va_list args;
-    va_start(args, format);
 
     // Get the size of the buffer needed to store the formatted string.
+    va_start(args, format);
     int size = vsnprintf(NULL, 0, format, args);
+    va_end(args);
     if (size == -1) {
         // Error getting the size of the buffer.
-        va_end(args);
         return {};
     }
 
     // Allocate the buffer.
-    std::string buffer(size + 1, '\0');
+    std::string buffer((size_t) size + 1, '\0');
 
     // Format the string.
-    vsnprintf(&buffer[0], size + 1, format, args);
-
-    // Free the argument list.
+    va_start(args, format);
+    vsnprintf(&buffer[0], (size_t) size + 1, format, args);
     va_end(args);
 
     // Return the formatted string.
@@ -359,7 +392,7 @@ inline T clampRange2(T & srcOffset, T & dstOffset, T & length, const T & srcCapa
 // ---------------------------------------------------------------------------------------------------------------------
 /// Helper function to set Vulkan opaque handle's name (VK_EXT_debug_utils).
 template<typename T>
-inline void setVkObjectName(vk::Device device, T handle, const char * name) {
+inline void setVkHandleName(vk::Device device, T handle, const char * name) {
 #if VULKAN_HPP_DISPATCH_LOADER_DYNAMIC == 1
     if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkSetDebugUtilsObjectNameEXT) return;
 #else
@@ -381,8 +414,30 @@ inline void setVkObjectName(vk::Device device, T handle, const char * name) {
 // ---------------------------------------------------------------------------------------------------------------------
 /// Helper function to set Vulkan opaque handle's name (VK_EXT_debug_utils).
 template<typename T>
-inline void setVkObjectName(vk::Device device, T handle, std::string name) {
-    setVkObjectName(device, handle, name.c_str());
+inline void setVkHandleName(vk::Device device, T handle, std::string name) {
+    setVkHandleName(device, handle, name.c_str());
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// @brief Helper function to insert a begin label to command buffer
+inline bool cmdBeginDebugLabel(vk::CommandBuffer cmd, const char * name, const std::array<float, 4> & color = {1, 1, 1, 1}) {
+#if VULKAN_HPP_DISPATCH_LOADER_DYNAMIC == 1
+    if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdBeginDebugUtilsLabelEXT) return false;
+#else
+    if (!::vkCmdBeginDebugUtilsLabelEXT) return false;
+#endif
+    if (!cmd || !name) return false;
+    cmd.beginDebugUtilsLabelEXT(vk::DebugUtilsLabelEXT().setPLabelName(name).setColor(color));
+    return true;
+}
+
+inline void cmdEndDebugLabel(vk::CommandBuffer cmd) {
+#if VULKAN_HPP_DISPATCH_LOADER_DYNAMIC == 1
+    if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdEndDebugUtilsLabelEXT) return;
+#else
+    if (!::vkCmdEndDebugUtilsLabelEXT) return;
+#endif
+    if (cmd) cmd.endDebugUtilsLabelEXT();
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -431,14 +486,30 @@ vk::PhysicalDevice selectTheMostPowerfulPhysicalDevice(vk::ArrayProxy<const vk::
 std::vector<vk::ExtensionProperties> enumerateDeviceExtensions(vk::PhysicalDevice dev);
 
 // ---------------------------------------------------------------------------------------------------------------------
+/// @brief Calling vkDeviceWaitIdle() in a thread-safe manner.
+void threadSafeWaitForDeviceIdle(vk::Device device);
+
+#if RAPID_VULKAN_ENABLE_GLFW3
+// ---------------------------------------------------------------------------------------------------------------------
+/// @brief Helper functions to create a Vulkan surface from GLFW window.
+inline vk::UniqueSurfaceKHR createGLFWSurface(vk::Instance instance, GLFWwindow * window) {
+    VkSurfaceKHR surface;
+    if (::glfwCreateWindowSurface(instance, window, nullptr, &surface) != VK_SUCCESS) { RVI_THROW("failed to create window surface!"); }
+    return vk::UniqueSurfaceKHR(surface, {instance});
+}
+#endif
+
+// ---------------------------------------------------------------------------------------------------------------------
 /// The root class of most of the other public classes in this library.
 class Root {
 public:
+    RVI_NO_COPY_NO_MOVE(Root);
+
     struct ConstructParameters {
         std::string name = "<no-name>"s;
     };
 
-    virtual ~Root() = default;
+    virtual ~Root() { RVI_ASSERT(_ref == 0); }
 
     /// Name of the object. For debug and log only. Can be any value.
     const std::string & name() const { return _name; }
@@ -458,18 +529,31 @@ public:
     /// destroyed automatically along with the stack frame, regardless if there are still references to it.
     /// So it is the caller's responsibility to make sure that all references are gone before the stack frame is
     /// destroyed.
-    void markAsNotDeleteable() { _noDeleteOnZeroRef = true; }
+    void doNotDeleteOnZeroRef() { _noDeleteOnZeroRef = true; }
+
+    /// @brief Get the reference count of the object.
+    uint64_t refCount() const { return _ref; }
+
+    /// @brief Get the total number of instances of this class.
+    static uint64_t instanceCount() { return _instanceCount; }
 
 protected:
-    Root(const ConstructParameters & params): _name("<no-name>"s) { setName(params.name); }
+    Root(const ConstructParameters & params): _name("<no-name>"s) {
+        ++_instanceCount;
+        setName(params.name);
+    }
 
-    virtual void onNameChanged(const std::string & oldName) { (void) oldName; }
+    virtual void onNameChanged(const std::string & oldName) {
+        (void) oldName;
+        --_instanceCount;
+    }
 
 private:
     friend class RefBase;
-    std::string           _name;
-    std::atomic<uint64_t> _ref               = 0;
-    bool                  _noDeleteOnZeroRef = false;
+    std::string                         _name;
+    mutable std::atomic<uint64_t>       _ref               = 0;
+    bool                                _noDeleteOnZeroRef = false;
+    inline static std::atomic<uint64_t> _instanceCount     = 0;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -480,12 +564,12 @@ protected:
 
     ~RefBase() {}
 
-    static void addRef(Root * p) {
+    static void addRef(const Root * p) {
         RVI_ASSERT(p);
         ++p->_ref;
     }
 
-    static void release(Root * p) {
+    static void release(const Root * p) {
         RVI_ASSERT(p);
         if (1 == p->_ref.fetch_sub(1)) {
             RVI_ASSERT(0 == p->_ref);
@@ -495,11 +579,17 @@ protected:
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// Reference counter of any class inherited from Root. This class is more efficient on both memory and performance,
-/// than std::shared_ptr
+/// Reference counter of any class inherited from Root. Because it relies on the intrinsic counter variable in the Root
+/// class, it is much more efficient and memory friendly than thd std::shared_ptr.
 template<typename T>
 class Ref : public RefBase {
 public:
+    /// @brief Create a Ref instance from an object instance allocated on stack.
+    static Ref fromStack(T & t) {
+        t.doNotDeleteOnZeroRef();
+        return Ref(t);
+    }
+
     constexpr Ref() = default;
 
     Ref(T & t) {
@@ -517,14 +607,24 @@ public:
 
     /// copy constructor
     Ref(const Ref & rhs) {
-        if (rhs._ptr) addRef(rhs._ptr);
-        _ptr = rhs._ptr;
+        _ptr = rhs.get();
+        if (_ptr) addRef(_ptr);
+    }
+
+    /// copy constructor from compatible type
+    template<typename T2>
+    Ref(const Ref<T2> & rhs) {
+        _ptr = rhs.get();
+        if (_ptr) addRef(_ptr);
     }
 
     /// move constructor
-    Ref(Ref && rhs) {
-        _ptr     = rhs._ptr;
-        rhs._ptr = nullptr;
+    Ref(Ref && rhs) { _ptr = rhs.detach(); }
+
+    /// move constructor from compatible type
+    template<typename T2>
+    Ref(Ref<T2> && rhs) {
+        _ptr = rhs.detach();
     }
 
     void clear() {
@@ -544,10 +644,13 @@ public:
         if (t) addRef(_ptr);
     }
 
-    template<typename T2 = T>
-    T2 * get() const {
-        return (T2 *) _ptr;
+    T * detach() {
+        auto p = _ptr;
+        _ptr   = nullptr;
+        return p;
     }
+
+    T * get() const { return (T *) _ptr; }
 
     /// get address of the underlying pointer
     T * const * addr() const {
@@ -557,10 +660,22 @@ public:
 
     /// copy operator
     Ref & operator=(const Ref & rhs) {
-        if (_ptr == rhs._ptr) return *this;
+        auto p = rhs.get();
+        if (_ptr == p) return *this;
+        if (p) addRef(p);
         if (_ptr) release(_ptr);
-        if (rhs._ptr) addRef(rhs._ptr);
-        _ptr = rhs._ptr;
+        _ptr = p;
+        return *this;
+    }
+
+    /// copy operator from compatible type
+    template<typename T2>
+    Ref & operator=(const Ref<T2> & rhs) {
+        auto p = rhs.get();
+        if (_ptr == p) return *this;
+        if (p) addRef(p);
+        if (_ptr) release(_ptr);
+        _ptr = p;
         return *this;
     }
 
@@ -568,28 +683,56 @@ public:
     Ref & operator=(Ref && rhs) {
         if (this != &rhs) {
             if (_ptr) release(_ptr);
-            _ptr     = rhs._ptr;
-            rhs._ptr = nullptr;
+            _ptr = rhs.detach();
+        }
+        return *this;
+    }
+
+    /// move operator from compatible type
+    template<typename T2>
+    Ref & operator=(Ref<T2> && rhs) {
+        if (this != &rhs) {
+            if (_ptr) release(_ptr);
+            _ptr = rhs.detach();
         }
         return *this;
     }
 
     /// comparison operator
-    bool operator==(const Ref & rhs) const { return _ptr == rhs._ptr; }
+    bool operator==(const Ref & rhs) const { return _ptr == rhs.get(); }
 
-    /// @brief null equality operator
-    /// @return true if null, false otherwise.
+    /// comparison operator for compatible type
+    template<typename T2, std::enable_if_t<std::is_convertible_v<T2, T>>>
+    bool operator==(const Ref<T2> & rhs) const {
+        return _ptr == rhs.get();
+    }
+
+    /// comparison operator for nullptr
     bool operator==(std::nullptr_t) { return _ptr == nullptr; }
 
     /// comparison operator
-    bool operator!=(const Ref & rhs) const { return _ptr != rhs._ptr; }
+    bool operator!=(const Ref & rhs) const { return _ptr != rhs.get(); }
 
-    /// @brief not null operator.
-    /// @return true if not null, false otherwise.
+    /// comparison operator for compatible type
+    template<typename T2>
+    bool operator!=(const Ref<T2> & rhs) const {
+        return _ptr != rhs.get();
+    }
+
+    /// comparison operator for nullptr
     bool operator!=(std::nullptr_t) { return _ptr != nullptr; }
 
     /// comparison operator
-    bool operator<(const Ref & rhs) const { return _ptr < rhs._ptr; }
+    bool operator<(const Ref & rhs) const { return _ptr < rhs.get(); }
+
+    /// comparison operator
+    template<typename T2>
+    bool operator<(const Ref<T2> & rhs) const {
+        return _ptr < rhs.get();
+    }
+
+    /// comparison operator
+    bool operator<(std::nullptr_t) const { return _ptr < (T *) nullptr; }
 
     /// @brief boolean cast.
     /// @return true if not null, false otherwise.
@@ -614,82 +757,6 @@ public:
 private:
     /// @brief Pointer smart pointer is wrapping.
     T * _ptr = nullptr;
-};
-
-// // ---------------------------------------------------------------------------------------------------------------------
-// /// A wrapper class for VkCommandBuffer
-// class CommandBuffer : public Root {
-// public:
-//     vk::CommandBuffer handle() const { return _handle; }
-
-// protected:
-//     CommandBuffer(const Root::ConstructParameters & cp): Root(cp) {}
-//     ~CommandBuffer() override = default;
-
-//     vk::CommandBuffer      _handle {};
-//     vk::CommandBufferLevel _level = vk::CommandBufferLevel::ePrimary;
-// };
-
-class Device;
-
-// ---------------------------------------------------------------------------------------------------------------------
-/// A wrapper class for VkQueue
-class CommandQueue : public Root {
-public:
-    struct ConstructParameters : public Root::ConstructParameters {
-        const GlobalInfo * gi     = nullptr;
-        uint32_t           family = 0; ///< queue family index
-        uint32_t           index  = 0; ///< queue index within family
-    };
-
-    struct Desc {
-        const GlobalInfo * gi     = nullptr;
-        vk::Queue          handle = {};
-        uint32_t           family = 0; ///< queue family index
-        uint32_t           index  = 0; ///< queue index within family
-    };
-
-    struct SubmitParameters {
-        /// @brief The command buffers to submit. The command buffer must be allocated out of this queue class.
-        /// @todo Submit array of command buffers together.
-        const vk::CommandBuffer commands {};
-
-        /// The (optional) fence object to signal once the command buffers have completed execution.
-        vk::Fence signalFence = {};
-
-        /// @brief List of semaphores to wait for before executing the command buffers.
-        vk::ArrayProxy<const vk::Semaphore> waitSemaphores {};
-
-        /// @brief List of semaphores to signal once the command buffers have completed execution.
-        vk::ArrayProxy<const vk::Semaphore> signalSemaphores {};
-    };
-
-    CommandQueue(const ConstructParameters &);
-    ~CommandQueue() override;
-
-    auto desc() const -> const Desc &;
-
-    /// @brief Begin recording a command buffer.
-    /// @todo should return a custom CommandBuffer class.
-    auto begin(const char * purpose, vk::CommandBufferLevel level = vk::CommandBufferLevel::ePrimary) -> vk::CommandBuffer;
-
-    /// @brief End recording a command buffer. Submit it to the queue for asynchronous processing.
-    void submit(const SubmitParameters &);
-
-    /// @brief Wait for the queue to finish processing submitted commands.
-    /// @param cb The command buffer to wait for. It must be allocated out of this queue via the begin() call.
-    ///           Passing in empty command buffer handle is allowed though. In this case, the function will wait for all
-    ///           submitted command buffers to finish.
-    void wait(vk::CommandBuffer cb = {});
-
-    auto gi() const -> const GlobalInfo * { return desc().gi; }
-    auto family() const -> uint32_t { return desc().family; }
-    auto index() const -> uint32_t { return desc().index; }
-    auto handle() const -> vk::Queue { return desc().handle; }
-
-private:
-    class Impl;
-    Impl * _impl = nullptr;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -776,6 +843,8 @@ struct Barrier {
     }
 };
 
+class CommandQueue;
+
 // ---------------------------------------------------------------------------------------------------------------------
 /// A wrapper class for VkBuffer
 class Buffer : public Root {
@@ -859,11 +928,13 @@ public:
         vk::DeviceSize size        = 0; ///< size of the data to be written, in bytes.
         vk::DeviceSize offset      = 0; ///< byte offset of the destination buffer where the data will be written to.
 
-        SetContentParameters & setQueue(CommandQueue & q) {
-            queueFamily = q.family();
-            queueIndex  = q.index();
+        SetContentParameters & setQueue(uint32_t family, uint32_t index) {
+            queueFamily = family;
+            queueIndex  = index;
             return *this;
         }
+
+        SetContentParameters & setQueue(const CommandQueue &);
 
         SetContentParameters & setData(const void * data_, vk::DeviceSize size_) {
             data = data_;
@@ -872,7 +943,7 @@ public:
         }
 
         template<typename T>
-        SetContentParameters & setData(vk::ArrayProxy<T> data_) {
+        SetContentParameters & setData(vk::ArrayProxy<const T> data_) {
             data = data_.data();
             size = data_.size() * sizeof(T);
             return *this;
@@ -891,11 +962,13 @@ public:
         vk::DeviceSize offset      = 0;                  ///< byte offset of the source buffer where the data will be read from.
         vk::DeviceSize size        = vk::DeviceSize(-1); ///< size of the data to be read, in bytes.
 
-        ReadParameters & setQueue(CommandQueue & q) {
-            queueFamily = q.family();
-            queueIndex  = q.index();
+        ReadParameters & setQueue(uint32_t family, uint32_t index) {
+            queueFamily = family;
+            queueIndex  = index;
             return *this;
         }
+
+        ReadParameters & setQueue(const CommandQueue &);
 
         ReadParameters & setRange(vk::DeviceSize o, vk::DeviceSize s = vk::DeviceSize(-1)) {
             offset = o;
@@ -926,9 +999,9 @@ public:
         RVI_NO_COPY(Map);
         RVI_NO_MOVE(Map);
 
-        Map(Buffer & buffer_, vk::DeviceSize offset = 0, vk::DeviceSize size = vk::DeviceSize(-1)) {
+        Map(Buffer & buffer_, vk::DeviceSize offset_ = 0, vk::DeviceSize size_ = vk::DeviceSize(-1)) {
             RVI_ASSERT(empty());
-            auto mapped = buffer_.map({offset, size});
+            auto mapped = buffer_.map({offset_, size_});
             if (!mapped.data) return;
             buffer = &buffer_;
             data   = (T *) mapped.data;
@@ -966,7 +1039,7 @@ public:
 
     auto desc() const -> const Desc &;
     void cmdCopy(const CopyParameters &);
-    void setContent(const SetContentParameters &);
+    auto setContent(const SetContentParameters &) -> Buffer &;
     auto readContent(const ReadParameters &) -> std::vector<uint8_t>;
     auto map(const MapParameters &) -> MappedResult;
     void unmap();
@@ -1092,26 +1165,29 @@ public:
             alloc  = alloc_;
             return *this;
         }
-
-        bool isCube() const {
-            return vk::ImageType::e2D == info.imageType && info.extent.width == info.extent.height && 1 == info.extent.depth && 6 == info.arrayLayers &&
-                   (vk::ImageCreateFlagBits::eCubeCompatible & info.flags);
-        }
-
-        bool isCubeOrCubeArray() const {
-            return vk::ImageType::e2D == info.imageType && info.extent.width == info.extent.height && 1 == info.extent.depth && 6 <= info.arrayLayers &&
-                   0 == (info.arrayLayers % 6) && (vk::ImageCreateFlagBits::eCubeCompatible & info.flags);
-        }
     };
 
     struct Desc {
-        vk::Image               handle      = {};
-        vk::ImageType           type        = vk::ImageType::e2D;
-        vk::Format              format      = vk::Format::eR8G8B8A8Unorm;
-        vk::Extent3D            extent      = {1, 1, 1};
-        uint32_t                mipLevels   = 1;
-        uint32_t                arrayLayers = 1;
-        vk::SampleCountFlagBits samples     = vk::SampleCountFlagBits::e1;
+        vk::Image               handle         = {};
+        vk::ImageType           type           = vk::ImageType::e2D;
+        vk::Format              format         = vk::Format::eR8G8B8A8Unorm;
+        vk::Extent3D            extent         = {1, 1, 1};
+        uint32_t                mipLevels      = 1;
+        uint32_t                arrayLayers    = 1;
+        vk::SampleCountFlagBits samples        = vk::SampleCountFlagBits::e1;
+        bool                    cubeCompatible = false;
+
+        bool isCube() const { return vk::ImageType::e2D == type && extent.width == extent.height && 1 == extent.depth && 6 == arrayLayers && cubeCompatible; }
+
+        bool isCubeOrCubeArray() const {
+            return vk::ImageType::e2D == type && extent.width == extent.height && 1 == extent.depth && 6 <= arrayLayers && 0 == (arrayLayers % 6) &&
+                   cubeCompatible;
+        }
+    };
+
+    struct ImportParameters : Root::ConstructParameters {
+        const GlobalInfo * gi = nullptr;
+        Desc               desc {};
     };
 
     struct GetViewParameters {
@@ -1153,11 +1229,13 @@ public:
         size_t       pitch       = 0; ///< size in byte of a pixel block rows. This is multiple scan line of pixels for compressed texture.
         const void * pixels      = nullptr;
 
-        SetContentParameters & setQueue(CommandQueue & q) {
-            queueFamily = q.family();
-            queueIndex  = q.index();
+        SetContentParameters & setQueue(uint32_t family, uint32_t index) {
+            queueFamily = family;
+            queueIndex  = index;
             return *this;
         }
+
+        SetContentParameters & setQueue(const CommandQueue &);
 
         SetContentParameters & setPixels(const void * p) {
             pixels = p;
@@ -1169,11 +1247,13 @@ public:
         uint32_t queueFamily = 0;
         uint32_t queueIndex  = 0;
 
-        ReadContentParameters & setQueue(CommandQueue & q) {
-            queueFamily = q.family();
-            queueIndex  = q.index();
+        ReadContentParameters & setQueue(uint32_t family, uint32_t index) {
+            queueFamily = family;
+            queueIndex  = index;
             return *this;
         }
+
+        ReadContentParameters & setQueue(const CommandQueue &);
     };
 
     struct SubresourceContent {
@@ -1199,9 +1279,14 @@ public:
     /// @param format The pixel format of the image.
     /// @param hint   The hint of the aspect flags. The function will try to use this hinted aspect flag, as long as it is compatible the format.
     ///               Set to vk::ImageAspectFlagBits::eNone to let the function determine the aspect flags.
-    static vk::ImageAspectFlags determineImageAspect(vk::Format format, vk::ImageAspectFlags hint = vk::ImageAspectFlagBits::eNone);
+    static vk::ImageAspectFlags determineImageAspect(vk::Format format, vk::ImageAspectFlags hint = vk::ImageAspectFlagBits::eNoneKHR);
 
+    /// @brief Construct an image from scratch
     Image(const ConstructParameters &);
+
+    /// @brief Create an image class instance from an existing vk::Image.
+    /// Note that some functionalies of the image class could be limited.
+    Image(const ImportParameters &);
 
     ~Image();
 
@@ -1235,8 +1320,8 @@ private:
 class Sampler : public Root {
 public:
     struct ConstructParameters : public Root::ConstructParameters {
-        const GlobalInfo *    gi = {};
-        vk::SamplerCreateInfo info;
+        const GlobalInfo *    gi {};
+        vk::SamplerCreateInfo info {};
 
         ConstructParameters & setLinear() {
             info.magFilter = info.minFilter = vk::Filter::eLinear;
@@ -1266,7 +1351,7 @@ public:
 
 protected:
     void onNameChanged(const std::string &) override {
-        if (_handle) setVkObjectName(_gi->device, _handle, name());
+        if (_handle) setVkHandleName(_gi->device, _handle, name());
     }
 
 private:
@@ -1302,11 +1387,11 @@ public:
             return *this;
         }
 
-        // template<typename T>
-        // ConstructParameters & setSpirv(vk::ArrayProxy<const T> blob) {
-        //     spirv = vk::ArrayProxy<const uint32_t>(blob.size() * sizeof(T) / sizeof(uint32_t), (const uint32_t*)blob.data());
-        //     return *this;
-        // }
+        template<typename T>
+        ConstructParameters & setSpirv(vk::ArrayProxy<const T> blob) {
+            spirv = vk::ArrayProxy<const uint32_t>((uint32_t) (blob.size() * sizeof(T) / sizeof(uint32_t)), (const uint32_t *) blob.data());
+            return *this;
+        }
     };
 
     Shader(const ConstructParameters &);
@@ -1326,136 +1411,6 @@ private:
     vk::ShaderModule      _handle {};
     std::string           _entry;
     std::vector<uint32_t> _spirv;
-};
-
-// ---------------------------------------------------------------------------------------------------------------------
-/// VkFramebuffer wrapper class
-class RenderPass : public Root {
-public:
-    struct SubpassParameters {
-        std::vector<vk::AttachmentReference>   colors;
-        std::optional<vk::AttachmentReference> depth;
-        std::vector<vk::AttachmentReference>   inputs;
-        vk::SubpassDescriptionFlags            flags = {};
-    };
-
-    struct ConstructParameters : public Root::ConstructParameters {
-        const GlobalInfo *                     gi    = nullptr;
-        vk::RenderPassCreateFlags              flags = {};
-        std::vector<vk::AttachmentDescription> attachments {};
-        std::vector<SubpassParameters>         subpasses {};
-        std::vector<vk::SubpassDependency>     dependencies {};
-
-        /// @brief Setup a simple single pass render pass.
-        ConstructParameters & simple(vk::ArrayProxy<const vk::Format> colors, vk::Format depth = vk::Format::eUndefined, bool clear = true, bool store = true);
-    };
-
-    RenderPass(const ConstructParameters &);
-
-    ~RenderPass();
-
-    void cmdBegin(vk::CommandBuffer, vk::RenderPassBeginInfo) const;
-
-    void cmdNext(vk::CommandBuffer) const;
-
-    void cmdEnd(vk::CommandBuffer) const;
-
-    vk::RenderPass handle() const { return _handle; }
-
-    operator vk::RenderPass() const { return _handle; }
-
-    operator VkRenderPass() const { return _handle; }
-
-protected:
-    void onNameChanged(const std::string &) override;
-
-private:
-    const GlobalInfo * _gi     = nullptr;
-    vk::RenderPass     _handle = {};
-#if RAPID_VULKAN_ENABLE_DEBUG_BUILD
-    ConstructParameters _cp; // keep construct parameters around for debug purpose only.
-#endif
-};
-
-// ---------------------------------------------------------------------------------------------------------------------
-/// VkFramebuffer wrapper class
-class Framebuffer : public Root {
-public:
-    struct ConstructParameters : public Root::ConstructParameters {
-        const GlobalInfo *         gi   = nullptr;
-        vk::RenderPass             pass = {};
-        std::vector<vk::ImageView> attachments {};
-        size_t                     width  = 1;
-        size_t                     height = 1;
-        size_t                     layers = 1;
-
-        ConstructParameters & setRenderPass(vk::RenderPass v) {
-            pass = v;
-            return *this;
-        }
-
-        ConstructParameters & addImage(Image & image);
-
-        ConstructParameters & addImageView(vk::ImageView view) {
-            attachments.emplace_back(view);
-            return *this;
-        }
-
-        ConstructParameters & setExtent(size_t w, size_t h, size_t l = 1) {
-            width  = w;
-            height = h;
-            layers = l;
-            return *this;
-        }
-    };
-
-    Framebuffer(const ConstructParameters &);
-
-    ~Framebuffer();
-
-    vk::Framebuffer handle() const { return _handle; }
-
-    operator vk::Framebuffer() const { return _handle; }
-
-    operator VkFramebuffer() const { return _handle; }
-
-protected:
-    void onNameChanged(const std::string &) override;
-
-private:
-    const GlobalInfo * _gi     = nullptr;
-    vk::Framebuffer    _handle = {};
-};
-
-// ---------------------------------------------------------------------------------------------------------------------
-/// A utility class that represents the full layout of a pipeline object.
-struct PipelineReflection {
-    typedef vk::DescriptorSetLayoutBinding Descriptor;
-
-    /// Collection of descriptors in one set. We can't use binding point as key, since multiple shader variable might bind to same set and binding point.
-    typedef std::unordered_map<std::string, Descriptor> DescriptorSet;
-
-    /// Collection of descriptor sets indexed by their set index in shader.
-    typedef std::vector<DescriptorSet> DescriptorLayout;
-
-    typedef vk::PushConstantRange Constant;
-
-    /// Collection of push constants.
-    typedef std::unordered_map<std::string, Constant> ConstantLayout;
-
-    /// Properties of vertex shader input.
-    struct VertexShaderInput {
-        uint32_t   location = 0;
-        vk::Format format   = vk::Format::eUndefined;
-    };
-
-    /// Collection of vertex shader input.
-    typedef std::unordered_map<std::string, VertexShaderInput> VertexLayout;
-
-    std::string      name; ///< name of the program that this reflect is from. this field is for logging and debugging.
-    DescriptorLayout descriptors;
-    ConstantLayout   constants;
-    VertexLayout     vertex;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1495,6 +1450,21 @@ struct ImageSampler {
     /// @brief The sampler object.
     vk::Sampler sampler {};
 
+    ImageSampler & setImageView(vk::ImageView v) {
+        imageView = v;
+        return *this;
+    }
+
+    ImageSampler & setImageLayout(vk::ImageLayout v) {
+        imageLayout = v;
+        return *this;
+    }
+
+    ImageSampler & setSampler(vk::Sampler v) {
+        sampler = v;
+        return *this;
+    }
+
     bool operator==(const ImageSampler & rhs) const {
         if (this == &rhs) return true;
         if (imageView != rhs.imageView) return false;
@@ -1505,122 +1475,79 @@ struct ImageSampler {
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// Represent a single pipeline argument
-class Argument {
-public:
-    RVI_NO_COPY_NO_MOVE(Argument);
+/// A utility class that describes parameter layout of a pipeline object.
+struct PipelineReflection {
+    /// @brief Represents one descriptor or descriptor array.
+    struct Descriptor {
+        /// @brief names of the shader variable.
+        /// The whole structure is considered empty/invalid, if names set is empty.
+        std::set<std::string> names;
 
-    /// @brief Set value of buffer argument. No effect, if the argument is not a buffer.
-    void b(vk::ArrayProxy<const BufferView>);
+        /// @brief The descriptor binding information.
+        /// If the descriptor count is empty, then the whole structure is considered empty/invalid.
+        vk::DescriptorSetLayoutBinding binding;
 
-    /// @brief Set value of image/sampler argument. No effect, if the argument is not a image/sampler
-    void i(vk::ArrayProxy<const ImageSampler>);
-
-    /// @brief Set value of push constant. No effect, if the argument is not a push constant.
-    void c(size_t offset, size_t size, const void * data);
-
-protected:
-    Argument();
-    ~Argument(); // No need make this virtual, since we'll always delete it through the derived class.
-
-    class Impl;
-    Impl * _impl = nullptr;
-
-    friend class PipelineLayout;
-};
-
-// ---------------------------------------------------------------------------------------------------------------------
-/// Represent a full set of arguments that can be applied to a pipeline
-class ArgumentPack : public Root {
-public:
-    struct ConstructParameters : public Root::ConstructParameters {
-        // reserved for future use.
+        /// @TODO checking count against 0 does not work for array of descriptors with dynamic count.
+        bool empty() const { return names.empty() || 0 == binding.descriptorCount; }
     };
 
-    ArgumentPack(const ConstructParameters &);
+    /// Collection of descriptors in one set.
+    typedef std::vector<Descriptor> DescriptorSet;
 
-    ~ArgumentPack();
+    /// Collection of descriptor sets indexed by the set index.
+    typedef std::vector<DescriptorSet> DescriptorLayout;
 
-    /// @brief clear all arguments.
-    void clear();
+    struct Constant {
+        uint32_t begin = (uint32_t) -1;
+        uint32_t end   = 0;
+        // TODO: add push constant name information.
 
-    /// @brief Set value of buffer argument. If the argument has not been set before, a new argument will be created.
-    void b(const std::string & name, vk::ArrayProxy<const BufferView>);
-
-    /// @brief Set value of image/sampler argument. If the argument has not been set before, a new argument will be created.
-    void i(const std::string & name, vk::ArrayProxy<const ImageSampler>);
-
-    /// @brief Set value of push constant. If the argument has not been set before, a new argument will be created.
-    void c(const std::string & name, size_t offset, size_t size, const void * data);
-
-    /// @brief Set value of push constant. If the argument has not been set before, a new argument will be created.
-    template<typename T>
-    void c(const std::string & name, size_t offset, vk::ArrayProxy<T> data) {
-        return c(name, offset, data.size() * sizeof(T), data.data());
-    }
-
-    /// @brief Get argument by name.
-    /// The returned argument instance can be used to set value of that argument w/o paying the cost of string hashing.
-    /// If the argument has not been set before, a new argument will be created and returned.
-    Argument * get(const std::string & name);
-
-    /// @brief Get an existing argument by name. Returns nullptr if the argument has not been set.
-    const Argument * get(const std::string & name) const;
-
-private:
-    class Impl;
-    Impl * _impl = nullptr;
-};
-
-// ---------------------------------------------------------------------------------------------------------------------
-/// A wrapper class for VkPipelineLayout
-class PipelineLayout : public Root {
-public:
-    struct ConstructParameters : public Root::ConstructParameters {
-        vk::ArrayProxy<const Shader * const> shaders;
+        bool empty() const { return begin >= end; }
     };
 
-    PipelineLayout(const ConstructParameters &);
+    /// Collection of push constants for each shader stage.
+    typedef std::map<vk::ShaderStageFlagBits, Constant> ConstantLayout;
 
-    ~PipelineLayout() override;
+    /// Properties of vertex shader input.
+    struct VertexShaderInput {
+        vk::Format  format = vk::Format::eUndefined;
+        std::string shaderVariable; ///< name of the shader variable.
+    };
 
-    /// @brief Returns the underlying Vulkan handle.
-    vk::PipelineLayout handle() const;
+    /// Collection of vertex shader input. Key is input location.
+    typedef std::map<uint32_t, VertexShaderInput> VertexLayout;
 
-    /// @brief Returns the pipeline reflection object that is used to construct this pipeline layout.
-    const PipelineReflection & reflection() const;
+    std::string      name; ///< name of the program that this reflect is from. this field is for logging and debugging.
+    DescriptorLayout descriptors;
+    ConstantLayout   constants;
+    VertexLayout     vertex;
 
-    /// @brief Bind argument pack to the command buffer
-    /// After this method succeeded (returns true), it is ready to bind issue draw/dispatch commands.
-    bool cmdBind(vk::CommandBuffer, vk::PipelineBindPoint, const ArgumentPack &) const;
-
-protected:
-    void onNameChanged(const std::string &) override;
-
-private:
-    class Impl;
-    Impl * _impl = nullptr;
+    PipelineReflection() {}
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// A wrapper class for VkPipeline
+/// A wrapper class for VkPipeline. Immutable after being created. Safe to visit from multiple threads.
 class Pipeline : public Root {
 public:
     ~Pipeline() override;
 
-    const PipelineLayout & layout() const;
+    vk::PipelineBindPoint bindPoint() const;
 
-    void cmdBind(vk::CommandBuffer cb, const ArgumentPack & ap) const;
+    vk::Pipeline handle() const;
+
+    vk::PipelineLayout layout() const;
+
+    const PipelineReflection & reflection() const;
 
 protected:
-    Pipeline(const std::string & name, vk::ArrayProxy<const Shader * const> shaders);
+    Pipeline(const std::string & name, vk::PipelineBindPoint bindPoint, vk::ArrayProxy<const Shader * const> shaders);
 
     class Impl;
     Impl * _impl = nullptr;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// Wrapper of graphics pipeline object
+/// Wrapper of graphics pipeline object.
 class GraphicsPipeline : public Pipeline {
 public:
     struct ConstructParameters : public Root::ConstructParameters {
@@ -1639,9 +1566,9 @@ public:
         vk::PipelineDepthStencilStateCreateInfo            depth {};
         std::vector<vk::PipelineColorBlendAttachmentState> attachments {defaultAttachment()};
         std::array<float, 4>                               blendConstants {};
-        std::vector<vk::DynamicState>                      dynamic {};
+        std::map<vk::DynamicState, uint64_t>               dynamic {};
         vk::Pipeline                                       baseHandle {};
-        uint32_t                                           baseIndex {};
+        int32_t                                            baseIndex {};
 
         ConstructParameters & setRenderPass(vk::RenderPass pass_, size_t sub = 0) {
             pass    = pass_;
@@ -1659,32 +1586,87 @@ public:
             return *this;
         }
 
+        /// @brief Add a vertex attribute, in order of location.
+        /// The first call to this method adds a vertex attribute for location 0. The second call adds a vertex attribute for location 1, and so on.
+        ConstructParameters & addVertexAttribute(size_t binding, size_t offset, vk::Format format) {
+            vk::VertexInputAttributeDescription desc {};
+            desc.binding  = (uint32_t) binding;
+            desc.location = (uint32_t) va.size();
+            desc.offset   = (uint32_t) offset;
+            desc.format   = format;
+            va.push_back(desc);
+            return *this;
+        }
+
+        /// @brief Add a vertex buffer, in order of vertex buffer binding index.
+        /// The first call to this method or addInstanceBuffer() adds a vertex buffer for binding 0. The second call to them adds a vertex buffer for binding 1,
+        /// and so on.
+        ConstructParameters & addVertexBuffer(uint32_t stride) {
+            vk::VertexInputBindingDescription desc;
+            desc.binding   = (uint32_t) vb.size();
+            desc.stride    = stride;
+            desc.inputRate = vk::VertexInputRate::eVertex;
+            vb.push_back(desc);
+            return *this;
+        }
+
+        /// @brief Add an instance buffer, in order of vertex buffer binding index.
+        /// The first call to this method or addVertexBuffer() adds a vertex buffer for binding 0. The second call to them adds a vertex buffer for binding 1,
+        /// and so on.
+        ConstructParameters & addInstanceBuffer(uint32_t stride) {
+            vk::VertexInputBindingDescription desc;
+            desc.binding   = (uint32_t) vb.size();
+            desc.stride    = stride;
+            desc.inputRate = vk::VertexInputRate::eInstance;
+            vb.push_back(desc);
+            return *this;
+        }
+
+        /// @brief Enable dynamic topology.
         ConstructParameters & dynamicTopology() {
-            dynamic.push_back(vk::DynamicState::ePrimitiveTopology);
+            dynamic[vk::DynamicState::ePrimitiveTopology] = 0;
             return *this;
         }
 
-        ConstructParameters & dynamicViewport() {
-            dynamic.push_back(vk::DynamicState::eViewportWithCount);
-            viewports.clear();
+        /// @brief Add a new static viewport and scissor to the pipeline.
+        ConstructParameters & addStaticViewportAndScissor(int x, int y, uint32_t w, uint32_t h) {
+            viewports.push_back({(float) x, (float) y, (float) w, (float) h, 0.0f, 1.0f});
+            scissors.push_back(vk::Rect2D(vk::Offset2D(x, y), vk::Extent2D(w, h)));
             return *this;
         }
 
-        ConstructParameters & dynamicScissor() {
-            dynamic.push_back(vk::DynamicState::eScissorWithCount);
-            scissors.clear();
+        /// @brief Enable dyanmic viewport. Also specify the number of viewports.
+        /// @param count Specify how many viewports will be used. Set to 0 to enable VK_DYNAMIC_STATE_VIEWPORT_WITH_COUNT_EXT.
+        ConstructParameters & dynamicViewport(size_t count = 1) {
+            if (0 == count) {
+                dynamic.erase(vk::DynamicState::eViewport);
+                dynamic[vk::DynamicState::eViewportWithCountEXT] = 0;
+            } else {
+                dynamic.erase(vk::DynamicState::eViewportWithCountEXT);
+                dynamic[vk::DynamicState::eViewport] = count;
+            }
             return *this;
         }
 
+        /// @brief Enable dynamic scissor. Also specify the number of scissors.
+        /// @param count Specify how many scissors will be used. Set to 0 to enable VK_DYNAMIC_STATE_SCISSOR_WITH_COUNT_EXT.
+        ConstructParameters & dynamicScissor(size_t count = 1) {
+            if (0 == count) {
+                dynamic.erase(vk::DynamicState::eScissor);
+                dynamic[vk::DynamicState::eScissorWithCountEXT] = 0;
+            } else {
+                dynamic.erase(vk::DynamicState::eScissorWithCountEXT);
+                dynamic[vk::DynamicState::eScissor] = count;
+            }
+            return *this;
+        }
+
+    private:
         static constexpr vk::PipelineInputAssemblyStateCreateInfo defaultIAStates() {
             return vk::PipelineInputAssemblyStateCreateInfo().setTopology(vk::PrimitiveTopology::eTriangleList);
         }
 
-        static constexpr vk::PipelineRasterizationStateCreateInfo defaultRastStates() {
-            vk::PipelineRasterizationStateCreateInfo r;
-            r.setLineWidth(1.0f);
-            return r;
-        }
+        static constexpr vk::PipelineRasterizationStateCreateInfo defaultRastStates() { return vk::PipelineRasterizationStateCreateInfo().setLineWidth(1.0f); }
 
         static const vk::PipelineColorBlendAttachmentState defaultAttachment() {
             return vk::PipelineColorBlendAttachmentState().setColorWriteMask(vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
@@ -1692,51 +1674,18 @@ public:
         }
     };
 
-    struct IndexBuffer {
-        /// @brief Handle of the index buffer.
-        vk::Buffer buffer = VK_NULL_HANDLE;
-
-        /// @brief Byte offset of the first index. Ignored if buffer is empty.
-        vk::DeviceSize offset = 0;
-
-        /// @brief Index type;
-        vk::IndexType indexType = vk::IndexType::eUint16;
-
-        /// @brief Get size/stride of the index based on the type.
-        size_t indexStride() const {
-            switch (indexType) {
-            case vk::IndexType::eUint16:
-                return sizeof(uint16_t);
-            case vk::IndexType::eUint32:
-                return sizeof(uint32_t);
-            case vk::IndexType::eUint8EXT:
-                return 1;
-            default:
-                return 0;
-            }
-        }
-    };
-
     struct DrawParameters {
-        /// Vertex buffer list of the draw.
-        vk::ArrayProxy<const BufferView> vertexBuffers;
-
-        /// Index buffer of the draw. If empty, then the draw is considered non-indexed.
-        IndexBuffer indexBuffer;
-
         /// Instance count. Default value is 1.
         uint32_t instanceCount = 1;
 
         /// Index of the first instance. Default is 0.
         uint32_t firstInstance = 0;
 
-        union {
-            /// Index count for indexed draw.
-            uint32_t indexCount = 0;
+        /// Index count for indexed draw. Set to 0 for non-indexed draw.
+        uint32_t indexCount = 0;
 
-            /// Vertex count for non-indexed draw.
-            uint32_t vertexCount;
-        };
+        /// Vertex count for non-indexed draw. Ignored when indexCount is non-zero.
+        uint32_t vertexCount = 0;
 
         union {
             /// Index of the first vertex for non-indexed draw.
@@ -1750,16 +1699,15 @@ public:
         int32_t vertexOffset = 0;
 
         DrawParameters & setNonIndexed(size_t vertexCount_, size_t firstVertex_ = 0) {
-            indexBuffer.buffer = VK_NULL_HANDLE;
-            vertexCount        = (uint32_t) vertexCount_;
-            firstVertex        = (uint32_t) firstVertex_;
+            indexCount  = 0;
+            vertexCount = (uint32_t) vertexCount_;
+            firstVertex = (uint32_t) firstVertex_;
             return *this;
         }
 
-        DrawParameters & setIndexed(const IndexBuffer & ib, size_t indexCount_, size_t firstIndex_ = 0, int32_t vertexOffset_ = 0) {
-            RAPID_VULKAN_ASSERT(ib.buffer, "Set indexed draw but with an empty index buffer?");
-            indexBuffer  = ib;
+        DrawParameters & setIndexed(size_t indexCount_, size_t firstIndex_ = 0, int32_t vertexOffset_ = 0) {
             indexCount   = (uint32_t) indexCount_;
+            vertexCount  = 0;
             firstIndex   = (uint32_t) firstIndex_;
             vertexOffset = vertexOffset_;
             return *this;
@@ -1774,7 +1722,7 @@ public:
 
     GraphicsPipeline(const ConstructParameters &);
 
-    void cmdDraw(vk::CommandBuffer, const DrawParameters &);
+    void cmdDraw(vk::CommandBuffer, const DrawParameters &) const;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1794,34 +1742,347 @@ public:
 
     ComputePipeline(const ConstructParameters &);
 
-    void cmdDispatch(vk::CommandBuffer, const DispatchParameters &);
+    void cmdDispatch(vk::CommandBuffer, const DispatchParameters &) const;
 };
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// @brief A compact snapshot of the drawable object.
+struct DrawPack {
+    struct ConstantArgument {
+        vk::ShaderStageFlags stages {};
+        uint32_t             offset {};
+        std::vector<uint8_t> value {};
+    };
+
+    Ref<const Pipeline> pipeline;
+
+    std::vector<std::vector<vk::WriteDescriptorSet>> descriptors;
+
+    std::vector<ConstantArgument> constants;
+
+    std::vector<vk::Buffer>     vertexBuffers;
+    std::vector<vk::DeviceSize> vertexOffsets;
+
+    BufferView    indexBuffer;                        ///< Index buffer. Set to null for non-indexed draw.
+    vk::IndexType indexType = vk::IndexType::eUint16; ///< Type of index. Ignored for non-indexed draw.
+
+    union {
+        GraphicsPipeline::DrawParameters    draw;     ///< Draw parameters for graphics pipeline.
+        ComputePipeline::DispatchParameters dispatch; ///< Dispatch parameters for compute pipeline.
+    };
+
+    DrawPack() {}
+
+    ~DrawPack() {}
+
+    typedef std::function<vk::DescriptorSet(const Pipeline &, uint32_t setIndex)> DescriptorSetAllocator;
+
+    struct RenderParameters {
+        vk::Device             device {};
+        DescriptorSetAllocator descriptorSetAllocator {};
+        const DrawPack *       previous {};
+    };
+
+    void cmdRender(vk::CommandBuffer cb, const RenderParameters &) const;
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// Unique identifier of a pipeline descriptor
+union DescriptorIdentifier {
+    uint64_t u64 = 0;
+    struct {
+        uint32_t set;
+        uint32_t binding;
+    };
+
+    DescriptorIdentifier() = default;
+
+    DescriptorIdentifier(uint32_t s, uint32_t b): set(s), binding(b) {}
+
+    bool operator==(const DescriptorIdentifier & rhs) const { return u64 == rhs.u64; }
+
+    bool operator!=(const DescriptorIdentifier & rhs) const { return u64 != rhs.u64; }
+
+    bool operator<(const DescriptorIdentifier & rhs) const { return u64 < rhs.u64; }
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// @brief Represent a pipeline and the full set of resources/parameters to issue a draw/dispatch call to GPU.
+/// The object is not thread safe. The methods can only be used in strictly sequential manner.
+class Drawable : public Root {
+public:
+    struct ConstructParameters : public Root::ConstructParameters {
+        Ref<const Pipeline> pipeline {};
+    };
+
+    /// @brief Construct a drawable object.
+    Drawable(const ConstructParameters &);
+
+    /// @brief Destruct the drawable object.
+    ~Drawable();
+
+    /// @brief reset the drawable back to default state.
+    Drawable & reset();
+
+    /// @brief Set value of buffer argument. Do nothing if the argument is not used by the pipeline.
+    Drawable & b(DescriptorIdentifier id, vk::ArrayProxy<const BufferView>);
+
+    /// @brief Set value of texture (image/sampler) argument. Do nothing if the argument is not used by the pipeline.
+    Drawable & t(DescriptorIdentifier id, vk::ArrayProxy<const ImageSampler>);
+
+    /// @brief Set value of sampler argument. Do nothing if the argument is not used by the pipeline.
+    Drawable & s(DescriptorIdentifier id, vk::ArrayProxy<const vk::Sampler>);
+
+    /// @brief Set value of sampler argument. Do nothing if the argument is not used by the pipeline.
+    Drawable & s(DescriptorIdentifier id, vk::ArrayProxy<const Ref<const Sampler>>);
+
+    /// @brief Set value of push constant.
+    Drawable & c(size_t offset, size_t size, const void * data, vk::ShaderStageFlags stages = vk::ShaderStageFlagBits::eAll);
+
+    /// @brief Set value of push constant.
+    template<typename T>
+    Drawable & c(size_t offset, vk::ArrayProxy<T> data, vk::ShaderStageFlags stages = vk::ShaderStageFlagBits::eAll) {
+        return c(offset, data.size() * sizeof(T), data.data(), stages);
+    }
+
+    /// @brief Append a vertex buffer to the drawable.
+    Drawable & v(vk::ArrayProxy<const BufferView>);
+
+    /// @brief Set index buffer
+    Drawable & i(const BufferView & buffer, vk::IndexType type = vk::IndexType::eUint16);
+
+    /// @brief Set draw parameters
+    Drawable & draw(const GraphicsPipeline::DrawParameters &);
+
+    /// @brief Set dispatch parameters
+    Drawable & dispatch(const ComputePipeline::DispatchParameters &);
+
+    /// @brief Create a compat snapshot of the drawable.
+    std::shared_ptr<const DrawPack> compile() const;
+
+private:
+    class Impl;
+    Impl * _impl = nullptr;
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// A wrapper class for VkCommandBuffer
+class CommandBuffer {
+public:
+    class Impl;
+
+    struct SubmitParameters {
+        /// The (optional) fence object to signal once the command buffers have completed execution.
+        vk::Fence signalFence = {};
+
+        /// @brief List of semaphores to wait for before executing the command buffers.
+        vk::ArrayProxy<const vk::Semaphore> waitSemaphores {};
+
+        /// @brief List of semaphores to signal once the command buffers have completed execution.
+        vk::ArrayProxy<const vk::Semaphore> signalSemaphores {};
+    };
+
+    CommandBuffer(Impl * impl = nullptr): _impl(impl) {}
+    CommandBuffer(const CommandBuffer & o): _impl(o._impl) {}
+    ~CommandBuffer() = default;
+
+    const std::string & name() const;
+
+    vk::CommandBuffer handle() const;
+
+    Impl * impl() const { return _impl; }
+
+    bool empty() const { return _impl == nullptr; }
+
+    bool finished() const;
+
+    bool pending() const;
+
+    bool recording() const;
+
+    /// @brief Enqueue a draw pack to the queue to be rendered later.
+    /// The drawable and the associated resources are considered in-use until the command buffer is dropped or finished executing on GPU.
+    /// Deleting the drawable object before the command buffer is dropped or finished executing on GPU will result in undefined behavior.
+    const CommandBuffer & render(const DrawPack &) const;
+
+    /// @brief Enqueue a draw pack to the queue to be rendered later.
+    CommandBuffer & render(const DrawPack &);
+
+    CommandBuffer & operator=(const CommandBuffer & o) {
+        _impl = o._impl;
+        return *this;
+    }
+
+    bool operator<(const CommandBuffer & o) const { return _impl < o._impl; }
+
+    bool operator==(const CommandBuffer & o) const { return _impl == o._impl; }
+
+    bool operator!=(const CommandBuffer & o) const { return _impl != o._impl; }
+
+    operator vk::CommandBuffer() const { return handle(); }
+
+    operator VkCommandBuffer() const { return handle(); }
+
+    operator bool() const { return _impl != nullptr; }
+
+private:
+    Impl * _impl = nullptr;
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// A wrapper class for VkQueue
+class CommandQueue : public Root {
+public:
+    struct ConstructParameters : public Root::ConstructParameters {
+        const GlobalInfo * gi     = nullptr;
+        uint32_t           family = 0; ///< queue family index
+        uint32_t           index  = 0; ///< queue index within family
+    };
+
+    struct Desc {
+        const GlobalInfo * gi     = nullptr;
+        vk::Queue          handle = {};
+        uint32_t           family = 0; ///< queue family index
+        uint32_t           index  = 0; ///< queue index within family
+    };
+
+    struct SubmitParameters {
+        /// @brief The command buffers to submit. The command buffers must be allocated out of this queue class.
+        vk::ArrayProxy<const CommandBuffer> commandBuffers {};
+
+        /// The (optional) fence object to signal once the command buffers have completed execution.
+        vk::Fence signalFence = {};
+
+        /// @brief List of semaphores to wait for before executing the command buffers.
+        vk::ArrayProxy<const vk::Semaphore> waitSemaphores {};
+
+        /// @brief List of semaphores to signal once the command buffers have completed execution.
+        vk::ArrayProxy<const vk::Semaphore> signalSemaphores {};
+    };
+
+    /// @brief unique identifier of a GPU submission
+    struct SubmissionID {
+        int64_t queue {};
+        int64_t index {};
+
+        bool empty() const { return !queue || 0 == index; }
+
+        bool newerThan(int64_t other) const { return index - other > 0; }
+
+        bool olderThan(int64_t other) const { return index - other < 0; }
+
+        void wait() const {
+            if (empty()) return;
+            auto q = (CommandQueue *) (intptr_t) queue;
+            q->wait(*this);
+        }
+
+        operator bool() const { return !empty(); }
+    };
+
+    CommandQueue(const ConstructParameters &);
+
+    ~CommandQueue() override;
+
+    auto desc() const -> const Desc &;
+
+    /// @brief Begin recording a command buffer.
+    /// @todo should return a custom CommandBuffer class.
+    CommandBuffer begin(const char * name, vk::CommandBufferLevel level = vk::CommandBufferLevel::ePrimary);
+
+    /// @brief Submit command buffers to the queue for asynchronous processing.
+    /// After this call, all command buffer pointers are inaccessible. The caller should not use them anymore.
+    /// @return A submission ID that later to check/wait for the completion of the submission. Return an empty
+    /// handle on failure.
+    SubmissionID submit(const SubmitParameters &);
+
+    /// @brief Drop command buffers. Discard all contents of them.
+    /// After this call, the command buffer pointers are inaccessible. The caller should not use them anymore.
+    void drop(vk::ArrayProxy<const CommandBuffer>);
+
+    /// @brief Wait for the queue to finish processing submitted commands.
+    /// @param SubmissionID The submission handle to wait for. It must be returned by the submit() call of the same queue.
+    /// Empty and invalid submission will be ignored.
+    CommandQueue & wait(const vk::ArrayProxy<const SubmissionID> &);
+
+    /// @brief Wait for all submitted work to finish.
+    CommandQueue & waitIdle();
+
+    auto gi() const -> const GlobalInfo * { return desc().gi; }
+    auto family() const -> uint32_t { return desc().family; }
+    auto index() const -> uint32_t { return desc().index; }
+    auto handle() const -> vk::Queue { return desc().handle; }
+
+    /// @brief Create another queue object that shares the same underlying queue handle.
+    CommandQueue clone(const std::string & newName = {}) const {
+        return CommandQueue {ConstructParameters {{newName.empty() ? name() : newName}, gi(), family(), index()}};
+    }
+
+protected:
+    void onNameChanged(const std::string &) override;
+
+private:
+    class Impl;
+    Impl * _impl = nullptr;
+};
+
+class Device;
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// Wrapper class of swapchain object
 class Swapchain : public Root {
 public:
     struct ConstructParameters : public Root::ConstructParameters {
-        const GlobalInfo * gi                  = {};
-        vk::SurfaceKHR     surface             = {};
-        uint32_t           presentQueueFamily  = VK_QUEUE_FAMILY_IGNORED; ///< Family index of the present queue.
-        uint32_t           presentQueueIndex   = 0;                       ///< Index of the present queue.
-        uint32_t           graphicsQueueFamily = VK_QUEUE_FAMILY_IGNORED; ///< family index of graphics queue, if different from the present queue.
-        uint32_t           graphicsQueueIndex  = 0; ///< Index of the graphics queue. Ignored if graphicsQueueFamily is VK_QUEUE_FAMILY_IGNORED.
-        size_t             width               = 0; ///< width of the swapchain. 0 means surface/window width.
-        size_t             height              = 0; ///< height of the swapchain. 0 means using surface/window height.
-        size_t             maxFramesInFlight   = 1; ///< Number of frames in flight. Must be at least 1.
-        bool               vsync               = true;
+        const GlobalInfo * gi = {}; ///< The Vulkan global info object.
 
-        /// Specify format of backbuffers. If set to undefined, then the first supported format will be used.
+        /// @brief Handle of the surface to present to. Set to null to create a headless swapchain.
+        vk::SurfaceKHR surface = {};
+
+        /// @brief Must always set to a valid queue family index that is capable of doing graphics work.
+        uint32_t graphicsQueueFamily = VK_QUEUE_FAMILY_IGNORED;
+
+        /// @brief Index of the graphics queue.
+        uint32_t graphicsQueueIndex = 0;
+
+        /// @brief Family index of the present queue, or VK_QUEUE_FAMILY_IGNORED if the present queue is the same as the
+        /// graphics queue. Ignored in headless mode.
+        uint32_t presentQueueFamily = VK_QUEUE_FAMILY_IGNORED;
+
+        /// @brief Index of the present queue. Ignored when the present queue is VK_QUEUE_FAMILY_IGNORED.
+        uint32_t presentQueueIndex = 0;
+
+        /// @brief Width and height of the swapchain. Set to 0 to use the surface size.
+        /// If the surface is null, then the width and height must be non-zero.
+        size_t width = 0;
+
+        /// @brief Height of the swapchain. Set to 0 to use the surface size.
+        /// If the surface is null, then the width and height must be non-zero.
+        size_t height = 0;
+
+        /// @brief Number of frames in flight. Must be at least 1.
+        /// The more frames in flight, the more latency you'll have. But on the other hand, the GPU will be
+        /// less likely to be idle.
+        size_t maxFramesInFlight = 1;
+
+        /// @brief Whether to enable vsync. Ignored when the swapchain is headless.
+        bool vsync = true;
+
+        /// @brief Specify format of backbuffers. If set to undefined, then the first supported format will be used.
         vk::Format backbufferFormat = vk::Format::eUndefined;
 
-        /// Format of the depth buffer. Set to undefined, if you don't need depth buffer.
+        /// @brief Format of the depth buffer. Set to undefined, if you don't need depth buffer.
         vk::Format depthStencilFormat = vk::Format::eD24UnormS8Uint;
 
         /// @brief Fill in construction parameters using values retrieved from the given device.
         /// This method will fill in the following fields: gi, surface and present/graphics queue properties.
         ConstructParameters & setDevice(const Device &);
+
+        /// @brief Set dimension in pixels of the swapchain.
+        ConstructParameters & setDimensions(size_t width_, size_t height_) {
+            width  = width_;
+            height = height_;
+            return *this;
+        }
     };
 
     /// @brief Specify the desired status of the back buffer image.
@@ -1832,18 +2093,16 @@ public:
     };
 
     struct Backbuffer {
-        vk::Extent2D     extent {};
-        vk::Format       format {};
-        vk::Image        image {};
+        Ref<Image>       image {};
         vk::ImageView    view {};
-        Ref<Framebuffer> fb {};
+        vk::Framebuffer  framebuffer {};
         BackbufferStatus status {};
     };
 
     /// @brief Represents a GPU frame.
     struct Frame {
         /// @brief Index of the frame. The value will be incremented after each present.
-        int64_t index = 0;
+        uint64_t index = 0;
 
         // /// @brief Index of the frame that GPU has done all the rendering. All resources used to render this frame could be safely recycled or destroyed.
         // int64_t safeFrameIndex = -1;
@@ -1866,10 +2125,10 @@ public:
     /// @brief Parameters to begin the built-in render pass of the swapchain.
     struct BeginRenderPassParameters {
         /// @brief Specify the clear value for color buffer.
-        vk::ClearColorValue color = vk::ClearColorValue(std::array<float, 4> {0.0f, 0.0f, 0.0f, 1.0f});
+        vk::ClearColorValue clearColor = vk::ClearColorValue(std::array<float, 4> {0.0f, 0.0f, 0.0f, 1.0f});
 
         /// @brief Specify the clear value for depth and stencil buffer.
-        vk::ClearDepthStencilValue depth = vk::ClearDepthStencilValue(1.0f, 0);
+        vk::ClearDepthStencilValue clearDepth = vk::ClearDepthStencilValue(1.0f, 0);
 
         /// @brief Specify the current status of the back buffer image.
         /// This is for the cmdBeginRenderPass() method insert proper barriers to transition the image to the desired layout for the render pass.
@@ -1877,13 +2136,14 @@ public:
         /// When built-in render pass ends, the back buffer image will be automatically transitioned into status suitable for present().
         BackbufferStatus backbufferStatus = {vk::ImageLayout::ePresentSrcKHR, vk::AccessFlagBits::eMemoryRead, vk::PipelineStageFlagBits::eBottomOfPipe};
 
-        BeginRenderPassParameters & setColorF(float r, float g, float b, float a = 1.0f) {
-            color = vk::ClearColorValue(std::array<float, 4> {r, g, b, a});
+        BeginRenderPassParameters & setClearColorF(vk::ArrayProxy<const float> color) {
+            clearColor.setFloat32({color.size() > 0 ? color.data()[0] : 0.f, color.size() > 1 ? color.data()[1] : 0.f, color.size() > 2 ? color.data()[2] : 0.f,
+                                   color.size() > 3 ? color.data()[3] : 1.f});
             return *this;
         }
 
-        BeginRenderPassParameters & setDepth(float depth_, uint32_t stencil_ = 0) {
-            this->depth = vk::ClearDepthStencilValue(depth_, stencil_);
+        BeginRenderPassParameters & setClearDepth(float depth_, uint32_t stencil_ = 0) {
+            clearDepth = vk::ClearDepthStencilValue(depth_, stencil_);
             return *this;
         }
     };
@@ -1892,7 +2152,7 @@ public:
     struct PresentParameters {
         /// @brief Specify the current status of the back buffer image when calling present().
         /// The present() function will insert proper barrier to transit the current back buffer image into VK_IMAGE_LAYOUT_PRESENT_SRC_KHR layouy.
-        /// If the back buffer image is alreadh in VK_IMAGE_LAYOUT_PRESENT_SRC_KHR layout, then no barrier will be inserted.
+        /// If the back buffer image is already in VK_IMAGE_LAYOUT_PRESENT_SRC_KHR layout, then no barrier will be inserted.
         BackbufferStatus backbufferStatus = {vk::ImageLayout::ePresentSrcKHR, vk::AccessFlagBits::eMemoryRead, vk::PipelineStageFlagBits::eBottomOfPipe};
     };
 
@@ -1900,7 +2160,9 @@ public:
 
     ~Swapchain();
 
-    const RenderPass & renderPass() const;
+    vk::RenderPass renderPass() const;
+
+    CommandQueue & graphics() const;
 
     void cmdBeginBuiltInRenderPass(vk::CommandBuffer, const BeginRenderPassParameters &);
 
@@ -1955,23 +2217,15 @@ public:
     RenderLoop(const ConstructParameters &);
 };
 
+// ---------------------------------------------------------------------------------------------------------------------
+/// \def Device A wrapper class for VkDevice
+
 class Instance;
 
-// ---------------------------------------------------------------------------------------------------------------------
-/// A wrapper class for VkDevice
 class Device {
 public:
     RVI_NO_COPY(Device);
     RVI_NO_MOVE(Device);
-
-    /// Define level of validation on Vulkan error.
-    enum Validation {
-        VALIDATION_DISABLED = 0,
-        LOG_ON_VK_ERROR,
-        // LOG_ON_VK_ERROR_WITH_CALL_STACK,
-        THROW_ON_VK_ERROR,
-        BREAK_ON_VK_ERROR,
-    };
 
     enum Verbosity {
         SILENCE = 0,
@@ -1980,27 +2234,23 @@ public:
     };
 
     struct ConstructParameters {
-        /// The API version that this device will work with. Ideally, it should be equal to the version you passed to VkInstanceCreateInfo
-        /// when creating your instance. Leaving it as zero is equivalent as set to return value of vk::enumerateInstanceVersion().
-        uint32_t apiVersion = 0;
-
         /// Handle to Vulkan instance.
         vk::Instance instance;
 
         /// Leave it at zero to create an headless device w/o presentation support.
-        vk::SurfaceKHR surface;
+        vk::SurfaceKHR surface {};
 
         /// Specify extra extension to initialize VK device. Value indicate if the extension is required or not.
-        std::map<std::string, bool> deviceExtensions;
+        std::map<std::string, bool> deviceExtensions {};
 
         // /// Set to true to defer to VMA for device memory allocations.
         // bool useVmaAllocator = false;
 
         /// Basic device feature list defined by Vulkan 1.0
-        vk::PhysicalDeviceFeatures features1;
+        vk::PhysicalDeviceFeatures features1 {};
 
         /// Extensible device feature list defined Vulkan 1.1
-        std::vector<StructureChain> features2;
+        std::vector<StructureChain> features2 {};
 
         /// Pointer of an already-built feature chain. If not empty, this will be attached after feature1 and feature2.
         void * features3 = nullptr;
@@ -2008,17 +2258,8 @@ public:
         /// Set to true to create VMA allocator and store in the GlobalInfo::vmaAllocator field.
         bool enableVmaAllocator = true;
 
-        /// Set to true to enable validation layer.
-        /// \todo move to Device class.
-        Validation validation = RAPID_VULKAN_ENABLE_DEBUG_BUILD ? LOG_ON_VK_ERROR : VALIDATION_DISABLED;
-
         /// set to false to make the creation log less verbose.
         Verbosity printVkInfo = BRIEF;
-
-        ConstructParameters & setApiVersion(uint32_t v) {
-            apiVersion = v;
-            return *this;
-        }
 
         ConstructParameters & setInstance(vk::Instance i) {
             instance = i;
@@ -2030,16 +2271,16 @@ public:
             return *this;
         }
 
-        ConstructParameters & addDeviceExtension(const std::string & name, bool required = false) {
+        ConstructParameters & addDeviceExtension(const std::string & name, bool required = true) {
             deviceExtensions[name] = required;
             return *this;
         }
 
         /// Add new feature to the feature2 list.
         template<typename T>
-        T & addFeature(const T & feature) {
+        ConstructParameters & addFeature(const T & feature) {
             features2.emplace_back(feature);
-            return *(T *) features2.back().buffer.data();
+            return *this;
         }
 
         /// Set the features3 pointer.
@@ -2050,11 +2291,6 @@ public:
 
         ConstructParameters & setEnableVmaAllocator(bool b) {
             enableVmaAllocator = b;
-            return *this;
-        }
-
-        ConstructParameters & setValidation(Validation v) {
-            validation = v;
             return *this;
         }
 
@@ -2089,7 +2325,7 @@ public:
 
     bool separatePresentQueue() const { return _present != _graphics; }
 
-    // VkResult waitIdle() const { return _vgi.device ? threadSafeDeviceWaitIdle(_vgi.device) : VK_SUCCESS; }
+    void waitIdle() const { return threadSafeWaitForDeviceIdle(_gi.device); }
 
     vk::Device handle() const { return _gi.device; }
 
@@ -2102,28 +2338,26 @@ public:
 private:
     ConstructParameters         _cp;
     GlobalInfo                  _gi {};
-    vk::DebugReportCallbackEXT  _debugReport {};
-    bool                        _lost {}; // if the device has lost.
-    std::vector<CommandQueue *> _queues;  // one for each queue family
+    std::vector<CommandQueue *> _queues; // one for each queue family
     CommandQueue *              _graphics = nullptr;
     CommandQueue *              _compute  = nullptr;
     CommandQueue *              _transfer = nullptr;
     CommandQueue *              _present  = nullptr;
-
-private:
-    VkBool32 debugCallback(vk::DebugReportFlagsEXT, vk::DebugReportObjectTypeEXT, uint64_t, size_t, int32_t, const char *, const char *);
-
-    static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT objectType, uint64_t object, size_t location,
-                                                  int32_t messageCode, const char * prefix, const char * message, void * userData) {
-        auto self = (Device *) userData;
-        return self->debugCallback((vk::DebugReportFlagsEXT) flags, (vk::DebugReportObjectTypeEXT) objectType, object, location, messageCode, prefix, message);
-    }
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// A wrapper class for VkInstance
 class Instance {
 public:
+    /// Define level of validation on Vulkan error.
+    enum Validation {
+        VALIDATION_DISABLED = 0,
+        LOG_ON_VK_ERROR,
+        // LOG_ON_VK_ERROR_WITH_CALL_STACK,
+        THROW_ON_VK_ERROR,
+        BREAK_ON_VK_ERROR,
+    };
+
     struct ConstructParameters {
         /// @brief Optional parameter to specify which version of the API you want to use to create the instance.
         /// Leaving it as zero means using the highest available version.
@@ -2139,8 +2373,8 @@ public:
         /// structure chain passed to VkInstanceCreateInfo::pNext
         std::vector<StructureChain> instanceCreateInfo {};
 
-        /// Set to true to enable validation layers and extensions.
-        bool validation = RAPID_VULKAN_ENABLE_DEBUG_BUILD;
+        /// Set validation behavior.
+        Validation validation = RAPID_VULKAN_ENABLE_DEBUG_BUILD ? LOG_ON_VK_ERROR : VALIDATION_DISABLED;
 
         /// Creation log output verbosity
         Device::Verbosity printVkInfo = Device::BRIEF;
@@ -2148,6 +2382,11 @@ public:
         /// Define custom function pointer to load Vulkan function pointers. Set to null to use the built-in one.
         /// Ignored when RAPID_VULKAN_ENABLE_LOADER is not 1.
         PFN_vkGetInstanceProcAddr getInstanceProcAddr = nullptr;
+
+        ConstructParameters & setValidation(Validation v) {
+            validation = v;
+            return *this;
+        }
 
         ConstructParameters & addExtensions(bool required, const char * const * exts, size_t count = 0) {
             if (0 == count) {
@@ -2185,14 +2424,6 @@ public:
 
     vk::Instance operator->() const { return _instance; }
 
-    /// Return a device construct parameter that works with this instance.
-    Device::ConstructParameters dcp() const {
-        Device::ConstructParameters r;
-        r.apiVersion = cp().apiVersion;
-        r.instance   = handle();
-        return r;
-    }
-
 private:
     ConstructParameters _cp;
     vk::Instance        _instance {};
@@ -2203,9 +2434,23 @@ private:
 #endif
     vk::DynamicLoader _loader;
 #endif
+    vk::DebugReportCallbackEXT _debugReport {};
 };
 
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
+
 } // namespace RAPID_VULKAN_NAMESPACE
+
+namespace std {
+
+template<>
+struct hash<RAPID_VULKAN_NAMESPACE::DescriptorIdentifier> {
+    size_t operator()(const RAPID_VULKAN_NAMESPACE::DescriptorIdentifier & v) const { return std::hash<uint64_t>()(v.u64); }
+};
+
+} // namespace std
 
 #endif // RAPID_VULKAN_H
 

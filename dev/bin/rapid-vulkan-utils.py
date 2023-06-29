@@ -79,7 +79,7 @@ def compare_file_timestamp(path, latest, chosen):
 def get_root_folder():
     return pathlib.Path(__file__).resolve().parent.parent.parent.absolute()
 
-def get_cmake_build_type(variant, build_dir, for_android = None, use_gcc = None):
+def get_cmake_build_type(variant, build_dir, for_android = None, use_clang = None):
     # determine build type
     build_type = str(variant).lower()
     if "d" == build_type or "debug" == build_type:
@@ -105,10 +105,11 @@ def get_cmake_build_type(variant, build_dir, for_android = None, use_gcc = None)
         build_dir = build_dir / ("arm64-v8a" + suffix)
     elif os.name == "nt":
         build_dir = build_dir / ("mswin" + suffix)
-    elif use_gcc:
-        build_dir = build_dir / ("posix.gcc" + suffix)
-    else:
+    elif use_clang:
         build_dir = build_dir / ("posix.clang" + suffix)
+    else:
+        # assumes gcc by default.
+        build_dir = build_dir / ("posix.gcc" + suffix)
 
     #done
     return [build_type, build_dir]

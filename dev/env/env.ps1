@@ -34,6 +34,25 @@ function catch_batch_env( $batch, $arg ) {
 }
 
 # ==============================================================================
+# Get the root directory
+# ==============================================================================
+
+# note: $RAPID_VULKAN_ROOT is a global variable that could be used in other places outside of this script.
+$global:RAPID_VULKAN_ROOT = split-path -parent $PSScriptRoot | split-path -parent
+$env:RAPID_VULKAN_ROOT = $RAPID_VULKAN_ROOT
+
+# ==============================================================================
+# Detect container environment
+# ==============================================================================
+if ( $env:USERNAME -eq "ContainerAdministrator" ) {
+    "We are in a Windows container. Config git to ignore ownership differences."
+    $git_friendly_path = $RAPID_VULKAN_ROOT -replace '\\', '/'
+    git config --global --add safe.directory $git_friendly_path/
+
+    # TODO: setup alternative build folder to avoid interferences with host build folder.
+}
+
+# ==============================================================================
 # Setup Vulkan SDK
 # ==============================================================================
 
@@ -76,17 +95,9 @@ function global:prompt {
     write-host -ForegroundColor Green " - " -NoNewline
     write-host -ForegroundColor Yellow "$(get-git-branch)" -NoNewline
     write-host -ForegroundColor Green " ===="
-    write-host -ForegroundColor Green "[$(get-location)]"
+    write-host -ForegroundColor Green "[$env:USERNAME] [$(get-location)]"
     return ">"
 }
-
-# ==============================================================================
-# Get the root directory
-# ==============================================================================
-
-# note: $RAPID_VULKAN_ROOT is a global variable that could be used in other places outside of this script.
-$global:RAPID_VULKAN_ROOT = split-path -parent $PSScriptRoot | split-path -parent
-$env:RAPID_VULKAN_ROOT = $RAPID_VULKAN_ROOT
 
 # ==============================================================================
 # setup aliases
@@ -114,8 +125,9 @@ else {
 # ==============================================================================
 # setup git
 # ==============================================================================
-
-git config --local include.path ${RAPID_VULKAN_ROOT}/.gitconfig
+if ( Test-Path -path "${RAPID_VULKAN_ROOT}\.gitconfig" ) {
+    git config --local include.path ${RAPID_VULKAN_ROOT}\.gitconfig
+}
 
 # ==============================================================================
 # MISC

@@ -16,7 +16,7 @@ endfunction()
 if (UNIX)
     check_include_file_cxx(volk.h HAS_VOLK_H)
 else()
-    set(HAS_VOLK_H 1) # Assume volk.h exists on Windows
+    check_include_file_cxx(Volk/volk.h HAS_VOLK_H)
 endif()
 
 add_sample(hello-world)
@@ -27,5 +27,6 @@ endif()
 add_sample(noop-compute)
 
 if (NOT ANDROID)
+    add_sample(drawable)
     add_sample(simple-triangle)
 endif()
