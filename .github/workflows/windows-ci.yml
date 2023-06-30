@@ -13,7 +13,7 @@ jobs:
       - run: echo "🎉 The job was automatically triggered by a ${{ github.event_name }} event."
       - name: Install Vulkan SDK
         run: |
-          choco install vulkan-sdk --version 1.3.250.0 --params="--accept-licenses --default-answer --confirm-command install com.lunarg.vulkan com.lunarg.vulkan.volk com.lunarg.vulkan.vma"
+          git clone https://github.com/randomgraphics/vulkan-sdk.git c:\vulkan-sdk
       - name: Clone Repo
         uses: actions/checkout@v3
 #     - run: echo "💡 The ${{ github.repository }} repository has been cloned to the runner."
@@ -21,6 +21,7 @@ jobs:
       - name: Build
         shell: powershell
         run: |
+          $env:VULKAN_SDK="C:\vulkan-sdk\1.3.250.0"
           . dev\env\env.ps1
           b d
       - run: echo "🍏 This job's status is ${{ job.status }}."
