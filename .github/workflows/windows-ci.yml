@@ -11,13 +11,14 @@ jobs:
     runs-on: windows-latest
     steps:
       - run: echo "🎉 The job was automatically triggered by a ${{ github.event_name }} event."
-      - name: Install Vulkan SDK
-        run: |
-          git clone https://github.com/randomgraphics/vulkan-sdk.git c:\vulkan-sdk
       - name: Clone Repo
         uses: actions/checkout@v3
 #     - run: echo "💡 The ${{ github.repository }} repository has been cloned to the runner."
-      - run: python.exe -m pip install --upgrade termcolor
+      - name: Install Vulkan SDK
+        run: |
+          git clone https://github.com/randomgraphics/vulkan-sdk.git c:\vulkan-sdk
+      - name: Install Other Dependencies
+        run: python.exe -m pip install --upgrade termcolor
       - name: Build
         shell: powershell
         run: |
