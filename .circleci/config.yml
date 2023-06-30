@@ -70,25 +70,16 @@ jobs:
             build.py -a p
             build.py -a r
 
-  # build-windows:
-  #   executor: win/server-2022
-  #   steps:
-  #     - checkout
-  #     - run:
-  #         name: build
-  #         shell: powershell.exe
-  #         command: dev/docker/windows/ci.ps1
-
-workflows:
-  build-and-test:
-    jobs:
-      - lint
-      - build-linux-gcc-with-cit:
-          requires:
-            - lint
-      - build-linux-clang:
-          requires:
-            - lint
-      - build-android:
-          requires:
-            - lint
+# workflows:
+#   build-and-test:
+#     jobs:
+#       - lint
+#       - build-linux-gcc-with-cit:
+#           requires:
+#             - lint
+#       - build-linux-clang:
+#           requires:
+#             - lint
+#       - build-android:
+#           requires:
+#             - lint
