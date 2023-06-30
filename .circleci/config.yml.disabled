@@ -70,16 +70,16 @@ jobs:
             build.py -a p
             build.py -a r
 
-# workflows:
-#   build-and-test:
-#     jobs:
-#       - lint
-#       - build-linux-gcc-with-cit:
-#           requires:
-#             - lint
-#       - build-linux-clang:
-#           requires:
-#             - lint
-#       - build-android:
-#           requires:
-#             - lint
+workflows:
+  build-and-test:
+    jobs:
+      - lint
+      - build-linux-gcc-with-cit:
+          requires:
+            - lint
+      - build-linux-clang:
+          requires:
+            - lint
+      - build-android:
+          requires:
+            - lint
