@@ -12,11 +12,18 @@ function(add_sample_no_link_to_rv name)
     add_dependencies(${name} rapid-vulkan-static) # Don't link to it. But still wait for it to be built.
 endfunction()
 
+function(check_win_volk)
+    # set this variable inside a function. So it doesn't leak out to affect the rest of the build.
+    message(STATUS "Checking for volk.h. Vulkan_INCLUDE_DIRS = ${Vulkan_INCLUDE_DIRS}")
+    set (CMAKE_REQUIRED_INCLUDES ${Vulkan_INCLUDE_DIRS})
+    check_include_file_cxx(Volk/volk.h HAS_VOLK_H)
+endfunction()
+
 # Check volk.h on Linux
 if (UNIX)
     check_include_file_cxx(volk.h HAS_VOLK_H)
 else()
-    check_include_file_cxx(Volk/volk.h HAS_VOLK_H)
+    check_win_volk()
 endif()
 
 add_sample(hello-world)

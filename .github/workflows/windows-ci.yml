@@ -1,0 +1,28 @@
+name: Windows CI Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - run: echo "🎉 The job was automatically triggered by a ${{ github.event_name }} event."
+      - name: Clone Repo
+        uses: actions/checkout@v3
+#     - run: echo "💡 The ${{ github.repository }} repository has been cloned to the runner."
+      - name: Install Vulkan SDK
+        run: |
+          git clone https://github.com/randomgraphics/vulkan-sdk.git c:\vulkan-sdk
+      - name: Install Other Dependencies
+        run: python.exe -m pip install --upgrade termcolor
+      - name: Build
+        shell: powershell
+        run: |
+          $env:VULKAN_SDK="C:\vulkan-sdk\1.3.250.0"
+          . dev\env\env.ps1
+          b d
+      - run: echo "🍏 This job's status is ${{ job.status }}."

@@ -79,6 +79,9 @@ def compare_file_timestamp(path, latest, chosen):
 def get_root_folder():
     return pathlib.Path(__file__).resolve().parent.parent.parent.absolute()
 
+def check_windows_container():
+    return os.name == "nt" and os.environ.get("USERNAME") == "ContainerAdministrator"
+
 def get_cmake_build_type(variant, build_dir, for_android = None, use_clang = None):
     # determine build type
     build_type = str(variant).lower()
@@ -104,7 +107,10 @@ def get_cmake_build_type(variant, build_dir, for_android = None, use_clang = Non
     if for_android:
         build_dir = build_dir / ("arm64-v8a" + suffix)
     elif os.name == "nt":
-        build_dir = build_dir / ("mswin" + suffix)
+        if check_windows_container():
+            build_dir = build_dir / ("windocker" + suffix)
+        else:
+            build_dir = build_dir / ("mswin" + suffix)
     elif use_clang:
         build_dir = build_dir / ("posix.clang" + suffix)
     else:
@@ -116,21 +122,20 @@ def get_cmake_build_type(variant, build_dir, for_android = None, use_clang = Non
 
 def search_for_the_latest_binary_ex(path_template):
     if os.name == "nt":
-        platform = "mswin"
-        candidates = [
+        platforms = ["mswin", "windocker"]
+        compilers = [""]
+        flavors = [
             [".d", path_template.format(variant = "Debug")],
             [".p", path_template.format(variant = "RelWithDebInfo")],
             [".r", path_template.format(variant = "Release")],
         ]
     else:
-        platform = "posix"
-        candidates = [
-            [".gcc.d", path_template.format(variant = "")],
-            [".gcc.p", path_template.format(variant = "")],
-            [".gcc.r", path_template.format(variant = "")],
-            [".clang.d", path_template.format(variant = "")],
-            [".clang.p", path_template.format(variant = "")],
-            [".clang.r", path_template.format(variant = "")],
+        platforms = ["posix"]
+        compilers = [".gcc", ".clang"]
+        flavors = [
+            [".d", path_template.format(variant = "")],
+            [".p", path_template.format(variant = "")],
+            [".r", path_template.format(variant = "")],
         ]
 
     # Loop through all candidates
@@ -138,14 +143,16 @@ def search_for_the_latest_binary_ex(path_template):
     chosen = None
     root_dir = get_root_folder()
     searched = []
-    for c in candidates:
-        folder = pathlib.Path(c[1])
-        # print(f"folder : {folder}")
-        if not folder.is_absolute(): folder = root_dir / "build" / (platform + c[0]) / folder
-        searched.append(folder)
-        searched.append(folder.with_suffix(".exe"))
-        latest, chosen = compare_file_timestamp(folder, latest, chosen)
-        latest, chosen = compare_file_timestamp(folder.with_suffix(".exe"), latest, chosen)
+    for p in platforms:
+        for c in compilers:
+            for f in flavors:
+                folder = pathlib.Path(f[1])
+                # print(f"folder : {folder}")
+                if not folder.is_absolute(): folder = root_dir / "build" / (p + c + f[0]) / folder
+                searched.append(folder)
+                searched.append(folder.with_suffix(".exe"))
+                latest, chosen = compare_file_timestamp(folder, latest, chosen)
+                latest, chosen = compare_file_timestamp(folder.with_suffix(".exe"), latest, chosen)
     return chosen, searched
 
 def search_for_the_latest_binary(path_template):

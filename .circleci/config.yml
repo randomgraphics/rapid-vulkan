@@ -1,8 +1,5 @@
 version: 2.1
 
-orbs:
-  win: circleci/windows@5.0
-
 jobs:
   lint:
     docker:
@@ -73,15 +70,6 @@ jobs:
             build.py -a p
             build.py -a r
 
-  # build-windows:
-  #   executor: win/server-2022
-  #   steps:
-  #     - checkout
-  #     - run:
-  #         name: build
-  #         shell: powershell.exe
-  #         command: dev/docker/windows/ci.ps1
-
 workflows:
   build-and-test:
     jobs:
@@ -95,6 +83,3 @@ workflows:
       - build-android:
           requires:
             - lint
-      # - build-windows:
-      #     requires:
-      #       - lint
