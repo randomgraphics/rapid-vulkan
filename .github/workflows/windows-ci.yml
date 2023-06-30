@@ -10,11 +10,14 @@ on:
 
 jobs:
   build-windows:
-    runs-on: windows-latest
+    runs-on: ghcr.io/randomgraphics/rapid-vulkan:windows-latest
     steps:
       - run: echo "🎉 The job was automatically triggered by a ${{ github.event_name }} event."
       - uses: actions/checkout@v3
       - run: echo "💡 The ${{ github.repository }} repository has been cloned to the runner."
       - run: echo "🖥️ The workflow is now ready to test your code on the runner."
-      - run: ${{ github.workspace }}\dev\docker\windows\ci.ps1
+      - run: cd ${{ github.workspace }}
+      - run: powershell.exe -Command "& { . dev\env\env.ps1; b d }"
+      - run: powershell.exe -Command "& { . dev\env\env.ps1; b p }"
+      - run: powershell.exe -Command "& { . dev\env\env.ps1; b r }"
       - run: echo "🍏 This job's status is ${{ job.status }}."
