@@ -1,8 +1,5 @@
 version: 2.1
 
-orbs:
-  win: circleci/windows@5.0
-
 jobs:
   lint:
     docker:
@@ -95,6 +92,3 @@ workflows:
       - build-android:
           requires:
             - lint
-      # - build-windows:
-      #     requires:
-      #       - lint
