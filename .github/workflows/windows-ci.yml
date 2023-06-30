@@ -1,5 +1,3 @@
-# This workflow is disabled, because it requires pulling a full windows container image from docker hub every time it runs
-
 name: Windows CI Pipeline
 
 on:
@@ -19,8 +17,6 @@ jobs:
       - name: Install Dependencies
         run: |
           python.exe -m pip install --upgrade termcolor
-          curl.exe -SL -o vulkan-sdk.exe https://sdk.lunarg.com/sdk/download/1.3.250.0/windows/VulkanSDK-1.3.250.0-Installer.exe
-          vulkan-sdk.exe --root=c:\vulkan-sdk --accept-licenses --default-answer --confirm-command install com.lunarg.vulkan com.lunarg.vulkan.volk com.lunarg.vulkan.vma
       - name: Build
         shell: powershell
         run: |
