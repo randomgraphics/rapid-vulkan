@@ -10,7 +10,7 @@ on:
 
 jobs:
   build-windows:
-    runs-on: docker://ghcr.io/randomgraphics/rapid-vulkan:windows-latest
+    runs-on: windows-latest
     steps:
       - run: echo "🎉 The job was automatically triggered by a ${{ github.event_name }} event."
       - uses: actions/checkout@v3
