@@ -77,11 +77,11 @@ VkPipeline sits at the center of Vulkan architecture that defines how GPU pipeli
 
 - **`Pipeline`** class is basically a wrapper of VkPipeline object. It has 2 sub classes for compute and graphics pipeline. It comes with utility methods that makes constructing a pipeline object more intuitive. Similar as the raw VkPipeline handle, the pipeline object is **immutable** once constructed.
 
-- **`Drawable`** class stores reference to a pipeline and the data and parameters used by the pipeline line for rendering, such as buffer, image and constants. It can not be used directly for rendering but can generate `DrawPack` structure via the `Drawable::compile()` method. The `DrawPack` is a compact and self-contained struct that can be enqueued into command buffer for rendering.
+- **`Drawable`** class stores reference to a pipeline along with data and parameters used by the pipeline for rendering, such as buffers, images and constants. It can not be used directly for rendering but can generate `DrawPack` structure via the `Drawable::compile()` method. The `DrawPack` is a compact and self-contained struct that can be enqueued into command buffer for rendering.
 
 - **`CommandQueue`** is a wrapper of VkCommandQueue. It is responsible for creating/deleting/executing `CommandBuffer` instances.
 
-- **CommandBuffer** is a wrapper of VkCommandBuffer. It consumes the `DrawPack` instances and generate render commands to command buffer.
+- **CommandBuffer** is a wrapper of VkCommandBuffer. It consumes the `DrawPack` instances and enqueues render commands to command buffer.
 
 Here is an simplified example of using these classes to issue a draw command. See [drawable](dev/sample/drawable.cpp) sample for full source code.
 
