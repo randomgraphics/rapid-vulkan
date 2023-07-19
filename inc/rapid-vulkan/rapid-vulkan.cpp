@@ -3906,8 +3906,10 @@ static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDeb
         } else if (cp.validation == Instance::BREAK_ON_VK_ERROR) {
 #ifdef _WIN32
             ::DebugBreak();
-#elif __ANDROID__
+#elif defined(__ANDROID__)
             __builtin_trap();
+#elif defined(__APPLE__)
+            // TODO: addd support to mac os
 #else
             asm("int $3");
 #endif
