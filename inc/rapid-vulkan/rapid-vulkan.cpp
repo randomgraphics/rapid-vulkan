@@ -3592,7 +3592,14 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
 
     // some extensions are always enabled by default
     askedDeviceExtensions[VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME] = true;
+
+#ifdef __APPLE__
+    // Required by MoltenVK
+    askedDeviceExtensions["VK_KHR_portability_subset"] = true;
+#else
+    // REVIEW: why we need this? it is not suoported on macos
     askedDeviceExtensions[VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME]    = true;
+#endif
 
     // enable swapchain extension regardless to support VK_IMAGE_LAYOUT_PRESENT_SRC.
     askedDeviceExtensions[VK_KHR_SWAPCHAIN_EXTENSION_NAME] = true;
@@ -3982,7 +3989,8 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
         {"VK_KHR_xcb_surface", false},
         {"VK_KHR_xlib_surface", false},
         {"VK_KHR_wayland_surface", false},
-#else // macOS
+#elif defined(__APPLE__) // macOS
+        {VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME, true},
         {"VK_MVK_macos_surface", false},
         {"VK_EXT_metal_surface", false},
 #endif
@@ -4030,6 +4038,9 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
                    .setPApplicationInfo(&appInfo)
                    .setPEnabledLayerNames(supported.layers)
                    .setPEnabledExtensionNames(supported.instanceExtensions);
+#if defined(__APPLE__) // macOS
+    ici.flags |= vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR;
+#endif
     try {
         _instance = vk::createInstance(ici);
     } catch (vk::SystemError & e) {
