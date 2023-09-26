@@ -3985,9 +3985,7 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
         {"VK_KHR_xlib_surface", false},
         {"VK_KHR_wayland_surface", false},
 #elif defined(__APPLE__) // macOS
-        {VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME, true},
-        {"VK_MVK_macos_surface", false},
-        {"VK_EXT_metal_surface", false},
+        {VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME, true},          {"VK_MVK_macos_surface", false},       {"VK_EXT_metal_surface", false},
 #endif
     };
     if (cp.validation) {
