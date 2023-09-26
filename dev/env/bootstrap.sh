@@ -40,14 +40,13 @@ else
     exit -1
 fi
 
-# Install clang-14 for Ubuntu 20.04.
+# Add clang-14 to apt repository for Ubuntu 20.04.
 if [ "ubuntu_20_04" == $dist ]; then
     echo "Add clang 14 suite to apt registry for Ubuntu 20.04 ..."
     wget -P /tmp https://apt.llvm.org/llvm.sh
     chmod +x /tmp/llvm.sh
     sudo /tmp/llvm.sh 14
     rm /tmp/llvm.sh
-    sudo apt install clang-14 clang-format-14
 fi
 
 # install build dependencies 
@@ -65,7 +64,9 @@ sudo apt-get update && sudo apt-get install -y \
     libdw-dev \
     libunwind-dev \
     libdwarf-dev \
-    binutils-dev
+    binutils-dev \
+    clang-14 \
+    clang-format-14
 
 # install python modules
 python3 -m pip install --upgrade pip
