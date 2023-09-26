@@ -1622,12 +1622,6 @@ public:
             return *this;
         }
 
-        /// @brief Enable dynamic topology.
-        ConstructParameters & dynamicTopology() {
-            dynamic[vk::DynamicState::ePrimitiveTopology] = 0;
-            return *this;
-        }
-
         /// @brief Add a new static viewport and scissor to the pipeline.
         ConstructParameters & addStaticViewportAndScissor(int x, int y, uint32_t w, uint32_t h) {
             viewports.push_back({(float) x, (float) y, (float) w, (float) h, 0.0f, 1.0f});
@@ -1636,28 +1630,18 @@ public:
         }
 
         /// @brief Enable dyanmic viewport. Also specify the number of viewports.
-        /// @param count Specify how many viewports will be used. Set to 0 to enable VK_DYNAMIC_STATE_VIEWPORT_WITH_COUNT_EXT.
+        /// @param count Specify how many viewports will be used. Minimal count is 1.
         ConstructParameters & dynamicViewport(size_t count = 1) {
-            if (0 == count) {
-                dynamic.erase(vk::DynamicState::eViewport);
-                dynamic[vk::DynamicState::eViewportWithCountEXT] = 0;
-            } else {
-                dynamic.erase(vk::DynamicState::eViewportWithCountEXT);
-                dynamic[vk::DynamicState::eViewport] = count;
-            }
+            if (count < 1) count = 1;
+            dynamic[vk::DynamicState::eViewport] = count;
             return *this;
         }
 
         /// @brief Enable dynamic scissor. Also specify the number of scissors.
-        /// @param count Specify how many scissors will be used. Set to 0 to enable VK_DYNAMIC_STATE_SCISSOR_WITH_COUNT_EXT.
+        /// @param count Specify how many scissors will be used. Minimal count is 1.
         ConstructParameters & dynamicScissor(size_t count = 1) {
-            if (0 == count) {
-                dynamic.erase(vk::DynamicState::eScissor);
-                dynamic[vk::DynamicState::eScissorWithCountEXT] = 0;
-            } else {
-                dynamic.erase(vk::DynamicState::eScissorWithCountEXT);
-                dynamic[vk::DynamicState::eScissor] = count;
-            }
+            if (count < 1) count = 1;
+            dynamic[vk::DynamicState::eScissor] = count;
             return *this;
         }
 

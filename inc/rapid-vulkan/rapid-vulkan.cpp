@@ -2853,11 +2853,9 @@ public:
         // set dynamic viewport and scissor
         const auto & extent = bb->image->desc().extent;
         vk::Viewport vp(0, 0, (float) extent.width, (float) extent.height, 0, 1);
-        // cb.setViewportWithCount(1, &vp); // FIXME: this line crashes on Ubunut. Reason unknown.
         cb.setViewport(0, 1, &vp);
 
         vk::Rect2D scissor({0, 0}, {extent.width, extent.height});
-        // cb.setScissorWithCount(1, &scissor); // FIXME: this line crashes on Ubunut. Reason unknown.
         cb.setScissor(0, 1, &scissor);
 
         std::array cv = {vk::ClearValue().setColor(params.clearColor), vk::ClearValue().setDepthStencil(params.clearDepth)};
@@ -3592,7 +3590,8 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
 
     // some extensions are always enabled by default
     askedDeviceExtensions[VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME] = true;
-    askedDeviceExtensions[VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME]    = true;
+
+    // askedDeviceExtensions[VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME]    = true;
 
     // enable swapchain extension regardless to support VK_IMAGE_LAYOUT_PRESENT_SRC.
     askedDeviceExtensions[VK_KHR_SWAPCHAIN_EXTENSION_NAME] = true;
