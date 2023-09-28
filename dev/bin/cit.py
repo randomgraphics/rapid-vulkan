@@ -40,12 +40,12 @@ def run_style_check():
     diff = subprocess.check_output(["git", "diff", "-U0", "--no-color", git_remote + "/main", "--", ":!*3rd-party*"], cwd=sdk_root_dir)
 
     # determine the clang-format-diff command line
+    diff_script = sdk_root_dir / "dev/bin/clang-format-diff.py"
     if "nt" == os.name:
-        diff_script = sdk_root_dir / "dev/bin/clang-format-diff-win.py"
         clang_format = sdk_root_dir / "dev/bin/clang-format-14.exe"
         cmdline = ["python.exe", str(diff_script.absolute()), "-p1", "-binary", str(clang_format.absolute())]
     else:
-        cmdline = ["clang-format-diff-14", "-p1"]
+        cmdline = [str(diff_script.absolute()), "-p1"]
 
     # check coding style of the diff
     format_diff = subprocess.check_output(cmdline, input=diff, cwd=sdk_root_dir).decode("utf-8")
