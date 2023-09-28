@@ -45,7 +45,7 @@ def run_style_check():
         clang_format = sdk_root_dir / "dev/bin/clang-format-14.exe"
         cmdline = ["python.exe", str(diff_script.absolute()), "-p1", "-binary", str(clang_format.absolute())]
     else:
-        cmdline = [str(diff_script.absolute()), "-p1"]
+        cmdline = [str(diff_script.absolute()), "-p1", "-binary", "clang-format-14"]
 
     # check coding style of the diff
     format_diff = subprocess.check_output(cmdline, input=diff, cwd=sdk_root_dir).decode("utf-8")
