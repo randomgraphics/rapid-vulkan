@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-import sys, subprocess, os, re, argparse
+import sys, subprocess, re, argparse, platform
 import importlib; utils = importlib.import_module("rapid-vulkan-utils")
 
 def get_header_revision(content):
@@ -41,9 +41,12 @@ def run_style_check():
 
     # determine the clang-format-diff command line
     diff_script = sdk_root_dir / "dev/bin/clang-format-diff.py"
-    if "nt" == os.name:
+    system = platform.system()
+    if "Windows" == system:
         clang_format = sdk_root_dir / "dev/bin/clang-format-14.exe"
         cmdline = ["python.exe", str(diff_script.absolute()), "-p1", "-binary", str(clang_format.absolute())]
+    elif "Darwin" == system:
+        cmdline = [str(diff_script.absolute()), "-p1", "-binary", "clang-format-mp-14"]
     else:
         cmdline = [str(diff_script.absolute()), "-p1", "-binary", "clang-format-14"]
 
