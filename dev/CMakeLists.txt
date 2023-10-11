@@ -1,4 +1,9 @@
+# Search Vulkan SDK
 find_package(Vulkan REQUIRED)
+message("
+Vulkan_INCLUDE_DIRS = ${Vulkan_INCLUDE_DIRS}
+Vulkan_LIBRARIES    = ${Vulkan_LIBRARIES}
+")
 
 # setup common build flags
 include_directories(../inc ${Vulkan_INCLUDE_DIRS})

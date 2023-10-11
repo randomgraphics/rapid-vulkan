@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-import sys, pathlib, subprocess
+import sys, pathlib, subprocess, platform
 import importlib; utils = importlib.import_module("rapid-vulkan-utils")
 
 # get the root directory of the code base
@@ -18,8 +18,14 @@ def is_our_source(x):
      return True
 our_sources = [x for x in all_files if is_our_source(x)]
 
-# run clang-format-12 on all of them
+# determine clang-format-14 binary name
+if "Darwin" == platform.system():
+     clang_format = "clang-format-mp-14"
+else:
+     clang_format = "clang-format-14"
+
+# run clang-format-14 on all of them
 for x in our_sources:
-    cmdline = ["clang-format-14", "-i", x]
+    cmdline = [clang_format, "-i", x]
     print(' '.join(cmdline))
     subprocess.check_call(cmdline, cwd=sdk_root_dir)
