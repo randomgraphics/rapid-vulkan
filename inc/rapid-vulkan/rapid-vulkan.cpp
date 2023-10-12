@@ -83,7 +83,6 @@ namespace RAPID_VULKAN_NAMESPACE {
 #pragma warning(disable : 4201) // nonstandard extension used: nameless struct/union
 #endif
 
-
 namespace details {
 
 /// Utility class to schedule jobs in certain frequency.
@@ -91,9 +90,7 @@ class Cron {
 public:
     typedef std::chrono::steady_clock Clock;
 
-    Cron(std::function<void()> payload, Clock::duration interval = std::chrono::seconds(1)) :_payload(payload), _interval(interval) {
-        exec();
-    }
+    Cron(std::function<void()> payload, Clock::duration interval = std::chrono::seconds(1)): _payload(payload), _interval(interval) { exec(); }
 
     void check() {
         auto elapsed = Clock::now() - _mark;
@@ -114,10 +111,11 @@ private:
 
 } // end of namespace details
 
-#define RVI_ONCE_PER_SECOND(payload) { \
-    static details::Cron make_it_a_very_long_named_variable( [&] { payload; }, std::chrono::seconds(1)); \
-    make_it_a_very_long_named_variable.check(); \
-}
+#define RVI_ONCE_PER_SECOND(payload)                                                                        \
+    {                                                                                                       \
+        static details::Cron make_it_a_very_long_named_variable([&] { payload; }, std::chrono::seconds(1)); \
+        make_it_a_very_long_named_variable.check();                                                         \
+    }
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
@@ -2971,7 +2969,7 @@ public:
                 RVI_LOGW("Present() returns: %s. Need to recreate swapchain.", vk::to_string(result).c_str());
                 // RVI_LOGD("Waiting for graphics queue to idle...");
                 _graphicsQueue->wait(frame.frameEndSubmission); // make sure frame rendering is done.
-                _presentQueue.waitIdle(); // also need to make sure present is done.
+                _presentQueue.waitIdle();                       // also need to make sure present is done.
                 // RVI_LOGD("Graphics queue is idle.");
                 frame.frameEndSubmission = {};
                 recreateWindowSwapchain();
