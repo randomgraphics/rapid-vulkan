@@ -62,6 +62,8 @@ SOFTWARE.
 #include <variant>
 #include <list>
 #include <deque>
+#include <chrono>
+#include <functional>
 #include <signal.h>
 #include <inttypes.h>
 
@@ -80,6 +82,42 @@ namespace RAPID_VULKAN_NAMESPACE {
 #pragma warning(push)
 #pragma warning(disable : 4201) // nonstandard extension used: nameless struct/union
 #endif
+
+
+namespace details {
+
+/// Utility class to schedule jobs in certain frequency.
+class Cron {
+public:
+    typedef std::chrono::steady_clock Clock;
+
+    Cron(std::function<void()> payload, Clock::duration interval = std::chrono::seconds(1)) :_payload(payload), _interval(interval) {
+        exec();
+    }
+
+    void check() {
+        auto elapsed = Clock::now() - _mark;
+        if (elapsed >= _interval) exec();
+    }
+
+private:
+    std::function<void()> _payload;
+    Clock::duration       _interval;
+    Clock::time_point     _mark;
+
+    void exec() {
+        if (!_payload) return;
+        _payload();
+        _mark = Clock::now();
+    }
+};
+
+} // end of namespace details
+
+#define RVI_ONCE_PER_SECOND(payload) { \
+    static details::Cron make_it_a_very_long_named_variable( [&] { payload; }, std::chrono::seconds(1)); \
+    make_it_a_very_long_named_variable.check(); \
+}
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
@@ -2928,11 +2966,19 @@ public:
                                    .setWaitSemaphoreCount(1)
                                    .setPWaitSemaphores(&frame.frameEndSemaphore);
             auto result = _presentQueue.presentKHR(&presentInfo);
-            if (result == vk::Result::eSuboptimalKHR || result == vk::Result::eErrorOutOfDateKHR) {
+            if (result == vk::Result::eErrorOutOfDateKHR) {
                 // this means window/surface size is changed, we need to recreate the swapchain.
-                _graphicsQueue->wait(frame.frameEndSubmission);
+                RVI_LOGW("Present() returns: %s. Need to recreate swapchain.", vk::to_string(result).c_str());
+                // RVI_LOGD("Waiting for graphics queue to idle...");
+                _graphicsQueue->wait(frame.frameEndSubmission); // make sure frame rendering is done.
+                _presentQueue.waitIdle(); // also need to make sure present is done.
+                // RVI_LOGD("Graphics queue is idle.");
                 frame.frameEndSubmission = {};
                 recreateWindowSwapchain();
+                RVI_LOGI("Swapchainn recreated.");
+            } else if (vk::Result::eSuboptimalKHR == result) {
+                // TODO: do we need to recreate swap chain in this case?
+                RVI_ONCE_PER_SECOND(RVI_LOGW("Present() returns: %s. Consider adjusting swapchain parameters?", vk::to_string(result).c_str()));
             } else if (vk::Result::eSuccess != result) {
                 RVI_THROW("Failed to present swapchain image. result = %s", vk::to_string((vk::Result) result).c_str());
             }
