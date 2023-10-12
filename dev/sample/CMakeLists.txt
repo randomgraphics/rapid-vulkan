@@ -1,10 +1,8 @@
-set(CMAKE_CXX_STANDARD 17)
-
 Include(CheckIncludeFileCXX)
 
 function(add_sample name)
     add_executable(${name} ${name}.cpp)
-    target_link_libraries(${name} rapid-vulkan-static ${RAPID_VULKAN_SYSTEM_LIBRARIES})
+    target_link_libraries(${name} rapid-vulkan-static)
 endfunction()
 
 function(add_sample_no_link_to_rv name)

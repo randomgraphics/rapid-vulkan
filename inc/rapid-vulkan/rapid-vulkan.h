@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identify the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 18
+#define RAPID_VULKAN_HEADER_REVISION 19
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -42,6 +42,7 @@ SOFTWARE.
 
 /// \def RAPID_VULKAN_ENABLE_LOADER
 /// Set to 0 to disable built-in Vulkan API loader. Enabled by default.
+/// \todo explain in what cases and why you might wnat to disable the built-in loader.
 #ifndef RAPID_VULKAN_ENABLE_LOADER
 #define RAPID_VULKAN_ENABLE_LOADER 1
 #endif
@@ -102,6 +103,20 @@ SOFTWARE.
 /// \param message The message to log. The type is const char *.
 #ifndef RAPID_VULKAN_LOG_INFO
 #define RAPID_VULKAN_LOG_INFO(message) fprintf(stdout, "%s\n", message)
+#endif
+
+/// \def RAPID_VULKAN_LOG_VERBOSE
+/// The macro to log verbose log. The default implementation prints to stdout.
+/// \param message The message to log. The type is const char *.
+#ifndef RAPID_VULKAN_LOG_VERBOSE
+#define RAPID_VULKAN_LOG_VERBOSE(message) fprintf(stdout, "[VERBOSE] %s\n", message)
+#endif
+
+/// \def RAPID_VULKAN_LOG_DEBUG
+/// The macro to log debug message. The macro is ignored when RAPID_VULKAN_ENABLE_DEBUG_BUILD is 0
+/// \param message The message to log. The type is const char *.
+#ifndef RAPID_VULKAN_LOG_DEBUG
+#define RAPID_VULKAN_LOG_DEBUG(message) fprintf(stdout, "[ DEBUG ]%s\n", message)
 #endif
 
 /// \def RAPID_VULKAN_ASSERT
@@ -234,9 +249,15 @@ SOFTWARE.
 
 #define RVI_STR_HELPER(x) #x
 
-#define RVI_LOGI(...) RAPID_VULKAN_LOG_INFO(RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
-#define RVI_LOGW(...) RAPID_VULKAN_LOG_WARNING(RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
 #define RVI_LOGE(...) RAPID_VULKAN_LOG_ERROR(RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
+#define RVI_LOGW(...) RAPID_VULKAN_LOG_WARNING(RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
+#define RVI_LOGI(...) RAPID_VULKAN_LOG_INFO(RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
+#define RVI_LOGV(...) RAPID_VULKAN_LOG_VERBOSE(RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
+#if RAPID_VULKAN_ENABLE_DEBUG_BUILD
+#define RVI_LOGD(...) RAPID_VULKAN_LOG_DEBUG(RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
+#else
+#define RVI_LOGD(...) void(0)
+#endif
 
 #define RVI_THROW(...)                                                                                       \
     do {                                                                                                     \

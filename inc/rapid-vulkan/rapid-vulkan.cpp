@@ -3688,10 +3688,9 @@ Device::~Device() {
     if (_gi.vmaAllocator) vmaDestroyAllocator(_gi.vmaAllocator), _gi.vmaAllocator = nullptr;
 #endif
     if (_gi.device) {
-        RVI_LOGI("[Device] destroying device...");
         _gi.device.destroy(_gi.allocator);
         _gi.device = nullptr;
-        RVI_LOGI("[Device] device destroyed");
+        RVI_LOGI("Vulkan device destroyed");
     }
 }
 
@@ -3948,6 +3947,7 @@ static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDeb
 //
 Instance::Instance(ConstructParameters cp): _cp(cp) {
 #if RAPID_VULKAN_ENABLE_LOADER
+    RVI_LOGD("Initializing Vulkan loader...");
     auto getProcAddress = _cp.getInstanceProcAddr;
     if (!getProcAddress) getProcAddress = _loader.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
     VULKAN_HPP_DEFAULT_DISPATCHER.init(getProcAddress);
@@ -4025,6 +4025,7 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
 
     // create VK instance
     // TODO: check against available version.
+    RVI_LOGD("Creating Vulkan instance...");
     auto appInfo = vk::ApplicationInfo().setApiVersion(_cp.apiVersion);
     auto ici     = vk::InstanceCreateInfo()
                    .setPNext(buildStructureChain(_cp.instanceCreateInfo.begin(), _cp.instanceCreateInfo.end()))

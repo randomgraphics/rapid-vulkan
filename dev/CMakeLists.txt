@@ -1,16 +1,19 @@
-# Search Vulkan SDK
+# Setup Vulkan SDK
 find_package(Vulkan REQUIRED)
 message("
 Vulkan_INCLUDE_DIRS = ${Vulkan_INCLUDE_DIRS}
 Vulkan_LIBRARIES    = ${Vulkan_LIBRARIES}
 ")
-
-# setup common build flags
-include_directories(../inc ${Vulkan_INCLUDE_DIRS})
+include_directories(${Vulkan_INCLUDE_DIRS})
+if (APPLE)
+# setup LC_RPATH on macos to point to where libvulkan.dylib is. So the executable can load it at runtime.
+get_filename_component(Vulkan_LIB_DIR ${Vulkan_LIBRARY} DIRECTORY)
+set(CMAKE_BUILD_RPATH ${Vulkan_LIB_DIR})
+endif()
 
 # setup list of system specific dependencies
 if (ANDROID)
-    set(RAPID_VULKAN_SYSTEM_LIBRARIES log)
+    link_libraries(log)
 else()
     # build glfw
     function(build_glfw)
@@ -24,25 +27,25 @@ else()
         add_subdirectory(3rd-party/glfw)
     endfunction()
     build_glfw()
-    set(RAPID_VULKAN_SYSTEM_LIBRARIES glfw)
+    link_libraries(glfw)
 endif()
 
 # Setup common build flags. Do this after glfw build
 if (MSVC)
     add_compile_options(/MP /W4 /WX)
 else()
-    add_compile_options(-Wall -Wextra -Werror -Wconversion -Wshadow -Wfatal-errors)
+    add_compile_options(-Wall -Wextra -Wconversion -Wshadow)# -Werror -Wfatal-errors)
 endif()
-if (UNIX)
-    link_libraries(dl)
-endif()
-
+# if (UNIX)
+#     link_libraries(dl)
+# endif()
+include_directories(../inc 3rd-party)
+add_compile_definitions($<$<CONFIG:Debug>:RAPID_VULKAN_ENABLE_DEBUG_BUILD=1>)
+set(CMAKE_CXX_STANDARD 17)
 
 # Build rapid-vulkan into a static library
 add_library(rapid-vulkan-static STATIC rv.cpp)
-target_compile_features(rapid-vulkan-static PUBLIC cxx_std_17)
-target_include_directories(rapid-vulkan-static PUBLIC 3rd-party)
-target_compile_definitions(rapid-vulkan-static PUBLIC $<$<CONFIG:Debug>:RAPID_VULKAN_ENABLE_DEBUG_BUILD=1>)
 
+# Build subfolders
 add_subdirectory(sample)
 add_subdirectory(test)
