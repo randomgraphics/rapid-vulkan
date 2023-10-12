@@ -6,7 +6,9 @@ Vulkan_LIBRARIES    = ${Vulkan_LIBRARIES}
 ")
 include_directories(${Vulkan_INCLUDE_DIRS})
 if (APPLE)
-# setup LC_RPATH on macos to point to where libvulkan.dylib is. So the executable can load it at runtime.
+# Setup LC_RPATH on macos to point to where libvulkan.dylib is. So the executable can load it at runtime.
+# FIXME: this ties the executable to the Vulkan SDK install location on the current build machine. It means
+# the executable might not run on other machines.
 get_filename_component(Vulkan_LIB_DIR ${Vulkan_LIBRARY} DIRECTORY)
 set(CMAKE_BUILD_RPATH ${Vulkan_LIB_DIR})
 endif()
