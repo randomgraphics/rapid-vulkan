@@ -7,7 +7,7 @@
 #include "../sample/simple-triangle.cpp"
 TEST_CASE("simple-triangle", "[sample]") {
     simple_triangle::Options o;
-    o.headless = true;
+    o.headless = 1;
 
     SECTION("dynamic viewports") {
         o.inst            = TestVulkanInstance::instance->handle();

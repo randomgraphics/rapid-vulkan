@@ -115,6 +115,36 @@ std::vector<vk::ExtensionProperties> enumerateDeviceExtensions(vk::PhysicalDevic
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
+vk::Format queryDepthFormat(vk::PhysicalDevice dev, int stencil) {
+    static const vk::Format DEPTH_STENCIL[] = {
+        vk::Format::eD24UnormS8Uint,
+        vk::Format::eD32SfloatS8Uint,
+        vk::Format::eD16UnormS8Uint,
+    };
+    static const vk::Format DEPTH_ONLY[] = {
+        vk::Format::eD16Unorm,
+        vk::Format::eX8D24UnormPack32,
+        vk::Format::eD32Sfloat,
+    };
+    // first, query depth and stencil format, when stencil is not off.
+    if (stencil != 0) {
+        for (auto f : DEPTH_STENCIL) {
+            auto p = dev.getFormatProperties(f);
+            if (p.optimalTilingFeatures & vk::FormatFeatureFlagBits::eDepthStencilAttachment) return f;
+        }
+    }
+    // then, query depth only format, when stencil is optional or off.
+    if (stencil <= 0) {
+        for (auto f : DEPTH_ONLY) {
+            auto p = dev.getFormatProperties(f);
+            if (p.optimalTilingFeatures & vk::FormatFeatureFlagBits::eDepthStencilAttachment) return f;
+        }
+    }
+    return vk::Format::eUndefined;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+//
 void threadSafeWaitForDeviceIdle(vk::Device device) {
     static std::mutex mutex;
     auto              lock = std::lock_guard {mutex};
@@ -2819,7 +2849,7 @@ class Swapchain::Impl {
 public:
     Impl(Swapchain &, const ConstructParameters & cp): _cp(cp) {
         RVI_REQUIRE(cp.gi);
-
+        updateDepthFormat();
         if (cp.surface) {
             constructWindowSwapchain();
         } else {
@@ -2944,6 +2974,27 @@ private:
     inline static constexpr BackbufferStatus DESIRED_PRESENT_STATUS = PresentParameters().backbufferStatus;
 
 private:
+    void updateDepthFormat() {
+        switch (_cp.depthStencilFormat.mode) {
+        case DepthStencilFormat::DISABLED:
+            _cp.depthStencilFormat.format = vk::Format::eUndefined;
+            break;
+        case DepthStencilFormat::AUTO_DEPTH_ONLY:
+            RVI_LOGD("Search for depth only format...");
+            _cp.depthStencilFormat.format = queryDepthFormat(_cp.gi->physical, 0);
+            RVI_LOGD("Depth only format found: %s", vk::to_string(_cp.depthStencilFormat.format).c_str());
+            break;
+        case DepthStencilFormat::AUTO_DEPTH_STENCIL:
+            RVI_LOGD("Search for depth stencil format...");
+            _cp.depthStencilFormat.format = queryDepthFormat(_cp.gi->physical, 1);
+            RVI_LOGD("Depth stencil format found: %s", vk::to_string(_cp.depthStencilFormat.format).c_str());
+            break;
+        default:
+            // Assume user specified format. Do nothing in this case.
+            break;
+        }
+    }
+
     void constructWindowSwapchain() {
         // Construct a CommandQueue instance for graphics queue.
         RVI_REQUIRE(_cp.graphicsQueueFamily != VK_QUEUE_FAMILY_IGNORED);

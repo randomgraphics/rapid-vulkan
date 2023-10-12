@@ -31,7 +31,7 @@ struct GLFWInit {
 
 struct Options {
     vk::Instance                    inst            = VK_NULL_HANDLE;
-    bool                            headless        = false;
+    uint32_t                        headless        = 0; // Set to non-zero to enable headless mode. The value is number of frames to render.
     bool                            dynamicViewport = true;
     rapid_vulkan::Device::Verbosity verbosity       = rapid_vulkan::Device::BRIEF;
 };
@@ -70,7 +70,7 @@ void entry(const Options & options) {
     glfw.show();
     for (;;) {
         if (options.headless) {
-            if (sw.currentFrame().index > 10) break; // render 10 frames in headless mode.
+            if (sw.currentFrame().index > options.headless) break; // only render number of required frames in headless mode, then quite.
             std::cout << "Frame " << sw.currentFrame().index << std::endl;
         } else {
             if (glfwWindowShouldClose(glfw.window)) break;

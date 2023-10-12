@@ -116,7 +116,7 @@ SOFTWARE.
 /// The macro to log debug message. The macro is ignored when RAPID_VULKAN_ENABLE_DEBUG_BUILD is 0
 /// \param message The message to log. The type is const char *.
 #ifndef RAPID_VULKAN_LOG_DEBUG
-#define RAPID_VULKAN_LOG_DEBUG(message) fprintf(stdout, "[ DEBUG ]%s\n", message)
+#define RAPID_VULKAN_LOG_DEBUG(message) fprintf(stdout, "[ DEBUG ] %s\n", message)
 #endif
 
 /// \def RAPID_VULKAN_ASSERT
@@ -505,6 +505,13 @@ vk::PhysicalDevice selectTheMostPowerfulPhysicalDevice(vk::ArrayProxy<const vk::
 // ---------------------------------------------------------------------------------------------------------------------
 //
 std::vector<vk::ExtensionProperties> enumerateDeviceExtensions(vk::PhysicalDevice dev);
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// Query an usable/default depth format of the device.
+/// \param dev The physical device in question
+/// \param stencil If we need stencil format. <0: don't care. 0: no. >0: required. Default value is -1.
+/// \return An format that is suitble to create depth/stencil buffer. Or vk::eUndefined if failed.
+vk::Format queryDepthFormat(vk::PhysicalDevice dev, int stencil = -1);
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// @brief Calling vkDeviceWaitIdle() in a thread-safe manner.
@@ -1100,7 +1107,7 @@ public:
             return *this;
         }
 
-        ConstructParameters & setDepth(size_t w, size_t h, vk::Format f = vk::Format::eD24UnormS8Uint) {
+        ConstructParameters & setDepth(size_t w, size_t h, vk::Format f) {
             set2D(w, h).setFormat(f);
             info.usage = vk::ImageUsageFlagBits::eDepthStencilAttachment;
             return *this;
@@ -2037,6 +2044,27 @@ class Device;
 /// Wrapper class of swapchain object
 class Swapchain : public Root {
 public:
+    struct DepthStencilFormat {
+        enum Mode {
+            /// @brief In this mode, depth/stencil buffer is disabled. The swapchain contains color buffer only.
+            DISABLED,
+
+            /// @brief Need a depth only buffer. No stencil. Use the default format of the device.
+            AUTO_DEPTH_ONLY,
+
+            /// @brief Need a depth stencil format. Use the default format of the device.
+            AUTO_DEPTH_STENCIL,
+
+            /// @brief Use user specified depth stencil buffer format.
+            USER_SPECIFIED,
+        };
+        Mode       mode   = AUTO_DEPTH_STENCIL;
+        vk::Format format = vk::Format::eUndefined;
+
+        /// @brief can implicitly convert to vk::Format
+        operator vk::Format() const { return format; }
+    };
+
     struct ConstructParameters : public Root::ConstructParameters {
         const GlobalInfo * gi = {}; ///< The Vulkan global info object.
 
@@ -2075,8 +2103,9 @@ public:
         /// @brief Specify format of backbuffers. If set to undefined, then the first supported format will be used.
         vk::Format backbufferFormat = vk::Format::eUndefined;
 
-        /// @brief Format of the depth buffer. Set to undefined, if you don't need depth buffer.
-        vk::Format depthStencilFormat = vk::Format::eD24UnormS8Uint;
+        /// @brief Format of the depth buffer. If not specified, then use the default depth format of the current device.
+        /// Set to undefined, if you don't need depth buffer.
+        DepthStencilFormat depthStencilFormat = {};
 
         /// @brief Fill in construction parameters using values retrieved from the given device.
         /// This method will fill in the following fields: gi, surface and present/graphics queue properties.

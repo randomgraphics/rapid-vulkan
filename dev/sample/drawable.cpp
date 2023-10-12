@@ -34,7 +34,7 @@ struct GLFWInit {
 };
 
 struct Options {
-    bool headless = false;
+    uint32_t headless = 0; // Set to non-zero to enable headless mode. The value is number of frames to render.
 };
 
 void entry(const Options & options) {
@@ -73,7 +73,7 @@ void entry(const Options & options) {
     for (;;) {
         // Standard boilerplate of rendering a frame. It is basically the same as simple-triangle.cpp.
         if (options.headless) {
-            if (sw.currentFrame().index > 10) break; // render 10 frames in headless mode.
+            if (sw.currentFrame().index > options.headless) break; // render required number of frames in headless mode, then quit.
             std::cout << "Frame " << sw.currentFrame().index << std::endl;
         } else {
             if (glfwWindowShouldClose(glfw.window)) break;
