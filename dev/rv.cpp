@@ -3,7 +3,7 @@
 #include <rapid-vulkan/rapid-vulkan.h>
 
 #if defined(_MSC_VER)
-#pragma warning(disable: 4996)
+#pragma warning(disable : 4996)
 #endif
 #include "../3rd-party/backward-cpp/backward.hpp"
 
