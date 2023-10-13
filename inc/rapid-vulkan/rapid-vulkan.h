@@ -2413,14 +2413,14 @@ public:
         std::vector<StructureChain> instanceCreateInfo {};
 
         /// Set validation behavior.
-        Validation validation = RAPID_VULKAN_ENABLE_DEBUG_BUILD ? LOG_ON_VK_ERROR : VALIDATION_DISABLED;
+        Validation validation {RAPID_VULKAN_ENABLE_DEBUG_BUILD ? LOG_ON_VK_ERROR : VALIDATION_DISABLED};
 
         /// Optional functor to query call stack. If provided and if log/break/throw on VK error is enabled, then this functor will
         /// be used to query VK error's call stack to help identify the source of the VK error.
-        std::function<std::string()> backtrace;
+        std::function<std::string()> backtrace {};
 
         /// Creation log output verbosity
-        Device::Verbosity printVkInfo = Device::BRIEF;
+        Device::Verbosity printVkInfo {Device::BRIEF};
 
         /// Define custom function pointer to load Vulkan function pointers. Set to null to use the built-in one.
         /// Ignored when RAPID_VULKAN_ENABLE_LOADER is not 1.
