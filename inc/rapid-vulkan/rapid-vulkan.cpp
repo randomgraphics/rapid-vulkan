@@ -56,6 +56,7 @@ SOFTWARE.
 #endif // RVI_NEED_VMA_IMPL
 
 #include <cmath>
+#include <csignal>
 #include <stdexcept>
 #include <iomanip>
 #include <mutex>
@@ -4011,8 +4012,9 @@ static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDeb
             ::DebugBreak();
 #elif defined(__ANDROID__)
             __builtin_trap();
-#elif defined(__APPLE__)
-            // TODO: addd support to mac os
+#elif defined(__arm64__) || defined(__aarch64__)
+            // Apple M1 chipset.
+            raise(SIGTRAP);
 #else
             asm("int $3");
 #endif
