@@ -1,13 +1,16 @@
 #include "rv.h"
 #define RAPID_VULKAN_IMPLEMENTATION
 #include <rapid-vulkan/rapid-vulkan.h>
+
+#if defined(_MSC_VER)
+#pragma warning(disable: 4996)
+#endif
 #include "../3rd-party/backward-cpp/backward.hpp"
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
 std::string backtrace() {
-    int indent = 0;
-#if PH_ANDROID
+#ifdef __ANDROID__
     struct android_backtrace_state {
         void ** current;
         void ** end;
@@ -42,11 +45,8 @@ std::string backtrace() {
         }
     };
 
-    std::string prefix;
-    for (int i = 0; i < indent; ++i) prefix += ' ';
-
     std::stringstream ss;
-    ss << prefix << "android stack dump\n";
+    ss << "android stack dump\n";
 
     const int max = 100;
     void *    buffer[max];
@@ -63,14 +63,13 @@ std::string backtrace() {
         auto addr   = buffer[idx];
         auto symbol = android_backtrace_state::addr2symbol(addr);
         if (symbol.empty()) symbol = "<no symbol>";
-        ss << prefix << formatstr("%03d: 0x%p %s\n", idx, addr, symbol.c_str());
+        ss << formatstr("%03d: 0x%p %s\n", idx, addr, symbol.c_str());
     }
 
-    ss << prefix << "android stack dump done\n";
+    ss << "android stack dump done\n";
 
     return ss.str();
-#elif defined(__GNUC__)
-    (void) indent;
+#else
     using namespace backward;
     StackTrace st;
     st.load_here(32);
@@ -79,23 +78,5 @@ std::string backtrace() {
     p.snippet = true; // print code snippet in debug build only.
     p.print(st, ss);
     return ss.str();
-#elif defined(_MSC_VER)
-    (void) indent;
-    class MyStackWalker : public StackWalker {
-    protected:
-        void OnLoadModule(LPCSTR, LPCSTR, DWORD64, DWORD, DWORD, LPCSTR, LPCSTR, ULONGLONG) override {}
-        void OnDbgHelpErr(LPCSTR, DWORD, DWORD64) override {}
-        void OnSymInit(LPCSTR, DWORD, LPCSTR) override {}
-        void OnOutput(LPCSTR szText) override { ss << szText; }
-
-    public:
-        using StackWalker::StackWalker;
-        std::stringstream ss;
-    };
-    MyStackWalker sw(StackWalker::RetrieveLine | StackWalker::RetrieveSymbol);
-    return sw.ShowCallstack() ? sw.ss.str() : std::string {};
-#else
-    (void) indent;
-    return {};
 #endif
 }
