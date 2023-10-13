@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identify the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 19
+#define RAPID_VULKAN_HEADER_REVISION 20
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -567,14 +567,12 @@ public:
 
 protected:
     Root(const ConstructParameters & params): _name("<no-name>"s) {
-        ++_instanceCount;
+        ++_instanceCount; // why?
         setName(params.name);
+        --_instanceCount; // why?
     }
 
-    virtual void onNameChanged(const std::string & oldName) {
-        (void) oldName;
-        --_instanceCount;
-    }
+    virtual void onNameChanged(const std::string & oldName) { (void) oldName; }
 
 private:
     friend class RefBase;
@@ -1570,6 +1568,8 @@ public:
 protected:
     Pipeline(const std::string & name, vk::PipelineBindPoint bindPoint, vk::ArrayProxy<const Shader * const> shaders);
 
+    void onNameChanged(const std::string &) override;
+
     class Impl;
     Impl * _impl = nullptr;
 };
@@ -1597,6 +1597,11 @@ public:
         std::map<vk::DynamicState, uint64_t>               dynamic {};
         vk::Pipeline                                       baseHandle {};
         int32_t                                            baseIndex {};
+
+        ConstructParameters & setName(std::string newName) {
+            name = std::move(newName);
+            return *this;
+        }
 
         ConstructParameters & setRenderPass(vk::RenderPass pass_, size_t sub = 0) {
             pass    = pass_;

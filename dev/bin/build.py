@@ -1,9 +1,53 @@
 #!/usr/bin/python3
 
 from ctypes import util
-import sys, subprocess, os, pathlib, argparse, shutil, glob
+import sys, subprocess, os, platform, pathlib, argparse, shutil, glob
 
 import importlib; utils = importlib.import_module("rapid-vulkan-utils")
+
+def check_windows_container():
+    return os.name == "nt" and os.environ.get("USERNAME") == "ContainerAdministrator"
+
+def get_cmake_build_type(args):
+    # determine build type
+    build_type = str(args.variant).lower()
+    if "d" == build_type or "debug" == build_type:
+        suffix = ".d"
+        build_type = "Debug"
+    elif "p" == build_type or "profile" == build_type:
+        suffix = ".p"
+        build_type = "RelWithDebInfo"
+    elif "r" == build_type or "release" == build_type:
+        suffix = ".r"
+        build_type = "Release"
+    elif "c" == build_type or "clean" == build_type:
+        # return [None, None, None] indicating a clear action.
+        return [None, None, None]
+    else:
+        utils.rip(f"[ERROR] unrecognized build variant : {args.variant}.")
+
+    # determine build folder basename
+    build_dir = pathlib.Path(args.build_dir)
+    if not build_dir.is_absolute():
+        build_dir = utils.get_root_folder() / build_dir
+
+    # check for platform and compiler
+    android_abi = None
+    system = platform.system()
+    if args.android_build:
+        android_abi = "arm64-v8a"
+        build_dir = build_dir / f"android.{android_abi}{suffix}"
+    elif check_windows_container():
+        build_dir = build_dir / f"windocker{suffix}"
+    elif "Windows" == system:
+        build_dir = build_dir / f"mswin{suffix}"
+    else:
+        # posix system (Linux or MacOS)
+        compiler = "clang" if args.use_clang else "xcode" if args.use_xcode else "gcc"
+        build_dir = build_dir / f"{system.lower()}.{compiler}{suffix}"
+
+    #done
+    return [build_type, build_dir, android_abi]
 
 # Run cmake command. the args is list of arguments.
 def cmake(build_dir, cmdline):
@@ -60,7 +104,7 @@ def cmake_config(args, build_dir, build_type):
         ndk = get_android_path('ANDROID_NDK_HOME')
         utils.logi(f"Using Android SDK: {sdk}")
         utils.logi(f"Using Android NDK: {ndk}")
-        if 'nt' == os.name:
+        if 'Windows' == platform.system():
             ninja = sdk / "cmake/3.22.1/bin/ninja.exe"
             if not ninja.exists(): utils.rip(f"{ninja} not found. Please install cmake 3.18+ via Android SDK Manager." )
         else:
@@ -79,9 +123,10 @@ def cmake_config(args, build_dir, build_type):
             -DANDROID_ABI={android_abi} \
             -DCMAKE_ANDROID_ARCH_ABI={android_abi} \
             "
-    elif 'nt' != os.name:
+    elif 'Windows' != platform.system():
         if args.use_clang: config += " -DCMAKE_C_COMPILER=clang-14 -DCMAKE_CXX_COMPILER=clang++-14"
         if args.use_ninja: config += " -GNinja"
+        if args.use_xcode: config += " -GXcode"
     cmake(build_dir, config)
 
 # ==========
@@ -96,6 +141,7 @@ ap.add_argument("-c", dest="config_only", action="store_true", help="Run CMake c
 ap.add_argument("-C", dest="skip_config", action="store_true", help="Skip CMake config. Run build process only.")
 ap.add_argument("--clang", dest="use_clang", action="store_true", help="Use CLANG instead of GCC as the compiler. Default is GCC.")
 ap.add_argument("-n", dest="use_ninja", action="store_true", help="Use Ninja as the build generator. Default is Makefile.")
+ap.add_argument("-x", dest="use_xcode", action="store_true", help="Generate Xcode projects. Default is Makefile.")
 ap.add_argument("variant", help="Specify build variant. Acceptable values are: d(ebug)/p(rofile)/r(elease)/c(lean). "
                                          "Note that all parameters alert this one will be considered \"extra\" and passed to CMake directly.")
 ap.add_argument("extra", nargs=argparse.REMAINDER, help="Extra arguments passing to cmake.")
@@ -107,11 +153,10 @@ sdk_root_dir = utils.get_root_folder()
 # print(f"Repository root folder = {sdk_root_dir}")
 
 # get cmake build variant and build folder
-android_abi = "arm64-v8a" if args.android_build else None
-build_type, build_dir = utils.get_cmake_build_type(args.variant, args.build_dir, android_abi, args.use_clang)
+build_type, build_dir, android_abi = get_cmake_build_type(args)
 
 if build_type is None:
-    if os.name == "nt":
+    if platform.system() == "Windows":
         os.system('taskkill /f /im java.exe 2>nul')
     else:
         # TODO: kill java process the Linux way.

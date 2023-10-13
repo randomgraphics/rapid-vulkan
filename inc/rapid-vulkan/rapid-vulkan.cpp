@@ -1464,6 +1464,8 @@ public:
 
     ~PipelineLayout() override;
 
+    const GlobalInfo & gi() const;
+
     /// @brief Returns the underlying Vulkan handle.
     vk::PipelineLayout handle() const;
 
@@ -1521,6 +1523,8 @@ public:
         _gi->safeDestroy(_handle);
     }
 
+    const GlobalInfo & gi() const { return *_gi; }
+
     vk::PipelineLayout handle() const { return _handle; }
 
     const PipelineReflection & reflection() const { return _reflection; }
@@ -1542,6 +1546,7 @@ PipelineLayout::~PipelineLayout() {
     delete _impl;
     _impl = nullptr;
 }
+auto PipelineLayout::gi() const -> const GlobalInfo & { return _impl->gi(); }
 auto PipelineLayout::handle() const -> vk::PipelineLayout { return _impl->handle(); }
 auto PipelineLayout::reflection() const -> const PipelineReflection & { return _impl->reflection(); }
 void PipelineLayout::onNameChanged(const std::string &) { _impl->onNameChanged(); }
@@ -1552,21 +1557,38 @@ void PipelineLayout::onNameChanged(const std::string &) { _impl->onNameChanged()
 
 class Pipeline::Impl {
 public:
-    vk::UniquePipeline handle {};
-
     Impl(Pipeline & owner, vk::PipelineBindPoint bindPoint, vk::ArrayProxy<const Shader * const> shaders): _bindPoint(bindPoint) {
         _layout.reset(new PipelineLayout({{owner.name()}, shaders}));
     }
 
-    ~Impl() {}
+    ~Impl() {
+        if (_handle) {
+            RVI_ASSERT(_layout);
+            _layout->gi().safeDestroy(_handle);
+        }
+    }
 
     vk::PipelineBindPoint bindPoint() const { return _bindPoint; }
 
+    vk::Pipeline handle() const { return _handle; }
+
     PipelineLayout & layout() const { return *_layout; }
+
+    void setHandle(vk::Pipeline newHandle, const std::string & newName) {
+        const auto & gi = _layout->gi();
+        gi.safeDestroy(_handle); // destroy old handle
+        _handle = newHandle;     // store new handle
+        if (newHandle) setName(newName);
+    }
+
+    void setName(const std::string & name) {
+        if (_handle) setVkHandleName(_layout->gi().device, _handle, name);
+    }
 
 private:
     vk::PipelineBindPoint _bindPoint;
     Ref<PipelineLayout>   _layout;
+    vk::Pipeline          _handle;
 };
 
 Pipeline::Pipeline(const std::string & name, vk::PipelineBindPoint bindPoint, vk::ArrayProxy<const Shader * const> shaders): Root({name}) {
@@ -1577,9 +1599,10 @@ Pipeline::~Pipeline() {
     _impl = nullptr;
 }
 auto Pipeline::bindPoint() const -> vk::PipelineBindPoint { return _impl->bindPoint(); }
-auto Pipeline::handle() const -> vk::Pipeline { return _impl->handle.get(); }
+auto Pipeline::handle() const -> vk::Pipeline { return _impl->handle(); }
 auto Pipeline::layout() const -> vk::PipelineLayout { return _impl->layout().handle(); }
 auto Pipeline::reflection() const -> const PipelineReflection & { return _impl->layout().reflection(); }
+void Pipeline::onNameChanged(const std::string &) { return _impl->setName(name()); }
 
 // *********************************************************************************************************************
 // Graphics Pipeline
@@ -1659,12 +1682,12 @@ GraphicsPipeline::GraphicsPipeline(const ConstructParameters & params): Pipeline
                                              params.subpass, params.baseHandle, params.baseIndex);
 
     // create the shader.
-    _impl->handle = std::move(gi->device.createGraphicsPipelinesUnique(nullptr, ci, gi->allocator).value[0]);
+    _impl->setHandle(gi->device.createGraphicsPipeline(nullptr, ci, gi->allocator).value, name());
 }
 
 void GraphicsPipeline::cmdDraw(vk::CommandBuffer cb, const DrawParameters & dp) const {
-    if (!_impl->handle) return;
-    cb.bindPipeline(vk::PipelineBindPoint::eGraphics, _impl->handle.get());
+    if (!_impl->handle()) return;
+    cb.bindPipeline(vk::PipelineBindPoint::eGraphics, _impl->handle());
     if (dp.indexCount) {
         // indexed draw
         cb.drawIndexed(dp.indexCount, dp.instanceCount, dp.firstIndex, dp.vertexOffset, dp.firstInstance);
@@ -1682,12 +1705,12 @@ ComputePipeline::ComputePipeline(const ConstructParameters & params): Pipeline(p
     vk::ComputePipelineCreateInfo ci;
     ci.setStage({{}, vk::ShaderStageFlagBits::eCompute, params.cs->handle(), params.cs->entry().c_str()});
     ci.setLayout(_impl->layout().handle());
-    auto gi       = params.cs->gi();
-    _impl->handle = gi->device.createComputePipelineUnique(nullptr, ci, gi->allocator).value;
+    auto gi = params.cs->gi();
+    _impl->setHandle(gi->device.createComputePipeline(nullptr, ci, gi->allocator).value, name());
 }
 
 void ComputePipeline::cmdDispatch(vk::CommandBuffer cb, const DispatchParameters & dp) const {
-    cb.bindPipeline(vk::PipelineBindPoint::eCompute, _impl->handle.get());
+    cb.bindPipeline(vk::PipelineBindPoint::eCompute, _impl->handle());
     cb.dispatch((uint32_t) dp.width, (uint32_t) dp.height, (uint32_t) dp.depth);
 }
 

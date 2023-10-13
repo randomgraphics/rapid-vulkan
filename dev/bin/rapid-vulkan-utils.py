@@ -1,8 +1,7 @@
 #!/usr/bin/python3
 
-import os
+import sys, subprocess, pathlib, pprint, termcolor, os, platform
 from re import search
-import sys, subprocess, pathlib, pprint, termcolor
 
 class FatalError (RuntimeError):
     def __init__(self, message):
@@ -79,47 +78,6 @@ def compare_file_timestamp(path, latest, chosen):
 def get_root_folder():
     return pathlib.Path(__file__).resolve().parent.parent.parent.absolute()
 
-def check_windows_container():
-    return os.name == "nt" and os.environ.get("USERNAME") == "ContainerAdministrator"
-
-def get_cmake_build_type(variant, build_dir, for_android = None, use_clang = None):
-    # determine build type
-    build_type = str(variant).lower()
-    if "d" == build_type or "debug" == build_type:
-        suffix = ".d"
-        build_type = "Debug"
-    elif "p" == build_type or "profile" == build_type:
-        suffix = ".p"
-        build_type = "RelWithDebInfo"
-    elif "r" == build_type or "release" == build_type:
-        suffix = ".r"
-        build_type = "Release"
-    elif "c" == build_type or "clean" == build_type:
-        # return [None, None] indicating a clear action.
-        return [None, None]
-    else:
-        rip(f"[ERROR] unrecognized build variant : {variant}.")
-
-    # determine build folder
-    build_dir = pathlib.Path(build_dir)
-    if not build_dir.is_absolute():
-        build_dir = get_root_folder() / build_dir
-    if for_android:
-        build_dir = build_dir / ("arm64-v8a" + suffix)
-    elif os.name == "nt":
-        if check_windows_container():
-            build_dir = build_dir / ("windocker" + suffix)
-        else:
-            build_dir = build_dir / ("mswin" + suffix)
-    elif use_clang:
-        build_dir = build_dir / ("posix.clang" + suffix)
-    else:
-        # assumes gcc by default.
-        build_dir = build_dir / ("posix.gcc" + suffix)
-
-    #done
-    return [build_type, build_dir]
-
 def search_for_the_latest_binary_ex(path_template):
     if os.name == "nt":
         platforms = ["mswin", "windocker"]
@@ -130,8 +88,8 @@ def search_for_the_latest_binary_ex(path_template):
             [".r", path_template.format(variant = "Release")],
         ]
     else:
-        platforms = ["posix"]
-        compilers = [".gcc", ".clang"]
+        platforms = [platform.system().lower()]
+        compilers = [".gcc", ".clang", ".xcode"]
         flavors = [
             [".d", path_template.format(variant = "")],
             [".p", path_template.format(variant = "")],
