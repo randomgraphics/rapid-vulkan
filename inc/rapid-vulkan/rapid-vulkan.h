@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identify the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 20
+#define RAPID_VULKAN_HEADER_REVISION 19
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -2415,6 +2415,10 @@ public:
         /// Set validation behavior.
         Validation validation = RAPID_VULKAN_ENABLE_DEBUG_BUILD ? LOG_ON_VK_ERROR : VALIDATION_DISABLED;
 
+        /// Optional functor to query call stack. If provided and if log/break/throw on VK error is enabled, then this functor will
+        /// be used to query VK error's call stack to help identify the source of the VK error.
+        std::function<std::string()> backtrace;
+
         /// Creation log output verbosity
         Device::Verbosity printVkInfo = Device::BRIEF;
 
@@ -2424,6 +2428,12 @@ public:
 
         ConstructParameters & setValidation(Validation v) {
             validation = v;
+            return *this;
+        }
+
+        template<class FUNC>
+        ConstructParameters & setBacktrace(FUNC func) {
+            backtrace = func;
             return *this;
         }
 

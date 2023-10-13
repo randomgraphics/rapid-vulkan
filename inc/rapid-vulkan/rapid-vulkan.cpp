@@ -3986,7 +3986,8 @@ struct PhysicalDeviceInfo {
 //
 static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT objectType, uint64_t object, size_t location,
                                               int32_t messageCode, const char * prefix, const char * message, void * userData) {
-    auto validation = (Instance::Validation)(intptr_t) userData;
+    auto instance   = (Instance *) userData;
+    auto validation = instance->cp().validation;
 
     auto reportError = [&](bool breakIntoDebugger, bool throwException) {
         // if (objectType == vk::DebugReportObjectTypeEXT::eDevice && _lost) {
@@ -4001,7 +4002,8 @@ static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDeb
 
         auto ss = std::stringstream();
         ss << "[Vulkan] " << prefix << " : " << message;
-        // if (v >= LOG_ON_VK_ERROR_WITH_CALL_STACK) { ss << std::endl << backtrace(false); }
+        auto & bt = instance->cp().backtrace;
+        if (bt) { ss << std::endl << bt(); }
         auto str = ss.str();
         RVI_LOGE("%s", str.data());
         if (breakIntoDebugger) {
@@ -4169,7 +4171,7 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
         auto debugci = vk::DebugReportCallbackCreateInfoEXT()
                            .setFlags(vk::DebugReportFlagBitsEXT::eError | vk::DebugReportFlagBitsEXT::eWarning)
                            .setPfnCallback(staticDebugCallback)
-                           .setPUserData((void *) (intptr_t) cp.validation);
+                           .setPUserData(this);
         _debugReport = _instance.createDebugReportCallbackEXT(debugci);
     }
 

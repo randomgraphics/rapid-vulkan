@@ -42,7 +42,7 @@ void entry(const Options & options) {
     using namespace rapid_vulkan;
     auto w        = uint32_t(1280);
     auto h        = uint32_t(720);
-    auto instance = Instance(Instance::ConstructParameters {}.setValidation(Instance::BREAK_ON_VK_ERROR));
+    auto instance = Instance(Instance::ConstructParameters {}.setValidation(Instance::BREAK_ON_VK_ERROR).setBacktrace(backtrace));
     auto glfw     = GLFWInit(options.headless, instance, w, h, "pipeline-args");
     auto device   = Device(Device::ConstructParameters {instance.handle()}.setSurface(glfw.surface));
     auto gi       = device.gi();

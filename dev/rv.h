@@ -23,3 +23,5 @@
 #endif
 
 #include <rapid-vulkan/rapid-vulkan.h>
+
+std::string backtrace();
