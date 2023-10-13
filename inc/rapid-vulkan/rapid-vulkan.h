@@ -2424,7 +2424,7 @@ public:
 
         /// Define custom function pointer to load Vulkan function pointers. Set to null to use the built-in one.
         /// Ignored when RAPID_VULKAN_ENABLE_LOADER is not 1.
-        PFN_vkGetInstanceProcAddr getInstanceProcAddr = nullptr;
+        PFN_vkGetInstanceProcAddr getInstanceProcAddr {nullptr};
 
         ConstructParameters & setValidation(Validation v) {
             validation = v;
