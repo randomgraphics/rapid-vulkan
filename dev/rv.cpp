@@ -2,10 +2,15 @@
 #define RAPID_VULKAN_IMPLEMENTATION
 #include <rapid-vulkan/rapid-vulkan.h>
 
+#ifdef __ANDROID__
+#include <unwind.h>
+#include <cxxabi.h>
+#else
 #if defined(_MSC_VER)
 #pragma warning(disable : 4996)
 #endif
 #include "../3rd-party/backward-cpp/backward.hpp"
+#endif
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
@@ -63,7 +68,7 @@ std::string backtrace() {
         auto addr   = buffer[idx];
         auto symbol = android_backtrace_state::addr2symbol(addr);
         if (symbol.empty()) symbol = "<no symbol>";
-        ss << formatstr("%03d: 0x%p %s\n", idx, addr, symbol.c_str());
+        ss << RAPID_VULKAN_NAMESPACE::format("%03d: 0x%p %s\n", idx, addr, symbol.c_str());
     }
 
     ss << "android stack dump done\n";
