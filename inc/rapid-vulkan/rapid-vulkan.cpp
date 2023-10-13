@@ -2965,18 +2965,14 @@ public:
                                    .setPWaitSemaphores(&frame.frameEndSemaphore);
             auto result = _presentQueue.presentKHR(&presentInfo);
             if (result == vk::Result::eErrorOutOfDateKHR) {
-                // this means window/surface size is changed, we need to recreate the swapchain.
-                RVI_LOGW("Present() returns: %s. Need to recreate swapchain.", vk::to_string(result).c_str());
-                // RVI_LOGD("Waiting for graphics queue to idle...");
-                _graphicsQueue->wait(frame.frameEndSubmission); // make sure frame rendering is done.
-                _presentQueue.waitIdle();                       // also need to make sure present is done.
-                // RVI_LOGD("Graphics queue is idle.");
-                frame.frameEndSubmission = {};
-                recreateWindowSwapchain();
-                RVI_LOGI("Swapchainn recreated.");
+                recoverSwapchainOnPresentError(result, frame);
             } else if (vk::Result::eSuboptimalKHR == result) {
-                // TODO: do we need to recreate swap chain in this case?
+#ifdef __APPLE__
+                // TODO: somehow we always see this on macos.
                 RVI_ONCE_PER_SECOND(RVI_LOGW("Present() returns: %s. Consider adjusting swapchain parameters?", vk::to_string(result).c_str()));
+#else
+                recoverSwapchainOnPresentError(result, frame);
+#endif
             } else if (vk::Result::eSuccess != result) {
                 RVI_THROW("Failed to present swapchain image. result = %s", vk::to_string((vk::Result) result).c_str());
             }
@@ -3037,6 +3033,18 @@ private:
             // Assume user specified format. Do nothing in this case.
             break;
         }
+    }
+
+    void recoverSwapchainOnPresentError(vk::Result result, FrameImpl & frame) {
+        // this means window/surface size is changed, we need to recreate the swapchain.
+        RVI_LOGW("Present() returns: %s. Need to recreate swapchain.", vk::to_string(result).c_str());
+        // RVI_LOGD("Waiting for graphics queue to idle...");
+        _graphicsQueue->wait(frame.frameEndSubmission); // make sure frame rendering is done.
+        _presentQueue.waitIdle();                 // also need to make sure present is done.
+        // RVI_LOGD("Graphics queue is idle.");
+        frame.frameEndSubmission = {};
+        recreateWindowSwapchain();
+        RVI_LOGI("Swapchainn recovered.");
     }
 
     void constructWindowSwapchain() {
@@ -3978,7 +3986,9 @@ struct PhysicalDeviceInfo {
 //
 static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT objectType, uint64_t object, size_t location,
                                               int32_t messageCode, const char * prefix, const char * message, void * userData) {
-    auto reportVkError = [&]() {
+    auto validation = (Instance::Validation)(intptr_t) userData;
+
+    auto reportError = [&](bool breakIntoDebugger, bool throwException) {
         // if (objectType == vk::DebugReportObjectTypeEXT::eDevice && _lost) {
         //     // Ignore validation errors on lost device, to avoid spamming log with useless messages.
         //     return VK_FALSE;
@@ -3989,17 +3999,12 @@ static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDeb
         (void) messageCode;
         (void) prefix;
 
-        Instance *   instance = reinterpret_cast<Instance *>(userData);
-        const auto & cp       = instance->cp();
-
         auto ss = std::stringstream();
         ss << "[Vulkan] " << prefix << " : " << message;
         // if (v >= LOG_ON_VK_ERROR_WITH_CALL_STACK) { ss << std::endl << backtrace(false); }
         auto str = ss.str();
         RVI_LOGE("%s", str.data());
-        if (cp.validation == Instance::THROW_ON_VK_ERROR) {
-            RVI_THROW("%s", str.data());
-        } else if (cp.validation == Instance::BREAK_ON_VK_ERROR) {
+        if (breakIntoDebugger) {
 #ifdef _WIN32
             ::DebugBreak();
 #elif defined(__ANDROID__)
@@ -4009,27 +4014,37 @@ static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDeb
 #else
             asm("int $3");
 #endif
+        } else if (throwException) {
+            RVI_THROW("%s", str.data());
         }
 
         return VK_FALSE;
     };
 
-    if (flags & VK_DEBUG_REPORT_ERROR_BIT_EXT) reportVkError();
+    if ((flags & VK_DEBUG_REPORT_ERROR_BIT_EXT)) {
+        if (validation & Instance::BREAK_ON_VK_ERROR)
+            reportError(true, false);
+        else if (validation & Instance::THROW_ON_VK_ERROR)
+            reportError(false, true);
+        else if (validation & Instance::LOG_ON_VK_ERROR)
+            reportError(false, false);
+    }
 
-    // treat warning as error.
-    // if (flags & vk::DebugReportFlagBitsEXT::eWarning) reportVkError();
+    else if (flags & VK_DEBUG_REPORT_INFORMATION_BIT_EXT) {
+        RVI_LOGW("[Vulkan] %s : %s", prefix, message);
+    }
 
-    // if (flags & VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT) {
-    //     RVI_LOGW("[Vulkan] %s : %s", prefix, message);
-    // }
+    else if (flags & VK_DEBUG_REPORT_WARNING_BIT_EXT) {
+        RVI_LOGW("[Vulkan] %s : %s", prefix, message);
+    }
 
-    // if (flags & VK_DEBUG_REPORT_INFORMATION_BIT_EXT) {
-    //     RVI_LOGI("[Vulkan] %s : %s", prefix, message);
-    // }
+    else if (flags & VK_DEBUG_REPORT_INFORMATION_BIT_EXT) {
+        RVI_LOGI("[Vulkan] %s : %s", prefix, message);
+    }
 
-    // if (flags & VK_DEBUG_REPORT_DEBUG_BIT_EXT) {
-    //     RVI_LOGI("[Vulkan] %s : %s", prefix, message);
-    // }
+    else if (flags & VK_DEBUG_REPORT_DEBUG_BIT_EXT) {
+        RVI_LOGD("[Vulkan] %s : %s", prefix, message);
+    }
 
     return VK_FALSE;
 }
@@ -4154,7 +4169,7 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
         auto debugci = vk::DebugReportCallbackCreateInfoEXT()
                            .setFlags(vk::DebugReportFlagBitsEXT::eError | vk::DebugReportFlagBitsEXT::eWarning)
                            .setPfnCallback(staticDebugCallback)
-                           .setPUserData(this);
+                           .setPUserData((void *) (intptr_t) cp.validation);
         _debugReport = _instance.createDebugReportCallbackEXT(debugci);
     }
 
