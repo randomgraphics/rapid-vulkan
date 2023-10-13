@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-import sys, subprocess, os, re, argparse
+import sys, subprocess, re, argparse, platform
 import importlib; utils = importlib.import_module("rapid-vulkan-utils")
 
 def get_header_revision(content):
@@ -40,12 +40,15 @@ def run_style_check():
     diff = subprocess.check_output(["git", "diff", "-U0", "--no-color", git_remote + "/main", "--", ":!*3rd-party*"], cwd=sdk_root_dir)
 
     # determine the clang-format-diff command line
-    if "nt" == os.name:
-        diff_script = sdk_root_dir / "dev/bin/clang-format-diff-win.py"
+    diff_script = sdk_root_dir / "dev/bin/clang-format-diff.py"
+    system = platform.system()
+    if "Windows" == system:
         clang_format = sdk_root_dir / "dev/bin/clang-format-14.exe"
         cmdline = ["python.exe", str(diff_script.absolute()), "-p1", "-binary", str(clang_format.absolute())]
+    elif "Darwin" == system:
+        cmdline = [str(diff_script.absolute()), "-p1", "-binary", "clang-format-mp-14"]
     else:
-        cmdline = ["clang-format-diff-14", "-p1"]
+        cmdline = [str(diff_script.absolute()), "-p1", "-binary", "clang-format-14"]
 
     # check coding style of the diff
     format_diff = subprocess.check_output(cmdline, input=diff, cwd=sdk_root_dir).decode("utf-8")

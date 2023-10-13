@@ -56,12 +56,15 @@ SOFTWARE.
 #endif // RVI_NEED_VMA_IMPL
 
 #include <cmath>
+#include <csignal>
 #include <stdexcept>
 #include <iomanip>
 #include <mutex>
 #include <variant>
 #include <list>
 #include <deque>
+#include <chrono>
+#include <functional>
 #include <signal.h>
 #include <inttypes.h>
 
@@ -80,6 +83,40 @@ namespace RAPID_VULKAN_NAMESPACE {
 #pragma warning(push)
 #pragma warning(disable : 4201) // nonstandard extension used: nameless struct/union
 #endif
+
+namespace details {
+
+/// Utility class to schedule jobs in certain frequency.
+class Cron {
+public:
+    typedef std::chrono::steady_clock Clock;
+
+    Cron(std::function<void()> payload, Clock::duration interval = std::chrono::seconds(1)): _payload(payload), _interval(interval) { exec(); }
+
+    void check() {
+        auto elapsed = Clock::now() - _mark;
+        if (elapsed >= _interval) exec();
+    }
+
+private:
+    std::function<void()> _payload;
+    Clock::duration       _interval;
+    Clock::time_point     _mark;
+
+    void exec() {
+        if (!_payload) return;
+        _payload();
+        _mark = Clock::now();
+    }
+};
+
+} // end of namespace details
+
+#define RVI_ONCE_PER_SECOND(payload)                                                                        \
+    {                                                                                                       \
+        static details::Cron make_it_a_very_long_named_variable([&] { payload; }, std::chrono::seconds(1)); \
+        make_it_a_very_long_named_variable.check();                                                         \
+    }
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
@@ -111,6 +148,36 @@ std::vector<vk::ExtensionProperties> enumerateDeviceExtensions(vk::PhysicalDevic
         [&](uint32_t * count, vk::ExtensionProperties * data) { return dev.enumerateDeviceExtensionProperties(nullptr, count, data); });
     std::sort(extensions.begin(), extensions.end(), [](const auto & a, const auto & b) -> bool { return strcmp(a.extensionName, b.extensionName) < 0; });
     return extensions;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+//
+vk::Format queryDepthFormat(vk::PhysicalDevice dev, int stencil) {
+    static const vk::Format DEPTH_STENCIL[] = {
+        vk::Format::eD24UnormS8Uint,
+        vk::Format::eD32SfloatS8Uint,
+        vk::Format::eD16UnormS8Uint,
+    };
+    static const vk::Format DEPTH_ONLY[] = {
+        vk::Format::eD16Unorm,
+        vk::Format::eX8D24UnormPack32,
+        vk::Format::eD32Sfloat,
+    };
+    // first, query depth and stencil format, when stencil is not off.
+    if (stencil != 0) {
+        for (auto f : DEPTH_STENCIL) {
+            auto p = dev.getFormatProperties(f);
+            if (p.optimalTilingFeatures & vk::FormatFeatureFlagBits::eDepthStencilAttachment) return f;
+        }
+    }
+    // then, query depth only format, when stencil is optional or off.
+    if (stencil <= 0) {
+        for (auto f : DEPTH_ONLY) {
+            auto p = dev.getFormatProperties(f);
+            if (p.optimalTilingFeatures & vk::FormatFeatureFlagBits::eDepthStencilAttachment) return f;
+        }
+    }
+    return vk::Format::eUndefined;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -2819,7 +2886,7 @@ class Swapchain::Impl {
 public:
     Impl(Swapchain &, const ConstructParameters & cp): _cp(cp) {
         RVI_REQUIRE(cp.gi);
-
+        updateDepthFormat();
         if (cp.surface) {
             constructWindowSwapchain();
         } else {
@@ -2898,11 +2965,15 @@ public:
                                    .setWaitSemaphoreCount(1)
                                    .setPWaitSemaphores(&frame.frameEndSemaphore);
             auto result = _presentQueue.presentKHR(&presentInfo);
-            if (result == vk::Result::eSuboptimalKHR || result == vk::Result::eErrorOutOfDateKHR) {
-                // this means window/surface size is changed, we need to recreate the swapchain.
-                _graphicsQueue->wait(frame.frameEndSubmission);
-                frame.frameEndSubmission = {};
-                recreateWindowSwapchain();
+            if (result == vk::Result::eErrorOutOfDateKHR) {
+                recoverSwapchainOnPresentError(result, frame);
+            } else if (vk::Result::eSuboptimalKHR == result) {
+#ifdef __APPLE__
+                // TODO: somehow we always see this on macos.
+                RVI_ONCE_PER_SECOND(RVI_LOGW("Present() returns: %s. Consider adjusting swapchain parameters?", vk::to_string(result).c_str()));
+#else
+                recoverSwapchainOnPresentError(result, frame);
+#endif
             } else if (vk::Result::eSuccess != result) {
                 RVI_THROW("Failed to present swapchain image. result = %s", vk::to_string((vk::Result) result).c_str());
             }
@@ -2944,6 +3015,39 @@ private:
     inline static constexpr BackbufferStatus DESIRED_PRESENT_STATUS = PresentParameters().backbufferStatus;
 
 private:
+    void updateDepthFormat() {
+        switch (_cp.depthStencilFormat.mode) {
+        case DepthStencilFormat::DISABLED:
+            _cp.depthStencilFormat.format = vk::Format::eUndefined;
+            break;
+        case DepthStencilFormat::AUTO_DEPTH_ONLY:
+            RVI_LOGD("Search for depth only format...");
+            _cp.depthStencilFormat.format = queryDepthFormat(_cp.gi->physical, 0);
+            RVI_LOGD("Depth only format found: %s", vk::to_string(_cp.depthStencilFormat.format).c_str());
+            break;
+        case DepthStencilFormat::AUTO_DEPTH_STENCIL:
+            RVI_LOGD("Search for depth stencil format...");
+            _cp.depthStencilFormat.format = queryDepthFormat(_cp.gi->physical, 1);
+            RVI_LOGD("Depth stencil format found: %s", vk::to_string(_cp.depthStencilFormat.format).c_str());
+            break;
+        default:
+            // Assume user specified format. Do nothing in this case.
+            break;
+        }
+    }
+
+    void recoverSwapchainOnPresentError(vk::Result result, FrameImpl & frame) {
+        // this means window/surface size is changed, we need to recreate the swapchain.
+        RVI_LOGW("Present() returns: %s. Need to recreate swapchain.", vk::to_string(result).c_str());
+        // RVI_LOGD("Waiting for graphics queue to idle...");
+        _graphicsQueue->wait(frame.frameEndSubmission); // make sure frame rendering is done.
+        _presentQueue.waitIdle();                       // also need to make sure present is done.
+        // RVI_LOGD("Graphics queue is idle.");
+        frame.frameEndSubmission = {};
+        recreateWindowSwapchain();
+        RVI_LOGI("Swapchainn recovered.");
+    }
+
     void constructWindowSwapchain() {
         // Construct a CommandQueue instance for graphics queue.
         RVI_REQUIRE(_cp.graphicsQueueFamily != VK_QUEUE_FAMILY_IGNORED);
@@ -3591,7 +3695,10 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
     // some extensions are always enabled by default
     askedDeviceExtensions[VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME] = true;
 
-    // askedDeviceExtensions[VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME]    = true;
+#ifdef __APPLE__
+    // Required by MoltenVK
+    askedDeviceExtensions["VK_KHR_portability_subset"] = true;
+#endif
 
     // enable swapchain extension regardless to support VK_IMAGE_LAYOUT_PRESENT_SRC.
     askedDeviceExtensions[VK_KHR_SWAPCHAIN_EXTENSION_NAME] = true;
@@ -3685,10 +3792,9 @@ Device::~Device() {
     if (_gi.vmaAllocator) vmaDestroyAllocator(_gi.vmaAllocator), _gi.vmaAllocator = nullptr;
 #endif
     if (_gi.device) {
-        RVI_LOGI("[Device] destroying device...");
         _gi.device.destroy(_gi.allocator);
         _gi.device = nullptr;
-        RVI_LOGI("[Device] device destroyed");
+        RVI_LOGI("Vulkan device destroyed");
     }
 }
 
@@ -3881,7 +3987,10 @@ struct PhysicalDeviceInfo {
 //
 static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT objectType, uint64_t object, size_t location,
                                               int32_t messageCode, const char * prefix, const char * message, void * userData) {
-    auto reportVkError = [&]() {
+    auto instance   = (Instance *) userData;
+    auto validation = instance->cp().validation;
+
+    auto reportError = [&](bool breakIntoDebugger, bool throwException) {
         // if (objectType == vk::DebugReportObjectTypeEXT::eDevice && _lost) {
         //     // Ignore validation errors on lost device, to avoid spamming log with useless messages.
         //     return VK_FALSE;
@@ -3892,47 +4001,54 @@ static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDeb
         (void) messageCode;
         (void) prefix;
 
-        Instance *   instance = reinterpret_cast<Instance *>(userData);
-        const auto & cp       = instance->cp();
-
         auto ss = std::stringstream();
         ss << "[Vulkan] " << prefix << " : " << message;
-        // if (v >= LOG_ON_VK_ERROR_WITH_CALL_STACK) { ss << std::endl << backtrace(false); }
+        auto & bt = instance->cp().backtrace;
+        if (bt) { ss << std::endl << bt(); }
         auto str = ss.str();
         RVI_LOGE("%s", str.data());
-        if (cp.validation == Instance::THROW_ON_VK_ERROR) {
-            RVI_THROW("%s", str.data());
-        } else if (cp.validation == Instance::BREAK_ON_VK_ERROR) {
+        if (breakIntoDebugger) {
 #ifdef _WIN32
             ::DebugBreak();
 #elif defined(__ANDROID__)
             __builtin_trap();
-#elif defined(__APPLE__)
-            // TODO: addd support to mac os
+#elif defined(__arm__) || defined(__arm64__) || defined(__aarch64__)
+            // arm chipset.
+            raise(SIGTRAP);
 #else
             asm("int $3");
 #endif
+        } else if (throwException) {
+            RVI_THROW("%s", str.data());
         }
 
         return VK_FALSE;
     };
 
-    if (flags & VK_DEBUG_REPORT_ERROR_BIT_EXT) reportVkError();
+    if ((flags & VK_DEBUG_REPORT_ERROR_BIT_EXT)) {
+        if (validation & Instance::BREAK_ON_VK_ERROR)
+            reportError(true, false);
+        else if (validation & Instance::THROW_ON_VK_ERROR)
+            reportError(false, true);
+        else if (validation & Instance::LOG_ON_VK_ERROR)
+            reportError(false, false);
+    }
 
-    // treat warning as error.
-    // if (flags & vk::DebugReportFlagBitsEXT::eWarning) reportVkError();
+    else if (flags & VK_DEBUG_REPORT_INFORMATION_BIT_EXT) {
+        RVI_LOGW("[Vulkan] %s : %s", prefix, message);
+    }
 
-    // if (flags & VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT) {
-    //     RVI_LOGW("[Vulkan] %s : %s", prefix, message);
-    // }
+    else if (flags & VK_DEBUG_REPORT_WARNING_BIT_EXT) {
+        RVI_LOGW("[Vulkan] %s : %s", prefix, message);
+    }
 
-    // if (flags & VK_DEBUG_REPORT_INFORMATION_BIT_EXT) {
-    //     RVI_LOGI("[Vulkan] %s : %s", prefix, message);
-    // }
+    else if (flags & VK_DEBUG_REPORT_INFORMATION_BIT_EXT) {
+        RVI_LOGI("[Vulkan] %s : %s", prefix, message);
+    }
 
-    // if (flags & VK_DEBUG_REPORT_DEBUG_BIT_EXT) {
-    //     RVI_LOGI("[Vulkan] %s : %s", prefix, message);
-    // }
+    else if (flags & VK_DEBUG_REPORT_DEBUG_BIT_EXT) {
+        RVI_LOGD("[Vulkan] %s : %s", prefix, message);
+    }
 
     return VK_FALSE;
 }
@@ -3945,6 +4061,7 @@ static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDeb
 //
 Instance::Instance(ConstructParameters cp): _cp(cp) {
 #if RAPID_VULKAN_ENABLE_LOADER
+    RVI_LOGD("Initializing Vulkan loader...");
     auto getProcAddress = _cp.getInstanceProcAddr;
     if (!getProcAddress) getProcAddress = _loader.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
     VULKAN_HPP_DEFAULT_DISPATCHER.init(getProcAddress);
@@ -3981,9 +4098,8 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
         {"VK_KHR_xcb_surface", false},
         {"VK_KHR_xlib_surface", false},
         {"VK_KHR_wayland_surface", false},
-#else // macOS
-        {"VK_MVK_macos_surface", false},
-        {"VK_EXT_metal_surface", false},
+#elif defined(__APPLE__) // macOS
+        {VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME, true},          {"VK_MVK_macos_surface", false},       {"VK_EXT_metal_surface", false},
 #endif
     };
     if (cp.validation) {
@@ -4023,12 +4139,16 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
 
     // create VK instance
     // TODO: check against available version.
+    RVI_LOGD("Creating Vulkan instance...");
     auto appInfo = vk::ApplicationInfo().setApiVersion(_cp.apiVersion);
     auto ici     = vk::InstanceCreateInfo()
                    .setPNext(buildStructureChain(_cp.instanceCreateInfo.begin(), _cp.instanceCreateInfo.end()))
                    .setPApplicationInfo(&appInfo)
                    .setPEnabledLayerNames(supported.layers)
                    .setPEnabledExtensionNames(supported.instanceExtensions);
+#if defined(__APPLE__) // macOS
+    ici.flags |= vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR;
+#endif
     try {
         _instance = vk::createInstance(ici);
     } catch (vk::SystemError & e) {

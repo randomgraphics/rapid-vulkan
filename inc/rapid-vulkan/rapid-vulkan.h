@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identify the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 18
+#define RAPID_VULKAN_HEADER_REVISION 19
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -42,6 +42,7 @@ SOFTWARE.
 
 /// \def RAPID_VULKAN_ENABLE_LOADER
 /// Set to 0 to disable built-in Vulkan API loader. Enabled by default.
+/// \todo explain in what cases and why you might wnat to disable the built-in loader.
 #ifndef RAPID_VULKAN_ENABLE_LOADER
 #define RAPID_VULKAN_ENABLE_LOADER 1
 #endif
@@ -102,6 +103,20 @@ SOFTWARE.
 /// \param message The message to log. The type is const char *.
 #ifndef RAPID_VULKAN_LOG_INFO
 #define RAPID_VULKAN_LOG_INFO(message) fprintf(stdout, "%s\n", message)
+#endif
+
+/// \def RAPID_VULKAN_LOG_VERBOSE
+/// The macro to log verbose log. The default implementation prints to stdout.
+/// \param message The message to log. The type is const char *.
+#ifndef RAPID_VULKAN_LOG_VERBOSE
+#define RAPID_VULKAN_LOG_VERBOSE(message) fprintf(stdout, "[VERBOSE] %s\n", message)
+#endif
+
+/// \def RAPID_VULKAN_LOG_DEBUG
+/// The macro to log debug message. The macro is ignored when RAPID_VULKAN_ENABLE_DEBUG_BUILD is 0
+/// \param message The message to log. The type is const char *.
+#ifndef RAPID_VULKAN_LOG_DEBUG
+#define RAPID_VULKAN_LOG_DEBUG(message) fprintf(stdout, "[ DEBUG ] %s\n", message)
 #endif
 
 /// \def RAPID_VULKAN_ASSERT
@@ -234,9 +249,15 @@ SOFTWARE.
 
 #define RVI_STR_HELPER(x) #x
 
-#define RVI_LOGI(...) RAPID_VULKAN_LOG_INFO(RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
-#define RVI_LOGW(...) RAPID_VULKAN_LOG_WARNING(RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
 #define RVI_LOGE(...) RAPID_VULKAN_LOG_ERROR(RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
+#define RVI_LOGW(...) RAPID_VULKAN_LOG_WARNING(RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
+#define RVI_LOGI(...) RAPID_VULKAN_LOG_INFO(RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
+#define RVI_LOGV(...) RAPID_VULKAN_LOG_VERBOSE(RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
+#if RAPID_VULKAN_ENABLE_DEBUG_BUILD
+#define RVI_LOGD(...) RAPID_VULKAN_LOG_DEBUG(RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
+#else
+#define RVI_LOGD(...) void(0)
+#endif
 
 #define RVI_THROW(...)                                                                                       \
     do {                                                                                                     \
@@ -484,6 +505,13 @@ vk::PhysicalDevice selectTheMostPowerfulPhysicalDevice(vk::ArrayProxy<const vk::
 // ---------------------------------------------------------------------------------------------------------------------
 //
 std::vector<vk::ExtensionProperties> enumerateDeviceExtensions(vk::PhysicalDevice dev);
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// Query an usable/default depth format of the device.
+/// \param dev The physical device in question
+/// \param stencil If we need stencil format. <0: don't care. 0: no. >0: required. Default value is -1.
+/// \return An format that is suitble to create depth/stencil buffer. Or vk::eUndefined if failed.
+vk::Format queryDepthFormat(vk::PhysicalDevice dev, int stencil = -1);
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// @brief Calling vkDeviceWaitIdle() in a thread-safe manner.
@@ -1079,7 +1107,7 @@ public:
             return *this;
         }
 
-        ConstructParameters & setDepth(size_t w, size_t h, vk::Format f = vk::Format::eD24UnormS8Uint) {
+        ConstructParameters & setDepth(size_t w, size_t h, vk::Format f) {
             set2D(w, h).setFormat(f);
             info.usage = vk::ImageUsageFlagBits::eDepthStencilAttachment;
             return *this;
@@ -2016,6 +2044,27 @@ class Device;
 /// Wrapper class of swapchain object
 class Swapchain : public Root {
 public:
+    struct DepthStencilFormat {
+        enum Mode {
+            /// @brief In this mode, depth/stencil buffer is disabled. The swapchain contains color buffer only.
+            DISABLED,
+
+            /// @brief Need a depth only buffer. No stencil. Use the default format of the device.
+            AUTO_DEPTH_ONLY,
+
+            /// @brief Need a depth stencil format. Use the default format of the device.
+            AUTO_DEPTH_STENCIL,
+
+            /// @brief Use user specified depth stencil buffer format.
+            USER_SPECIFIED,
+        };
+        Mode       mode   = AUTO_DEPTH_STENCIL;
+        vk::Format format = vk::Format::eUndefined;
+
+        /// @brief can implicitly convert to vk::Format
+        operator vk::Format() const { return format; }
+    };
+
     struct ConstructParameters : public Root::ConstructParameters {
         const GlobalInfo * gi = {}; ///< The Vulkan global info object.
 
@@ -2054,8 +2103,9 @@ public:
         /// @brief Specify format of backbuffers. If set to undefined, then the first supported format will be used.
         vk::Format backbufferFormat = vk::Format::eUndefined;
 
-        /// @brief Format of the depth buffer. Set to undefined, if you don't need depth buffer.
-        vk::Format depthStencilFormat = vk::Format::eD24UnormS8Uint;
+        /// @brief Format of the depth buffer. If not specified, then use the default depth format of the current device.
+        /// Set to undefined, if you don't need depth buffer.
+        DepthStencilFormat depthStencilFormat = {};
 
         /// @brief Fill in construction parameters using values retrieved from the given device.
         /// This method will fill in the following fields: gi, surface and present/graphics queue properties.
@@ -2333,14 +2383,19 @@ private:
 /// A wrapper class for VkInstance
 class Instance {
 public:
-    /// Define level of validation on Vulkan error.
-    enum Validation {
+    /// Define level of validation on Vulkan debug callback.
+    enum Validation : uint32_t {
         VALIDATION_DISABLED = 0,
-        LOG_ON_VK_ERROR,
-        // LOG_ON_VK_ERROR_WITH_CALL_STACK,
-        THROW_ON_VK_ERROR,
-        BREAK_ON_VK_ERROR,
+        LOG_ON_VK_ERROR     = 1 << 0,
+        THROW_ON_VK_ERROR   = 1 << 1,
+        BREAK_ON_VK_ERROR   = 1 << 2, ///< This trumps THROW_ON_VK_ERROR, if both are defined.
+        LOG_ON_VK_WARNING   = 1 << 3,
+        LOG_ON_VK_INFO      = 1 << 4,
+        LOG_ON_VK_DEBUG     = 1 << 5,
+        LOG_ON_VK_PERF      = 1 << 6,
     };
+
+    friend inline Validation operator|(Validation a, Validation b) { return static_cast<Validation>(static_cast<int>(a) | static_cast<int>(b)); }
 
     struct ConstructParameters {
         /// @brief Optional parameter to specify which version of the API you want to use to create the instance.
@@ -2358,17 +2413,27 @@ public:
         std::vector<StructureChain> instanceCreateInfo {};
 
         /// Set validation behavior.
-        Validation validation = RAPID_VULKAN_ENABLE_DEBUG_BUILD ? LOG_ON_VK_ERROR : VALIDATION_DISABLED;
+        Validation validation {RAPID_VULKAN_ENABLE_DEBUG_BUILD ? LOG_ON_VK_ERROR : VALIDATION_DISABLED};
+
+        /// Optional functor to query call stack. If provided and if log/break/throw on VK error is enabled, then this functor will
+        /// be used to query VK error's call stack to help identify the source of the VK error.
+        std::function<std::string()> backtrace {};
 
         /// Creation log output verbosity
-        Device::Verbosity printVkInfo = Device::BRIEF;
+        Device::Verbosity printVkInfo {Device::BRIEF};
 
         /// Define custom function pointer to load Vulkan function pointers. Set to null to use the built-in one.
         /// Ignored when RAPID_VULKAN_ENABLE_LOADER is not 1.
-        PFN_vkGetInstanceProcAddr getInstanceProcAddr = nullptr;
+        PFN_vkGetInstanceProcAddr getInstanceProcAddr {nullptr};
 
         ConstructParameters & setValidation(Validation v) {
             validation = v;
+            return *this;
+        }
+
+        template<class FUNC>
+        ConstructParameters & setBacktrace(FUNC func) {
+            backtrace = func;
             return *this;
         }
 

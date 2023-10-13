@@ -5,3 +5,6 @@
 [submodule "dev/3rd-party/cli11"]
 	path = dev/3rd-party/cli11
 	url = https://github.com/CLIUtils/CLI11.git
+[submodule "dev/3rd-party/backward-cpp"]
+	path = dev/3rd-party/backward-cpp
+	url = https://github.com/bombela/backward-cpp.git
