@@ -4012,8 +4012,8 @@ static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDeb
             ::DebugBreak();
 #elif defined(__ANDROID__)
             __builtin_trap();
-#elif defined(__arm64__) || defined(__aarch64__)
-            // Apple M1 chipset.
+#elif defined(__arm__) || defined(__arm64__) || defined(__aarch64__)
+            // arm chipset.
             raise(SIGTRAP);
 #else
             asm("int $3");
