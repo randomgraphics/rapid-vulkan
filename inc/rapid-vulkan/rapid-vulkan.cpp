@@ -3040,7 +3040,7 @@ private:
         RVI_LOGW("Present() returns: %s. Need to recreate swapchain.", vk::to_string(result).c_str());
         // RVI_LOGD("Waiting for graphics queue to idle...");
         _graphicsQueue->wait(frame.frameEndSubmission); // make sure frame rendering is done.
-        _presentQueue.waitIdle();                 // also need to make sure present is done.
+        _presentQueue.waitIdle();                       // also need to make sure present is done.
         // RVI_LOGD("Graphics queue is idle.");
         frame.frameEndSubmission = {};
         recreateWindowSwapchain();
