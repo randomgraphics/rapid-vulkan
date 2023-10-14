@@ -2625,8 +2625,8 @@ public:
 
     CommandBuffer begin(const char * name, vk::CommandBufferLevel level) {
         if (!name || !*name) name = "<no-name>";
-        auto                                 lock = std::lock_guard {_mutex};
-        std::shared_ptr<CommandBuffer::Impl> p;
+        auto lock = std::lock_guard {_mutex};
+        auto p    = std::shared_ptr<CommandBuffer::Impl>();
         if (_finished.empty()) {
             p = std::make_unique<CommandBuffer::Impl>(_owner, name, level);
         } else {

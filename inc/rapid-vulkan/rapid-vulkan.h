@@ -2004,7 +2004,6 @@ public:
     auto desc() const -> const Desc &;
 
     /// @brief Begin recording a command buffer.
-    /// @todo should return a custom CommandBuffer class.
     CommandBuffer begin(const char * name, vk::CommandBufferLevel level = vk::CommandBufferLevel::ePrimary);
 
     /// @brief Submit command buffers to the queue for asynchronous processing.
