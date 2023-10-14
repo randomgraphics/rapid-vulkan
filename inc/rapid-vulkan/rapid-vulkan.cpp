@@ -2429,9 +2429,9 @@ private:
         // create set layout
         _layout = _gi->device.createDescriptorSetLayout(vk::DescriptorSetLayoutCreateInfo {}.setBindings(bindings), _gi->allocator);
 
-        // create pool
+        // setup pool size array
         _sizes.reserve(sizesMap.size());
-        for (const auto & kv : sizesMap) _sizes.push_back({kv.first, kv.second});
+        for (const auto & kv : sizesMap) _sizes.push_back({kv.first, kv.second * _maxSets});
 
         // done
         updateName();
