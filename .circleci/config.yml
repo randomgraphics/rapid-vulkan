@@ -30,9 +30,9 @@ jobs:
             build.py d
             build.py p
             build.py r
-            build/posix.gcc.d/dev/test/rapid-vulkan-test
-            build/posix.gcc.p/dev/test/rapid-vulkan-test
-            build/posix.gcc.r/dev/test/rapid-vulkan-test
+            build/linux.gcc.d/dev/test/rapid-vulkan-test
+            build/linux.gcc.p/dev/test/rapid-vulkan-test
+            build/linux.gcc.r/dev/test/rapid-vulkan-test
 
   build-linux-clang:
     docker:
