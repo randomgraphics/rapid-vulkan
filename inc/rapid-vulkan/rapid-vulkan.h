@@ -2391,13 +2391,18 @@ public:
     /// Define level of validation on Vulkan debug callback.
     enum Validation : uint32_t {
         VALIDATION_DISABLED = 0,
-        LOG_ON_VK_ERROR     = 1 << 0,
-        THROW_ON_VK_ERROR   = 1 << 1,
-        BREAK_ON_VK_ERROR   = 1 << 2, ///< This trumps THROW_ON_VK_ERROR, if both are defined.
-        LOG_ON_VK_WARNING   = 1 << 3,
-        LOG_ON_VK_INFO      = 1 << 4,
-        LOG_ON_VK_DEBUG     = 1 << 5,
-        LOG_ON_VK_PERF      = 1 << 6,
+
+        THROW_ON_VK_ERROR = 1 << 0,
+        BREAK_ON_VK_ERROR = 1 << 1, ///< This trumps THROW_ON_VK_ERROR, if both are defined.
+
+        LOG_ON_VK_ERROR   = 1 << 2,
+        LOG_ON_VK_WARNING = 1 << 3,
+        LOG_ON_VK_INFO    = 1 << 4,
+        LOG_ON_VK_DEBUG   = 1 << 5,
+        LOG_ON_VK_PERF    = 1 << 6,
+
+        /// this is to make it easier to turn on all logs.
+        LOG_ALL = LOG_ON_VK_ERROR | LOG_ON_VK_WARNING | LOG_ON_VK_INFO | LOG_ON_VK_DEBUG | LOG_ON_VK_PERF,
     };
 
     friend inline Validation operator|(Validation a, Validation b) { return static_cast<Validation>(static_cast<int>(a) | static_cast<int>(b)); }

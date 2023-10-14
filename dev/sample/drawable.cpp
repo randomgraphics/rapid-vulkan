@@ -66,9 +66,23 @@ void entry(const Options & options) {
     auto bc = Buffer::SetContentParameters {}.setQueue(*device.graphics());
     auto vb = Buffer(Buffer::ConstructParameters {{"vb"}, gi}.setVertex().setSize(sizeof(float) * 2 * 3));
     vb.setContent(bc.setData<float>({-0.5f, -0.5f, 0.5f, -0.5f, 0.5f, 0.5f}));
-    auto dr = Drawable({{}, &p});
-    dr.b({0, 0}, {{u0.handle()}}).b({0, 1}, {{u1.handle()}}).v({{vb.handle()}}).draw(GraphicsPipeline::DrawParameters {}.setNonIndexed(3));
 
+    // create a drawable object using the pipeline object.
+    auto dr = Drawable({{}, &p});
+
+    // Bind uniform buffer u0 to set 0, index 0
+    dr.b({0, 0}, {{u0.handle()}});
+
+    // Bind uniform buffer u1 to set 0, index 1
+    dr.b({0, 1}, {{u1.handle()}});
+
+    // Bind vb as the vertex buffer.
+    dr.v({{vb.handle()}});
+
+    // setup draw parameters of the drawable to have 3 non-indexed vertices.
+    dr.draw(GraphicsPipeline::DrawParameters {}.setNonIndexed(3));
+
+    // show the window and begin the rendering loop.
     glfw.show();
     for (;;) {
         // Standard boilerplate of rendering a frame. It is basically the same as simple-triangle.cpp.
@@ -91,8 +105,12 @@ void entry(const Options & options) {
         // begin the render pass
         sw.cmdBeginBuiltInRenderPass(c, Swapchain::BeginRenderPassParameters {}.setClearColorF({0.0f, 1.0f, 0.0f, 1.0f})); // clear to green
 
-        // enqueue the draw command
-        c.render(*dr.compile());
+        // compile the drawable to generate the draw pack. Draw pack is a renderable and immutable representation of
+        // the current state of the drawable.
+        auto dp = dr.compile();
+
+        // enqueue the draw pack to command buffer.
+        c.render(*dp);
 
         // end render pass
         sw.cmdEndBuiltInRenderPass(c);
