@@ -1557,6 +1557,7 @@ void PipelineLayout::onNameChanged(const std::string &) { _impl->onNameChanged()
 
 class Pipeline::Impl {
 public:
+
     Impl(Pipeline & owner, vk::PipelineBindPoint bindPoint, vk::ArrayProxy<const Shader * const> shaders): _bindPoint(bindPoint) {
         _layout.reset(new PipelineLayout({{owner.name()}, shaders}));
     }
@@ -1577,7 +1578,7 @@ public:
     void setHandle(vk::Pipeline newHandle, const std::string & newName) {
         const auto & gi = _layout->gi();
         gi.safeDestroy(_handle); // destroy old handle
-        _handle = newHandle;     // store new handle
+        _handle = newHandle; // store new handle
         if (newHandle) setName(newName);
     }
 
@@ -1705,7 +1706,7 @@ ComputePipeline::ComputePipeline(const ConstructParameters & params): Pipeline(p
     vk::ComputePipelineCreateInfo ci;
     ci.setStage({{}, vk::ShaderStageFlagBits::eCompute, params.cs->handle(), params.cs->entry().c_str()});
     ci.setLayout(_impl->layout().handle());
-    auto gi = params.cs->gi();
+    auto gi       = params.cs->gi();
     _impl->setHandle(gi->device.createComputePipeline(nullptr, ci, gi->allocator).value, name());
 }
 
@@ -2463,6 +2464,7 @@ public:
         _queue.desc().gi->safeDestroy(_pool);
     }
 
+    // Wake up a newly created or previously hibernated command buffer. Make it ready for command recording.
     void wakeup() {
         clear();
         _state = RECORDING;
@@ -2473,6 +2475,9 @@ public:
         _handle                 = _queue.desc().gi->device.allocateCommandBuffers(info)[0];
         setVkHandleName(_queue.desc().gi->device, _handle, _name);
         _handle.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+        // Must clear the last draw pack too. So nothng is skipped, even when the same draw pack that was used
+        // in the last round is enqueued.
+        _last = {};
     }
 
     void hibernate() {
