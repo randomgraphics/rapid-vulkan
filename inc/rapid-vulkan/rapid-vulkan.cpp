@@ -2376,13 +2376,14 @@ public:
     ~DescriptorPool() { destruct(); }
 
     vk::DescriptorSet allocate() {
-        if (_availableSets == 0) {
+        if (_availableSets.empty()) {
             if (_pool) _full.push_back(_pool), _pool = VK_NULL_HANDLE;
             _pool          = _gi->device.createDescriptorPool(vk::DescriptorPoolCreateInfo().setPoolSizes(_sizes).setMaxSets(_maxSets), _gi->allocator);
-            _availableSets = _maxSets;
+            _availableSets = _gi->device.allocateDescriptorSets({_pool, _maxSets, &_layout});
         }
-        --_availableSets;
-        return _gi->device.allocateDescriptorSets({_pool, 1, &_layout})[0];
+        auto s = _availableSets.back();
+        _availableSets.pop_back();
+        return s;
     }
 
     /// Release all already-full descriptor pools.
@@ -2400,7 +2401,7 @@ private:
     std::vector<vk::DescriptorPoolSize> _sizes;
     vk::DescriptorSetLayout             _layout {};
     vk::DescriptorPool                  _pool {};
-    size_t                              _availableSets {}; ///< number of sets that are available for allocation in the pool.
+    std::vector<vk::DescriptorSet>      _availableSets {};
     std::vector<vk::DescriptorPool>     _full;             ///< pools that are full already.
 
 private:
@@ -2439,10 +2440,9 @@ private:
 
     void destruct() {
         if (!_gi) return;
+        purge();
         _gi->safeDestroy(_layout);
         _gi->safeDestroy(_pool);
-        for (auto & p : _full) { _gi->safeDestroy(p); }
-        _full.clear();
         _gi = nullptr;
     }
 };
