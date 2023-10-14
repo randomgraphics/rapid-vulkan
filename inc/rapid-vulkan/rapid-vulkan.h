@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identify the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 19
+#define RAPID_VULKAN_HEADER_REVISION 20
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -567,14 +567,12 @@ public:
 
 protected:
     Root(const ConstructParameters & params): _name("<no-name>"s) {
-        ++_instanceCount;
+        ++_instanceCount; // why?
         setName(params.name);
+        --_instanceCount; // why?
     }
 
-    virtual void onNameChanged(const std::string & oldName) {
-        (void) oldName;
-        --_instanceCount;
-    }
+    virtual void onNameChanged(const std::string & oldName) { (void) oldName; }
 
 private:
     friend class RefBase;
@@ -1570,6 +1568,8 @@ public:
 protected:
     Pipeline(const std::string & name, vk::PipelineBindPoint bindPoint, vk::ArrayProxy<const Shader * const> shaders);
 
+    void onNameChanged(const std::string &) override;
+
     class Impl;
     Impl * _impl = nullptr;
 };
@@ -1597,6 +1597,11 @@ public:
         std::map<vk::DynamicState, uint64_t>               dynamic {};
         vk::Pipeline                                       baseHandle {};
         int32_t                                            baseIndex {};
+
+        ConstructParameters & setName(std::string newName) {
+            name = std::move(newName);
+            return *this;
+        }
 
         ConstructParameters & setRenderPass(vk::RenderPass pass_, size_t sub = 0) {
             pass    = pass_;
@@ -1999,7 +2004,6 @@ public:
     auto desc() const -> const Desc &;
 
     /// @brief Begin recording a command buffer.
-    /// @todo should return a custom CommandBuffer class.
     CommandBuffer begin(const char * name, vk::CommandBufferLevel level = vk::CommandBufferLevel::ePrimary);
 
     /// @brief Submit command buffers to the queue for asynchronous processing.
@@ -2386,13 +2390,18 @@ public:
     /// Define level of validation on Vulkan debug callback.
     enum Validation : uint32_t {
         VALIDATION_DISABLED = 0,
-        LOG_ON_VK_ERROR     = 1 << 0,
-        THROW_ON_VK_ERROR   = 1 << 1,
-        BREAK_ON_VK_ERROR   = 1 << 2, ///< This trumps THROW_ON_VK_ERROR, if both are defined.
-        LOG_ON_VK_WARNING   = 1 << 3,
-        LOG_ON_VK_INFO      = 1 << 4,
-        LOG_ON_VK_DEBUG     = 1 << 5,
-        LOG_ON_VK_PERF      = 1 << 6,
+
+        THROW_ON_VK_ERROR = 1 << 0,
+        BREAK_ON_VK_ERROR = 1 << 1, ///< This trumps THROW_ON_VK_ERROR, if both are defined.
+
+        LOG_ON_VK_ERROR   = 1 << 2,
+        LOG_ON_VK_WARNING = 1 << 3,
+        LOG_ON_VK_INFO    = 1 << 4,
+        LOG_ON_VK_DEBUG   = 1 << 5,
+        LOG_ON_VK_PERF    = 1 << 6,
+
+        /// this is to make it easier to turn on all logs.
+        LOG_ALL = LOG_ON_VK_ERROR | LOG_ON_VK_WARNING | LOG_ON_VK_INFO | LOG_ON_VK_DEBUG | LOG_ON_VK_PERF,
     };
 
     friend inline Validation operator|(Validation a, Validation b) { return static_cast<Validation>(static_cast<int>(a) | static_cast<int>(b)); }

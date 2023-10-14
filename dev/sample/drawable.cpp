@@ -5,7 +5,7 @@
 #include <iostream>
 #include <cmath>
 
-namespace pipeline {
+namespace drawable {
 
 #include "shader/pipeline.vert.spv.h"
 #include "shader/pipeline.frag.spv.h"
@@ -34,30 +34,37 @@ struct GLFWInit {
 };
 
 struct Options {
-    uint32_t headless = 0; // Set to non-zero to enable headless mode. The value is number of frames to render.
+    vk::Instance                    inst      = VK_NULL_HANDLE;
+    uint32_t                        headless  = 0; // Set to non-zero to enable headless mode. The value is number of frames to render.
+    rapid_vulkan::Device::Verbosity verbosity = rapid_vulkan::Device::BRIEF;
 };
 
 void entry(const Options & options) {
     // Standard boilerplate of creating instance, device, swapchain, etc. It is basically the same as simple-triangle.cpp.
     using namespace rapid_vulkan;
-    auto w        = uint32_t(1280);
-    auto h        = uint32_t(720);
-    auto instance = Instance(Instance::ConstructParameters {}.setValidation(Instance::BREAK_ON_VK_ERROR).setBacktrace(backtrace));
-    auto glfw     = GLFWInit(options.headless, instance, w, h, "pipeline-args");
-    auto device   = Device(Device::ConstructParameters {instance.handle()}.setSurface(glfw.surface));
-    auto gi       = device.gi();
-    auto q        = CommandQueue({{"main"}, gi, device.graphics()->family(), device.graphics()->index()});
-    auto sw       = Swapchain(Swapchain::ConstructParameters {{"swapchain"}}.setDevice(device).setDimensions(w, h));
-    auto vs       = Shader(Shader::ConstructParameters {{"vs"}}.setGi(gi).setSpirv(pipeline_vert));
-    auto fs       = Shader(Shader::ConstructParameters {{"fs"}, gi}.setSpirv(pipeline_frag));
-    auto p        = GraphicsPipeline(GraphicsPipeline::ConstructParameters {}
-                                         .setRenderPass(sw.renderPass())
-                                         .setVS(&vs)
-                                         .setFS(&fs)
-                                         .dynamicScissor()
-                                         .dynamicViewport()
-                                         .addVertexAttribute(0, 0, vk::Format::eR32G32Sfloat)
-                                         .addVertexBuffer(2 * sizeof(float)));
+    auto                      instance = options.inst;
+    std::unique_ptr<Instance> instancePtr;
+    if (!instance) {
+        instancePtr = std::make_unique<Instance>(Instance::ConstructParameters {}.setValidation(Instance::BREAK_ON_VK_ERROR).setBacktrace(backtrace));
+        instance    = instancePtr->handle();
+    }
+    auto w      = uint32_t(1280);
+    auto h      = uint32_t(720);
+    auto glfw   = GLFWInit(options.headless, instance, w, h, "pipeline-args");
+    auto device = Device(Device::ConstructParameters {instance}.setSurface(glfw.surface).setPrintVkInfo(options.verbosity));
+    auto gi     = device.gi();
+    auto q      = CommandQueue({{"main"}, gi, device.graphics()->family(), device.graphics()->index()});
+    auto sw     = Swapchain(Swapchain::ConstructParameters {{"swapchain"}}.setDevice(device).setDimensions(w, h));
+    auto vs     = Shader(Shader::ConstructParameters {{"vs"}}.setGi(gi).setSpirv(pipeline_vert));
+    auto fs     = Shader(Shader::ConstructParameters {{"fs"}, gi}.setSpirv(pipeline_frag));
+    auto p      = GraphicsPipeline(GraphicsPipeline::ConstructParameters {}
+                                       .setRenderPass(sw.renderPass())
+                                       .setVS(&vs)
+                                       .setFS(&fs)
+                                       .dynamicScissor()
+                                       .dynamicViewport()
+                                       .addVertexAttribute(0, 0, vk::Format::eR32G32Sfloat)
+                                       .addVertexBuffer(2 * sizeof(float)));
     p.doNotDeleteOnZeroRef(); // Make the stack-allocated pipeline instance compatible with Ref<>
 
     // This part is what this sample is about. We create some buffers and bind them to the drawable.
@@ -66,9 +73,23 @@ void entry(const Options & options) {
     auto bc = Buffer::SetContentParameters {}.setQueue(*device.graphics());
     auto vb = Buffer(Buffer::ConstructParameters {{"vb"}, gi}.setVertex().setSize(sizeof(float) * 2 * 3));
     vb.setContent(bc.setData<float>({-0.5f, -0.5f, 0.5f, -0.5f, 0.5f, 0.5f}));
-    auto dr = Drawable({{}, &p});
-    dr.b({0, 0}, {{u0.handle()}}).b({0, 1}, {{u1.handle()}}).v({{vb.handle()}}).draw(GraphicsPipeline::DrawParameters {}.setNonIndexed(3));
 
+    // create a drawable object using the pipeline object.
+    auto dr = Drawable({{}, &p});
+
+    // Bind uniform buffer u0 to set 0, index 0
+    dr.b({0, 0}, {{u0.handle()}});
+
+    // Bind uniform buffer u1 to set 0, index 1
+    dr.b({0, 1}, {{u1.handle()}});
+
+    // Bind vb as the vertex buffer.
+    dr.v({{vb.handle()}});
+
+    // setup draw parameters of the drawable to have 3 non-indexed vertices.
+    dr.draw(GraphicsPipeline::DrawParameters {}.setNonIndexed(3));
+
+    // show the window and begin the rendering loop.
     glfw.show();
     for (;;) {
         // Standard boilerplate of rendering a frame. It is basically the same as simple-triangle.cpp.
@@ -91,8 +112,12 @@ void entry(const Options & options) {
         // begin the render pass
         sw.cmdBeginBuiltInRenderPass(c, Swapchain::BeginRenderPassParameters {}.setClearColorF({0.0f, 1.0f, 0.0f, 1.0f})); // clear to green
 
-        // enqueue the draw command
-        c.render(*dr.compile());
+        // compile the drawable to generate the draw pack. Draw pack is a renderable and immutable representation of
+        // the current state of the drawable.
+        auto dp = dr.compile();
+
+        // enqueue the draw pack to command buffer.
+        c.render(*dp);
 
         // end render pass
         sw.cmdEndBuiltInRenderPass(c);
@@ -104,8 +129,8 @@ void entry(const Options & options) {
     device.waitIdle();
 }
 
-} // namespace pipeline
+} // namespace drawable
 
 #ifndef UNIT_TEST
-int main() { pipeline::entry({}); }
+int main() { drawable::entry({}); }
 #endif

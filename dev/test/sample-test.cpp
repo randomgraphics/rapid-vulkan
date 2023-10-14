@@ -4,10 +4,11 @@
 #define UNIT_TEST
 
 #ifndef __ANDROID__
+
 #include "../sample/simple-triangle.cpp"
-TEST_CASE("simple-triangle", "[sample]") {
+TEST_CASE("sample-simple-triangle", "[sample]") {
     simple_triangle::Options o;
-    o.headless = 1;
+    o.headless = 10; // render 10 frames.
 
     SECTION("dynamic viewports") {
         o.inst            = TestVulkanInstance::instance->handle();
@@ -23,4 +24,14 @@ TEST_CASE("simple-triangle", "[sample]") {
         simple_triangle::entry(o);
     }
 }
+
+#include "../sample/drawable.cpp"
+TEST_CASE("sample-drawable", "[sample]") {
+    drawable::Options o;
+    o.headless  = 10; // render 10 frames.
+    o.inst      = TestVulkanInstance::instance->handle();
+    o.verbosity = rapid_vulkan::Device::SILENCE;
+    drawable::entry(o);
+}
+
 #endif

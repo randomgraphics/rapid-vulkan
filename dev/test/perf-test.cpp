@@ -29,9 +29,12 @@ TEST_CASE("texture-array", "[perf]") {
     auto sw     = Swapchain(Swapchain::ConstructParameters {{"vertex-buffer-test"}}.setDevice(*device).setDimensions(w, h));
     auto q      = device->graphics();
 
-    // Determine how many images we can use in a single draw call. Default is 1000.
-    auto N = std::min(1000u, gi->physical.getProperties().limits.maxPerStageDescriptorSamplers);
+    // Determine if how many images we can use in a single draw call. Max is 1000.
+    auto N = std::min(1000u, gi->physical.getProperties().limits.maxPerStageDescriptorSampledImages);
     std::cout << "Using " << N << " images in a single draw call" << std::endl;
+
+    // The shader we use in test (texture-array.frag) requires at least 32 images.
+    // REQUIRE(N >= 32);
 
     // create texture array
     auto t = Image(Image::ConstructParameters {{"texture-array"}, gi}.set2D(2, 2).setFormat(vk::Format::eR8G8B8A8Unorm));
