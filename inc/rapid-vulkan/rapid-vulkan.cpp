@@ -2379,7 +2379,8 @@ public:
         if (_availableSets.empty()) {
             if (_pool) _full.push_back(_pool), _pool = VK_NULL_HANDLE;
             _pool          = _gi->device.createDescriptorPool(vk::DescriptorPoolCreateInfo().setPoolSizes(_sizes).setMaxSets(_maxSets), _gi->allocator);
-            _availableSets = _gi->device.allocateDescriptorSets({_pool, _maxSets, &_layout});
+            auto layouts   = std::vector<vk::DescriptorSetLayout>(_maxSets, _layout);
+            _availableSets = _gi->device.allocateDescriptorSets({_pool, _maxSets, layouts.data()});
         }
         auto s = _availableSets.back();
         _availableSets.pop_back();
