@@ -5,7 +5,7 @@
 #include <iostream>
 #include <cmath>
 
-namespace pipeline {
+namespace drawable {
 
 #include "shader/pipeline.vert.spv.h"
 #include "shader/pipeline.frag.spv.h"
@@ -34,30 +34,37 @@ struct GLFWInit {
 };
 
 struct Options {
-    uint32_t headless = 0; // Set to non-zero to enable headless mode. The value is number of frames to render.
+    vk::Instance                    inst      = VK_NULL_HANDLE;
+    uint32_t                        headless  = 0; // Set to non-zero to enable headless mode. The value is number of frames to render.
+    rapid_vulkan::Device::Verbosity verbosity = rapid_vulkan::Device::BRIEF;
 };
 
 void entry(const Options & options) {
     // Standard boilerplate of creating instance, device, swapchain, etc. It is basically the same as simple-triangle.cpp.
     using namespace rapid_vulkan;
-    auto w        = uint32_t(1280);
-    auto h        = uint32_t(720);
-    auto instance = Instance(Instance::ConstructParameters {}.setValidation(Instance::BREAK_ON_VK_ERROR).setBacktrace(backtrace));
-    auto glfw     = GLFWInit(options.headless, instance, w, h, "pipeline-args");
-    auto device   = Device(Device::ConstructParameters {instance.handle()}.setSurface(glfw.surface));
-    auto gi       = device.gi();
-    auto q        = CommandQueue({{"main"}, gi, device.graphics()->family(), device.graphics()->index()});
-    auto sw       = Swapchain(Swapchain::ConstructParameters {{"swapchain"}}.setDevice(device).setDimensions(w, h));
-    auto vs       = Shader(Shader::ConstructParameters {{"vs"}}.setGi(gi).setSpirv(pipeline_vert));
-    auto fs       = Shader(Shader::ConstructParameters {{"fs"}, gi}.setSpirv(pipeline_frag));
-    auto p        = GraphicsPipeline(GraphicsPipeline::ConstructParameters {}
-                                         .setRenderPass(sw.renderPass())
-                                         .setVS(&vs)
-                                         .setFS(&fs)
-                                         .dynamicScissor()
-                                         .dynamicViewport()
-                                         .addVertexAttribute(0, 0, vk::Format::eR32G32Sfloat)
-                                         .addVertexBuffer(2 * sizeof(float)));
+    auto                      instance = options.inst;
+    std::unique_ptr<Instance> instancePtr;
+    if (!instance) {
+        instancePtr = std::make_unique<Instance>(Instance::ConstructParameters {}.setValidation(Instance::BREAK_ON_VK_ERROR).setBacktrace(backtrace));
+        instance    = instancePtr->handle();
+    }
+    auto w      = uint32_t(1280);
+    auto h      = uint32_t(720);
+    auto glfw   = GLFWInit(options.headless, instance, w, h, "pipeline-args");
+    auto device = Device(Device::ConstructParameters {instance}.setSurface(glfw.surface).setPrintVkInfo(options.verbosity));
+    auto gi     = device.gi();
+    auto q      = CommandQueue({{"main"}, gi, device.graphics()->family(), device.graphics()->index()});
+    auto sw     = Swapchain(Swapchain::ConstructParameters {{"swapchain"}}.setDevice(device).setDimensions(w, h));
+    auto vs     = Shader(Shader::ConstructParameters {{"vs"}}.setGi(gi).setSpirv(pipeline_vert));
+    auto fs     = Shader(Shader::ConstructParameters {{"fs"}, gi}.setSpirv(pipeline_frag));
+    auto p      = GraphicsPipeline(GraphicsPipeline::ConstructParameters {}
+                                       .setRenderPass(sw.renderPass())
+                                       .setVS(&vs)
+                                       .setFS(&fs)
+                                       .dynamicScissor()
+                                       .dynamicViewport()
+                                       .addVertexAttribute(0, 0, vk::Format::eR32G32Sfloat)
+                                       .addVertexBuffer(2 * sizeof(float)));
     p.doNotDeleteOnZeroRef(); // Make the stack-allocated pipeline instance compatible with Ref<>
 
     // This part is what this sample is about. We create some buffers and bind them to the drawable.
@@ -122,8 +129,8 @@ void entry(const Options & options) {
     device.waitIdle();
 }
 
-} // namespace pipeline
+} // namespace drawable
 
 #ifndef UNIT_TEST
-int main() { pipeline::entry({}); }
+int main() { drawable::entry({}); }
 #endif

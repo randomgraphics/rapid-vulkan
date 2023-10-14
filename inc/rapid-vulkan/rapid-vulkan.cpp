@@ -1557,7 +1557,6 @@ void PipelineLayout::onNameChanged(const std::string &) { _impl->onNameChanged()
 
 class Pipeline::Impl {
 public:
-
     Impl(Pipeline & owner, vk::PipelineBindPoint bindPoint, vk::ArrayProxy<const Shader * const> shaders): _bindPoint(bindPoint) {
         _layout.reset(new PipelineLayout({{owner.name()}, shaders}));
     }
@@ -1578,7 +1577,7 @@ public:
     void setHandle(vk::Pipeline newHandle, const std::string & newName) {
         const auto & gi = _layout->gi();
         gi.safeDestroy(_handle); // destroy old handle
-        _handle = newHandle; // store new handle
+        _handle = newHandle;     // store new handle
         if (newHandle) setName(newName);
     }
 
@@ -1706,7 +1705,7 @@ ComputePipeline::ComputePipeline(const ConstructParameters & params): Pipeline(p
     vk::ComputePipelineCreateInfo ci;
     ci.setStage({{}, vk::ShaderStageFlagBits::eCompute, params.cs->handle(), params.cs->entry().c_str()});
     ci.setLayout(_impl->layout().handle());
-    auto gi       = params.cs->gi();
+    auto gi = params.cs->gi();
     _impl->setHandle(gi->device.createComputePipeline(nullptr, ci, gi->allocator).value, name());
 }
 
