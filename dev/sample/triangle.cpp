@@ -1,10 +1,12 @@
+/* This is a very basic demonstration of the Pipeline object in rapid-vulakn.
+ */
 #include "../rv.h"
 #include <iostream>
 
-namespace simple_triangle {
+namespace triangle {
 
-#include "shader/simple-triangle.vert.spv.h"
-#include "shader/simple-triangle.frag.spv.h"
+#include "shader/triangle.vert.spv.h"
+#include "shader/triangle.frag.spv.h"
 
 struct GLFWInit {
     vk::Instance inst;
@@ -46,16 +48,16 @@ void entry(const Options & options) {
     }
     auto w      = uint32_t(1280);
     auto h      = uint32_t(720);
-    auto glfw   = GLFWInit(options.headless, instance, w, h, "simple-triangle");
+    auto glfw   = GLFWInit(options.headless, instance, w, h, "triangle");
     auto device = Device(Device::ConstructParameters {instance}.setSurface(glfw.surface).setPrintVkInfo(options.verbosity));
     auto gi     = device.gi();
-    auto vs     = Shader(Shader::ConstructParameters {{"simple-triangle-vs"}}.setGi(gi).setSpirv(simple_triangle_vert));
-    auto fs     = Shader(Shader::ConstructParameters {{"simple-triangle-fs"}, gi}.setSpirv(simple_triangle_frag));
+    auto vs     = Shader(Shader::ConstructParameters {{"triangle-vs"}}.setGi(gi).setSpirv(triangle_vert));
+    auto fs     = Shader(Shader::ConstructParameters {{"triangle-fs"}, gi}.setSpirv(triangle_frag));
     auto q      = CommandQueue({{"main"}, gi, device.graphics()->family(), device.graphics()->index()});
-    auto sw     = Swapchain(Swapchain::ConstructParameters {{"simple-triangle"}}.setDevice(device).setDimensions(w, h));
+    auto sw     = Swapchain(Swapchain::ConstructParameters {{"triangle"}}.setDevice(device).setDimensions(w, h));
 
     // create the graphics pipeline
-    auto gcp = GraphicsPipeline::ConstructParameters {{"simple-triangle"}}.setRenderPass(sw.renderPass()).setVS(&vs).setFS(&fs);
+    auto gcp = GraphicsPipeline::ConstructParameters {{"triangle"}}.setRenderPass(sw.renderPass()).setVS(&vs).setFS(&fs);
     gcp.rast.setCullMode(vk::CullModeFlagBits::eNone);
     if (options.dynamicViewport) {
         // Dynamic viewport and scissor. When window surface is resized, the viewport and scissor will be updated automatically w/o recreating the pipeline.
@@ -77,7 +79,7 @@ void entry(const Options & options) {
             glfwPollEvents();
         }
         auto & frame = sw.currentFrame();
-        auto   c     = q.begin("simple-triangle");
+        auto   c     = q.begin("triangle");
         sw.cmdBeginBuiltInRenderPass(c, Swapchain::BeginRenderPassParameters {}.setClearColorF({0.0f, 1.0f, 0.0f, 1.0f})); // clear to green
         p.cmdDraw(c, GraphicsPipeline::DrawParameters {}.setNonIndexed(3));                                                // then draw a blue triangle.
         sw.cmdEndBuiltInRenderPass(c);
@@ -87,8 +89,8 @@ void entry(const Options & options) {
     device.waitIdle(); // don't forget to wait for the device to be idle before destroying vulkan objects.
 }
 
-} // namespace simple_triangle
+} // namespace triangle
 
 #ifndef UNIT_TEST
-int main() { simple_triangle::entry({}); }
+int main() { triangle::entry({}); }
 #endif

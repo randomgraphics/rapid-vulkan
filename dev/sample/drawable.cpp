@@ -1,5 +1,5 @@
 /*
-    This file demonstrates the basic usage of the Drawable class.
+    This is a slightly more complex sample than the triangle sample. It demonstrates the basic usage of the Drawable class.
 */
 #include "../rv.h"
 #include <iostream>
@@ -40,7 +40,7 @@ struct Options {
 };
 
 void entry(const Options & options) {
-    // Standard boilerplate of creating instance, device, swapchain, etc. It is basically the same as simple-triangle.cpp.
+    // Standard boilerplate of creating instance, device, swapchain, etc. It is basically the same as triangle.cpp.
     using namespace rapid_vulkan;
     auto                      instance = options.inst;
     std::unique_ptr<Instance> instancePtr;
@@ -92,7 +92,7 @@ void entry(const Options & options) {
     // show the window and begin the rendering loop.
     glfw.show();
     for (;;) {
-        // Standard boilerplate of rendering a frame. It is basically the same as simple-triangle.cpp.
+        // Standard boilerplate of rendering a frame. It is basically the same as triangle.cpp.
         if (options.headless) {
             if (sw.currentFrame().index > options.headless) break; // render required number of frames in headless mode, then quit.
             std::cout << "Frame " << sw.currentFrame().index << std::endl;
