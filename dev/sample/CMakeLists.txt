@@ -33,5 +33,5 @@ add_sample(noop-compute)
 
 if (NOT ANDROID)
     add_sample(drawable)
-    add_sample(simple-triangle)
+    add_sample(triangle)
 endif()

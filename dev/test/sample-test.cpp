@@ -5,23 +5,23 @@
 
 #ifndef __ANDROID__
 
-#include "../sample/simple-triangle.cpp"
-TEST_CASE("sample-simple-triangle", "[sample]") {
-    simple_triangle::Options o;
+#include "../sample/triangle.cpp"
+TEST_CASE("sample-triangle", "[sample]") {
+    triangle::Options o;
     o.headless = 10; // render 10 frames.
 
     SECTION("dynamic viewports") {
         o.inst            = TestVulkanInstance::instance->handle();
         o.dynamicViewport = true;
         o.verbosity       = rapid_vulkan::Device::SILENCE;
-        simple_triangle::entry(o);
+        triangle::entry(o);
     }
 
     SECTION("static viewports") {
         o.inst            = TestVulkanInstance::instance->handle();
         o.dynamicViewport = false;
         o.verbosity       = rapid_vulkan::Device::SILENCE;
-        simple_triangle::entry(o);
+        triangle::entry(o);
     }
 }
 
