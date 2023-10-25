@@ -2,6 +2,7 @@
  */
 #include "../rv.h"
 #include <iostream>
+#include <thread>
 
 namespace triangle {
 
@@ -28,6 +29,16 @@ struct GLFWInit {
     }
     void show() {
         if (window) glfwShowWindow(window);
+    }
+    bool processEvents() const {
+        if (!window) return false;
+        glfwPollEvents();
+        if (glfwWindowShouldClose(window)) return false;
+        while (glfwGetWindowAttrib(window, GLFW_ICONIFIED)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            glfwPollEvents();
+        }
+        return true;
     }
 };
 
@@ -71,19 +82,19 @@ void entry(const Options & options) {
 
     glfw.show();
     for (;;) {
-        if (options.headless) {
-            if (sw.currentFrame().index > options.headless) break; // only render number of required frames in headless mode, then quite.
-            std::cout << "Frame " << sw.currentFrame().index << std::endl;
-        } else {
-            if (glfwWindowShouldClose(glfw.window)) break;
-            glfwPollEvents();
+        if (!options.headless && !glfw.processEvents()) break;
+        auto frame = sw.beginFrame();
+        if (frame) {
+            if (options.headless) {
+                if (frame->index > options.headless) break; // only render number of required frames in headless mode, then quite.
+                std::cout << "Frame " << frame->index << std::endl;
+            }
+            auto c = q.begin("triangle");
+            sw.cmdBeginBuiltInRenderPass(c, Swapchain::BeginRenderPassParameters {}.setClearColorF({0.0f, 1.0f, 0.0f, 1.0f})); // clear to green
+            p.cmdDraw(c, GraphicsPipeline::DrawParameters {}.setNonIndexed(3));                                                // then draw a blue triangle.
+            sw.cmdEndBuiltInRenderPass(c);
+            q.submit({c, {}, {frame->imageAvailable}, {frame->renderFinished}});
         }
-        auto & frame = sw.currentFrame();
-        auto   c     = q.begin("triangle");
-        sw.cmdBeginBuiltInRenderPass(c, Swapchain::BeginRenderPassParameters {}.setClearColorF({0.0f, 1.0f, 0.0f, 1.0f})); // clear to green
-        p.cmdDraw(c, GraphicsPipeline::DrawParameters {}.setNonIndexed(3));                                                // then draw a blue triangle.
-        sw.cmdEndBuiltInRenderPass(c);
-        q.submit({c, {}, {frame.imageAvailable}, {frame.renderFinished}});
         sw.present({});
     }
     device.waitIdle(); // don't forget to wait for the device to be idle before destroying vulkan objects.

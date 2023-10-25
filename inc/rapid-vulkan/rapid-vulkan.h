@@ -2202,21 +2202,26 @@ public:
 
     CommandQueue & graphics() const;
 
+    /// @brief Begin a new rendering frame. Must be called in pair with present().
+    /// Behavior is undefined if calling beginFrame() more than once w/o calling present() in between.
+    /// \returns The pointer to the current frame structure, or null if failed.
+    const Frame * beginFrame();
+
+    /// @brief Present the current frame. Must be called in pair with beginFrame(). Behavior is undefined, if calling present() more than once
+    /// w/o calling beginFrame() in between.
+    /// This method also invalidated the frame pointer returned by beginFrame(). Accessing the frame structure outside of scope of beginFrame() and
+    /// present() is prohibited and could cause undefined behavior.
+    void present(const PresentParameters &);
+
+    /// @brief Begin a new built-in render pass. Can only be called between beginFrame() and present().
+    /// @param
+    /// @param
     void cmdBeginBuiltInRenderPass(vk::CommandBuffer, const BeginRenderPassParameters &);
 
     /// @brief End the built-in render pass.
     /// After built-in render pass ends, the back buffer image will be automatically transitioned into status suitable for present(). You can check the
     /// actual value of the status via currentFrame().backbuffer->status.
     void cmdEndBuiltInRenderPass(vk::CommandBuffer);
-
-    /// @brief Get the current frame information.
-    /// The returned value will be invalidated after each present. So you have to call this function after each present to get the latest frame information.
-    /// Referencing values returned from previous frames is prohibited and will cause undefined behavior.
-    const Frame & currentFrame() const;
-
-    /// @brief Present the current frame. Also do the internal bookkeeping to switch to next frame.
-    /// The post-present status of the back buffer image is stored in currentFrame().backbuffer->status.
-    void present(const PresentParameters &);
 
 private:
     class Impl;

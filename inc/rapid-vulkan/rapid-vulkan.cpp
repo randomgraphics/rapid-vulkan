@@ -2933,6 +2933,11 @@ public:
     CommandQueue & graphics() const { return *_graphicsQueue; }
 
     void cmdBeginBuiltInRenderPass(vk::CommandBuffer cb, const BeginRenderPassParameters & params) {
+        // can't begin render pass if the frame is not begun.
+        RVI_REQUIRE(READY == _frameStatus);
+
+        // TODO: check if the render pass is already begun;
+
         auto bb = currentFrame().backbuffer;
 
         // transition back buffer layout if necessary.
@@ -2957,64 +2962,124 @@ public:
     }
 
     void cmdEndBuiltInRenderPass(vk::CommandBuffer cb) {
+        // can't begin render pass if the frame is not begun.
+        RVI_REQUIRE(READY == _frameStatus);
+
+        // TODO: check if the render pass is actually begun.
+
         _renderPass->cmdEnd(cb);
         auto bb    = (Backbuffer *) currentFrame().backbuffer;
         bb->status = {vk::ImageLayout::ePresentSrcKHR, vk::AccessFlagBits::eMemoryRead, vk::PipelineStageFlagBits::eBottomOfPipe};
     }
 
-    const Frame & currentFrame() const { return _frames[_frameIndex % std::size(_frames)]; }
+    const Frame * beginFrame() {
+        // make sure frame is ended.
+        RVI_REQUIRE(ENDED == _frameStatus);
+
+        auto & frame = currentFrame();
+        frame.index  = _frameIndex;
+
+        // wait for the frame to be available again.
+        if (frame.frameEndSubmission) {
+            _graphicsQueue->wait({frame.frameEndSubmission});
+            frame.frameEndSubmission = {}; // Clear the command buffer. So we only wait it once.
+        }
+
+        // Acquire the next available swapchain image. Only do this if we are not in headless mode.
+        if (_handle) {
+            try {
+                auto result = _cp.gi->device.acquireNextImageKHR(_handle, uint64_t(-1), frame.imageAvailable);
+                if (vk::Result::eSuccess == result.result || vk::Result::eSuboptimalKHR == result.result) {
+                    // we acquired the frame (might be suboptimal, but stil usable) and is ready for rendering.
+                    frame.imageIndex = result.value;
+                } else {
+                    // beginFrame failed for some reason. We will try again next frame.
+                    RVI_LOGE("vkAcquireNextImageKHR() failed to acquire swapchain image: %s", vk::to_string(result.result).c_str());
+                    _frameStatus = FAILED;
+                    return nullptr;
+                }
+            } catch (vk::SystemError & err) {
+                // beginFrame failed for some reason. We will try again next frame.
+                RVI_LOGE("%s", err.what());
+                _frameStatus = FAILED;
+                return nullptr;
+            }
+
+            RAPID_VULKAN_ASSERT(frame.imageIndex < _backbuffers.size());
+            frame.backbuffer = &_backbuffers[frame.imageIndex];
+        }
+
+        _frameStatus = READY;
+        return &_frames[_frameIndex % std::size(_frames)];
+    }
 
     void present(const PresentParameters & pp) {
-        auto & frame = (FrameImpl &) currentFrame();
-        auto   bb    = (Backbuffer *) frame.backbuffer;
+        // TODO: check if built-in render pass is ended.
 
-        // end the frame, optionally transition the backbuffer image to present layout.
-        auto cb = _graphicsQueue->begin("frame end");
-        if (pp.backbufferStatus.layout != DESIRED_PRESENT_STATUS.layout) {
-            Barrier()
-                .i(bb->image->handle(), pp.backbufferStatus.access, DESIRED_PRESENT_STATUS.access, pp.backbufferStatus.layout, DESIRED_PRESENT_STATUS.layout,
-                   vk::ImageAspectFlagBits::eColor)
-                .s(pp.backbufferStatus.stages, DESIRED_PRESENT_STATUS.stages)
-                .cmdWrite(cb);
-            bb->status = DESIRED_PRESENT_STATUS;
-        } else {
-            bb->status = pp.backbufferStatus;
-        }
+        if (READY == _frameStatus) {
+            auto & frame = (FrameImpl &) currentFrame();
+            auto   bb    = (Backbuffer *) frame.backbuffer;
 
-        // present current frame
-        if (_handle) {
-            frame.frameEndSubmission = _graphicsQueue->submit({cb, {}, {frame.renderFinished}, {frame.frameEndSemaphore}});
-
-            auto presentInfo = vk::PresentInfoKHR()
-                                   .setSwapchainCount(1)
-                                   .setPSwapchains(&_handle)
-                                   .setPImageIndices(&frame.imageIndex)
-                                   .setWaitSemaphoreCount(1)
-                                   .setPWaitSemaphores(&frame.frameEndSemaphore);
-            auto result = _presentQueue.presentKHR(&presentInfo);
-            if (result == vk::Result::eErrorOutOfDateKHR) {
-                recoverSwapchainOnPresentError(result, frame);
-            } else if (vk::Result::eSuboptimalKHR == result) {
-#ifdef __APPLE__
-                // TODO: somehow we always see this on macos.
-                RVI_ONCE_PER_SECOND(RVI_LOGW("Present() returns: %s. Consider adjusting swapchain parameters?", vk::to_string(result).c_str()));
-#else
-                recoverSwapchainOnPresentError(result, frame);
-#endif
-            } else if (vk::Result::eSuccess != result) {
-                RVI_THROW("Failed to present swapchain image. result = %s", vk::to_string((vk::Result) result).c_str());
+            // end the frame, optionally transition the backbuffer image to present layout.
+            auto cb = _graphicsQueue->begin("frame end");
+            if (pp.backbufferStatus.layout != DESIRED_PRESENT_STATUS.layout) {
+                Barrier()
+                    .i(bb->image->handle(), pp.backbufferStatus.access, DESIRED_PRESENT_STATUS.access, pp.backbufferStatus.layout,
+                       DESIRED_PRESENT_STATUS.layout, vk::ImageAspectFlagBits::eColor)
+                    .s(pp.backbufferStatus.stages, DESIRED_PRESENT_STATUS.stages)
+                    .cmdWrite(cb);
+                bb->status = DESIRED_PRESENT_STATUS;
+            } else {
+                bb->status = pp.backbufferStatus;
             }
-        } else {
-            // headless swapchain.
-            frame.frameEndSubmission = _graphicsQueue->submit({cb, {}, {frame.renderFinished}, {frame.imageAvailable}});
+
+            // present current frame
+            if (_handle) {
+                frame.frameEndSubmission = _graphicsQueue->submit({cb, {}, {frame.renderFinished}, {frame.frameEndSemaphore}});
+
+                auto presentInfo = vk::PresentInfoKHR()
+                                       .setSwapchainCount(1)
+                                       .setPSwapchains(&_handle)
+                                       .setPImageIndices(&frame.imageIndex)
+                                       .setWaitSemaphoreCount(1)
+                                       .setPWaitSemaphores(&frame.frameEndSemaphore);
+                auto result = _presentQueue.presentKHR(&presentInfo);
+                if (result == vk::Result::eErrorOutOfDateKHR) {
+                    recoverSwapchainOnPresentError();
+                    frame.frameEndSubmission = {};
+                } else if (vk::Result::eSuboptimalKHR == result) {
+#ifdef __APPLE__
+                    // TODO: somehow we always see this on macos.
+                    RVI_ONCE_PER_SECOND(RVI_LOGW("Present() returns: %s. Consider adjusting swapchain parameters?", vk::to_string(result).c_str()));
+#else
+                    recoverSwapchainOnPresentError();
+                    frame.frameEndSubmission = {};
+#endif
+                } else if (vk::Result::eSuccess != result) {
+                    RVI_LOGE("Failed to present swapchain image. result = %s", vk::to_string((vk::Result) result).c_str());
+                }
+            } else {
+                // headless swapchain.
+                frame.frameEndSubmission = _graphicsQueue->submit({cb, {}, {frame.renderFinished}, {frame.imageAvailable}});
+            }
+
+            // Move to the next frame, if and only if beginFrame() succeeded.
+            ++_frameIndex;
+        } else if (FAILED == _frameStatus) {
+            recoverSwapchainOnPresentError();
         }
 
-        // then start a new frame.
-        ++_frameIndex;
-        beginFrame();
+        // end the frame.
+        _frameStatus = ENDED;
     }
 
 private:
+    enum FrameStatus {
+        READY,  // frame is begun successfully. ready for rendering.
+        FAILED, // beginFrame() is called but failed.
+        ENDED,  // outside of scope of beginFrame() and present(). Not ready for rendering.
+    };
+
     struct FrameImpl : public Frame {
         uint32_t                   imageIndex {};
         vk::Semaphore              frameEndSemaphore {};
@@ -3029,7 +3094,8 @@ private:
 private:
     ConstructParameters _cp;
     Ref<RenderPass>     _renderPass;
-    uint64_t            _frameIndex = 0;
+    FrameStatus         _frameStatus = ENDED;
+    uint64_t            _frameIndex  = 0;
     vk::Queue           _presentQueue;
     Ref<CommandQueue>   _graphicsQueue;
 
@@ -3042,6 +3108,9 @@ private:
     inline static constexpr BackbufferStatus DESIRED_PRESENT_STATUS = PresentParameters().backbufferStatus;
 
 private:
+    const FrameImpl & currentFrame() const { return _frames[_frameIndex % std::size(_frames)]; }
+    FrameImpl &       currentFrame() { return _frames[_frameIndex % std::size(_frames)]; }
+
     void updateDepthFormat() {
         switch (_cp.depthStencilFormat.mode) {
         case DepthStencilFormat::DISABLED:
@@ -3063,14 +3132,19 @@ private:
         }
     }
 
-    void recoverSwapchainOnPresentError(vk::Result result, FrameImpl & frame) {
-        // this means window/surface size is changed, we need to recreate the swapchain.
-        RVI_LOGW("Present() returns: %s. Need to recreate swapchain.", vk::to_string(result).c_str());
+    void recoverSwapchainOnPresentError() {
         // RVI_LOGD("Waiting for graphics queue to idle...");
-        _graphicsQueue->wait(frame.frameEndSubmission); // make sure frame rendering is done.
-        _presentQueue.waitIdle();                       // also need to make sure present is done.
+        _graphicsQueue->waitIdle(); // make sure frame rendering is done.
+        _presentQueue.waitIdle();   // also need to make sure present is done.
         // RVI_LOGD("Graphics queue is idle.");
-        frame.frameEndSubmission = {};
+
+        // verify surface caps.
+        auto surfaceCaps = _cp.gi->physical.getSurfaceCapabilitiesKHR(_cp.surface);
+        if (0 == surfaceCaps.maxImageExtent.width || 0 == surfaceCaps.maxImageExtent.height) {
+            RVI_LOGE("Can't Re-create swapchain, since the surface is minimized.");
+            return;
+        }
+
         recreateWindowSwapchain();
         RVI_LOGI("Swapchainn recovered.");
     }
@@ -3115,9 +3189,6 @@ private:
         _renderPass.reset(new RenderPass(params));
 
         recreateWindowSwapchain();
-
-        // begin the first frame.
-        beginFrame();
     }
 
     void constructHeadlessSwapchain() {
@@ -3135,9 +3206,6 @@ private:
         _renderPass.reset(new RenderPass(params));
 
         recreateHeadlessSwapchain();
-
-        // begin the first frame.
-        beginFrame();
     }
 
     void clearSwapchain() {
@@ -3354,24 +3422,6 @@ private:
 
         _graphicsQueue->waitIdle();
     }
-
-    void beginFrame() {
-        auto & frame = _frames[_frameIndex % std::size(_frames)];
-        frame.index  = _frameIndex;
-
-        // wait for the frame to be available again.
-        if (frame.frameEndSubmission) {
-            _graphicsQueue->wait({frame.frameEndSubmission});
-            frame.frameEndSubmission = {}; // Clear the command buffer. So we only wait it once.
-        }
-
-        // Acquire the next available swapchain image. Only do this if we are not in headless mode.
-        if (_handle) {
-            frame.imageIndex = _cp.gi->device.acquireNextImageKHR(_handle, uint64_t(-1), frame.imageAvailable).value;
-            RAPID_VULKAN_ASSERT(frame.imageIndex < _backbuffers.size());
-            frame.backbuffer = &_backbuffers[frame.imageIndex];
-        }
-    }
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -3385,7 +3435,7 @@ auto Swapchain::renderPass() const -> vk::RenderPass { return _impl->renderPass(
 auto Swapchain::graphics() const -> CommandQueue & { return _impl->graphics(); }
 void Swapchain::cmdBeginBuiltInRenderPass(vk::CommandBuffer cb, const BeginRenderPassParameters & bp) { return _impl->cmdBeginBuiltInRenderPass(cb, bp); }
 void Swapchain::cmdEndBuiltInRenderPass(vk::CommandBuffer cb) { return _impl->cmdEndBuiltInRenderPass(cb); }
-auto Swapchain::currentFrame() const -> const Swapchain::Frame & { return _impl->currentFrame(); }
+auto Swapchain::beginFrame() -> const Frame * { return _impl->beginFrame(); }
 void Swapchain::present(const PresentParameters & pp) { return _impl->present(pp); }
 
 // *********************************************************************************************************************
