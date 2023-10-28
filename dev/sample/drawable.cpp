@@ -65,7 +65,7 @@ void entry(const Options & options) {
     auto device = Device(Device::ConstructParameters {instance}.setSurface(glfw.surface).setPrintVkInfo(options.verbosity));
     auto gi     = device.gi();
     auto q      = CommandQueue({{"main"}, gi, device.graphics()->family(), device.graphics()->index()});
-    auto sw     = Swapchain(Swapchain::ConstructParameters {{"swapchain"}}.setDevice(device).setDimensions(w, h));
+    auto sw     = Swapchain(Swapchain::ConstructParameters {{"swapchain"}}.setDevice(device));
     auto vs     = Shader(Shader::ConstructParameters {{"vs"}}.setGi(gi).setSpirv(pipeline_vert));
     auto fs     = Shader(Shader::ConstructParameters {{"fs"}, gi}.setSpirv(pipeline_frag));
     auto p      = GraphicsPipeline(GraphicsPipeline::ConstructParameters {}
