@@ -54,6 +54,8 @@ TEST_CASE("texture-array", "[perf]") {
     d.t({0, 1}, a);
     d.s({0, 2}, {s.handle()});
 
+    REQUIRE(sw.beginFrame() != nullptr);
+
     auto c = q->begin("texture-array");
     Barrier()
         .i(t.handle(), vk::AccessFlagBits::eNone, vk::AccessFlagBits::eShaderRead, vk::ImageLayout::eUndefined, vk::ImageLayout::eShaderReadOnlyOptimal,

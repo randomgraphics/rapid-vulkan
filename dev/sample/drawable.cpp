@@ -4,6 +4,7 @@
 #include "../rv.h"
 #include <iostream>
 #include <cmath>
+#include <thread>
 
 namespace drawable {
 
@@ -31,6 +32,16 @@ struct GLFWInit {
     void show() {
         if (window) glfwShowWindow(window);
     }
+    bool processEvents() const {
+        if (!window) return false;
+        glfwPollEvents();
+        if (glfwWindowShouldClose(window)) return false;
+        while (glfwGetWindowAttrib(window, GLFW_ICONIFIED)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            glfwPollEvents();
+        }
+        return true;
+    }
 };
 
 struct Options {
@@ -54,7 +65,7 @@ void entry(const Options & options) {
     auto device = Device(Device::ConstructParameters {instance}.setSurface(glfw.surface).setPrintVkInfo(options.verbosity));
     auto gi     = device.gi();
     auto q      = CommandQueue({{"main"}, gi, device.graphics()->family(), device.graphics()->index()});
-    auto sw     = Swapchain(Swapchain::ConstructParameters {{"swapchain"}}.setDevice(device).setDimensions(w, h));
+    auto sw     = Swapchain(Swapchain::ConstructParameters {{"swapchain"}}.setDevice(device).setDimensions(options.headless ? w : 0, options.headless ? h : 0));
     auto vs     = Shader(Shader::ConstructParameters {{"vs"}}.setGi(gi).setSpirv(pipeline_vert));
     auto fs     = Shader(Shader::ConstructParameters {{"fs"}, gi}.setSpirv(pipeline_frag));
     auto p      = GraphicsPipeline(GraphicsPipeline::ConstructParameters {}
@@ -92,38 +103,41 @@ void entry(const Options & options) {
     // show the window and begin the rendering loop.
     glfw.show();
     for (;;) {
-        // Standard boilerplate of rendering a frame. It is basically the same as triangle.cpp.
-        if (options.headless) {
-            if (sw.currentFrame().index > options.headless) break; // render required number of frames in headless mode, then quit.
-            std::cout << "Frame " << sw.currentFrame().index << std::endl;
-        } else {
-            if (glfwWindowShouldClose(glfw.window)) break;
-            glfwPollEvents();
+        if (!options.headless && !glfw.processEvents()) break;
+        auto frame = sw.beginFrame();
+        if (frame) {
+            // Standard boilerplate of rendering a frame. It is basically the same as triangle.cpp.
+            if (options.headless) {
+                if (frame->index > options.headless) break; // render required number of frames in headless mode, then quit.
+                std::cout << "Frame " << frame->index << std::endl;
+            }
+            // Animate the triangle. Note that this is not the most efficient way to animate things, since it serializes
+            // CPU and GPU. But it's simple and it is not the focus of this sample.
+            auto elapsed = (float) frame->index / 60.0f;
+            u0.setContent(bc.setData<float>({(float) std::sin(elapsed) * .25f, (float) std::cos(elapsed) * .25f}));
+            u1.setContent(bc.setData<float>({(float) std::sin(elapsed) * .5f + .5f, (float) std::cos(elapsed) * .5f + .5f, 1.f}));
+
+            // acquire a command buffer
+            auto c = q.begin("pipeline");
+
+            // begin the render pass
+            sw.cmdBeginBuiltInRenderPass(c, Swapchain::BeginRenderPassParameters {}.setClearColorF({0.0f, 1.0f, 0.0f, 1.0f})); // clear to green
+
+            // compile the drawable to generate the draw pack. Draw pack is a renderable and immutable representation of
+            // the current state of the drawable.
+            auto dp = dr.compile();
+
+            // enqueue the draw pack to command buffer.
+            c.render(*dp);
+
+            // end render pass
+            sw.cmdEndBuiltInRenderPass(c);
+
+            // submit the command buffeer
+            q.submit({c, {}, {frame->imageAvailable}, {frame->renderFinished}});
         }
-        auto & frame = sw.currentFrame();
-        auto   c     = q.begin("pipeline");
 
-        // Animate the triangle. Note that this is not the most efficient way to animate things, since it serializes
-        // CPU and GPU. But it's simple and it is not the focus of this sample.
-        auto elapsed = (float) frame.index / 60.0f;
-        u0.setContent(bc.setData<float>({(float) std::sin(elapsed) * .25f, (float) std::cos(elapsed) * .25f}));
-        u1.setContent(bc.setData<float>({(float) std::sin(elapsed) * .5f + .5f, (float) std::cos(elapsed) * .5f + .5f, 1.f}));
-
-        // begin the render pass
-        sw.cmdBeginBuiltInRenderPass(c, Swapchain::BeginRenderPassParameters {}.setClearColorF({0.0f, 1.0f, 0.0f, 1.0f})); // clear to green
-
-        // compile the drawable to generate the draw pack. Draw pack is a renderable and immutable representation of
-        // the current state of the drawable.
-        auto dp = dr.compile();
-
-        // enqueue the draw pack to command buffer.
-        c.render(*dp);
-
-        // end render pass
-        sw.cmdEndBuiltInRenderPass(c);
-
-        // submit and present
-        q.submit({c, {}, {frame.imageAvailable}, {frame.renderFinished}});
+        // end of the frame.
         sw.present({});
     }
     device.waitIdle();
