@@ -65,7 +65,7 @@ void entry(const Options & options) {
     auto vs     = Shader(Shader::ConstructParameters {{"triangle-vs"}}.setGi(gi).setSpirv(triangle_vert));
     auto fs     = Shader(Shader::ConstructParameters {{"triangle-fs"}, gi}.setSpirv(triangle_frag));
     auto q      = CommandQueue({{"main"}, gi, device.graphics()->family(), device.graphics()->index()});
-    auto sw     = Swapchain(Swapchain::ConstructParameters {{"triangle"}}.setDevice(device));
+    auto sw     = Swapchain(Swapchain::ConstructParameters {{"triangle"}}.setDevice(device).setDimensions(options.headless ? w : 0, options.headless ? h : 0));
 
     // create the graphics pipeline
     auto gcp = GraphicsPipeline::ConstructParameters {{"triangle"}}.setRenderPass(sw.renderPass()).setVS(&vs).setFS(&fs);
