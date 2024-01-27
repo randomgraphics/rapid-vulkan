@@ -18,7 +18,7 @@ int main() {
   auto cs       = Shader(Shader::ConstructParameters{{"my shader"}, device->gi}.setSpriv(spv));
   auto pipeline = ComputePipeline({{"my pipline"}, &cs});
   auto queue    = device->compute();
-  auto commands = q.begin("my command buffer");
+  auto commands = queue.begin("my command buffer");
   pipeline.cmdDispatch(commands, {1, 1, 1});
   queue.submit({commands});
   queue.wait();
