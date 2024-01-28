@@ -2614,7 +2614,10 @@ private:
         return iter->second.allocate();
     }
 
-    void updateResourceReferenceList(const DrawPack &) { RVI_ASSERT(false, "not implemented yet."); }
+    void updateResourceReferenceList(const DrawPack &) {
+        //
+        // RVI_ASSERT(false, "not implemented yet.");
+    }
 };
 
 auto CommandBuffer::name() const -> const std::string & {
@@ -2855,7 +2858,7 @@ private:
     }
 
     void finishSubmission(PendingIterator iter) {
-        // Move all finished command buffers to finished list.
+        // Move all finished command buffers from pending list to finished list
         RVI_ASSERT(iter != _pending.end());
         ++iter;
         for (auto s = _pending.begin(); s != iter; ++s) {
@@ -2864,7 +2867,6 @@ private:
                 _finished[cb.get()] = cb;
             }
         }
-        // Remove all finished submissions from the pending list. This will also delete the command buffer objects.
         _pending.erase(_pending.begin(), iter);
     }
 

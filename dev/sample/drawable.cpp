@@ -68,37 +68,36 @@ void entry(const Options & options) {
     auto sw     = Swapchain(Swapchain::ConstructParameters {{"swapchain"}}.setDevice(device).setDimensions(options.headless ? w : 0, options.headless ? h : 0));
     auto vs     = Shader(Shader::ConstructParameters {{"vs"}}.setGi(gi).setSpirv(pipeline_vert));
     auto fs     = Shader(Shader::ConstructParameters {{"fs"}, gi}.setSpirv(pipeline_frag));
-    auto p      = GraphicsPipeline(GraphicsPipeline::ConstructParameters {}
-                                       .setRenderPass(sw.renderPass())
-                                       .setVS(&vs)
-                                       .setFS(&fs)
-                                       .dynamicScissor()
-                                       .dynamicViewport()
-                                       .addVertexAttribute(0, 0, vk::Format::eR32G32Sfloat)
-                                       .addVertexBuffer(2 * sizeof(float)));
-    p.doNotDeleteOnZeroRef(); // Make the stack-allocated pipeline instance compatible with Ref<>
+    auto p      = Ref(new GraphicsPipeline(GraphicsPipeline::ConstructParameters {}
+                                               .setRenderPass(sw.renderPass())
+                                               .setVS(&vs)
+                                               .setFS(&fs)
+                                               .dynamicScissor()
+                                               .dynamicViewport()
+                                               .addVertexAttribute(0, 0, vk::Format::eR32G32Sfloat)
+                                               .addVertexBuffer(2 * sizeof(float))));
 
     // This part is what this sample is about. We create some buffers and bind them to the drawable.
-    auto u0 = Buffer(Buffer::ConstructParameters {{"ub0"}, gi}.setUniform().setSize(sizeof(float) * 2));
-    auto u1 = Buffer(Buffer::ConstructParameters {{"ub1"}, gi}.setUniform().setSize(sizeof(float) * 3));
+    auto u0 = Ref(new Buffer(Buffer::ConstructParameters {{"ub0"}, gi}.setUniform().setSize(sizeof(float) * 2)));
+    auto u1 = Ref(new Buffer(Buffer::ConstructParameters {{"ub1"}, gi}.setUniform().setSize(sizeof(float) * 3)));
     auto bc = Buffer::SetContentParameters {}.setQueue(*device.graphics());
-    auto vb = Buffer(Buffer::ConstructParameters {{"vb"}, gi}.setVertex().setSize(sizeof(float) * 2 * 3));
-    vb.setContent(bc.setData<float>({-0.5f, -0.5f, 0.5f, -0.5f, 0.5f, 0.5f}));
+    auto vb = Ref(new Buffer(Buffer::ConstructParameters {{"vb"}, gi}.setVertex().setSize(sizeof(float) * 2 * 3)));
+    vb->setContent(bc.setData<float>({-0.5f, -0.5f, 0.5f, -0.5f, 0.5f, 0.5f}));
 
     // create a drawable object using the pipeline object.
-    auto dr = Drawable({{}, &p});
+    auto dr = Ref(new Drawable({{}, p}));
 
     // Bind uniform buffer u0 to set 0, index 0
-    dr.b({0, 0}, {{u0}});
+    dr->b({0, 0}, {{u0}});
 
     // Bind uniform buffer u1 to set 0, index 1
-    dr.b({0, 1}, {{u1}});
+    dr->b({0, 1}, {{u1}});
 
     // Bind vb as the vertex buffer.
-    dr.v({{vb}});
+    dr->v({{vb}});
 
     // setup draw parameters of the drawable to have 3 non-indexed vertices.
-    dr.draw(GraphicsPipeline::DrawParameters {}.setNonIndexed(3));
+    dr->draw(GraphicsPipeline::DrawParameters {}.setNonIndexed(3));
 
     // show the window and begin the rendering loop.
     glfw.show();
@@ -114,8 +113,8 @@ void entry(const Options & options) {
             // Animate the triangle. Note that this is not the most efficient way to animate things, since it serializes
             // CPU and GPU. But it's simple and it is not the focus of this sample.
             auto elapsed = (float) frame->index / 60.0f;
-            u0.setContent(bc.setData<float>({(float) std::sin(elapsed) * .25f, (float) std::cos(elapsed) * .25f}));
-            u1.setContent(bc.setData<float>({(float) std::sin(elapsed) * .5f + .5f, (float) std::cos(elapsed) * .5f + .5f, 1.f}));
+            u0->setContent(bc.setData<float>({(float) std::sin(elapsed) * .25f, (float) std::cos(elapsed) * .25f}));
+            u1->setContent(bc.setData<float>({(float) std::sin(elapsed) * .5f + .5f, (float) std::cos(elapsed) * .5f + .5f, 1.f}));
 
             // acquire a command buffer
             auto c = q.begin("pipeline");
@@ -125,10 +124,10 @@ void entry(const Options & options) {
 
             // compile the drawable to generate the draw pack. Draw pack is a renderable and immutable representation of
             // the current state of the drawable.
-            auto dp = dr.compile();
+            auto dp = dr->compile();
 
             // enqueue the draw pack to command buffer.
-            c.render(*dp);
+            c.render(dp);
 
             // end render pass
             sw.cmdEndBuiltInRenderPass(c);

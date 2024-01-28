@@ -618,11 +618,6 @@ public:
 
     constexpr Ref() = default;
 
-    Ref(T & t) {
-        _ptr = &t;
-        addRef(_ptr);
-    }
-
     Ref(T * t) {
         if (!t) return;
         _ptr = t;
@@ -784,6 +779,12 @@ private:
     /// @brief Pointer smart pointer is wrapping.
     T * _ptr = nullptr;
 };
+
+template<typename T, typename... ARGS>
+Ref<T> makeRef(ARGS &&... args) {
+    typedef typename std::remove_const<T>::type T_nc;
+    return Ref<T>(new T_nc(std::forward<ARGS>(args)...));
+}
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// A helper function to insert resource/memory barriers to command buffer
@@ -1581,8 +1582,8 @@ public:
     struct ConstructParameters : public Root::ConstructParameters {
         vk::RenderPass                                     pass {};
         uint32_t                                           subpass {};
-        const Shader *                                     vs {};
-        const Shader *                                     fs {};
+        const Shader *                                     vs {}; ///< vertex shasder. can't be null.
+        const Shader *                                     fs {}; ///< fragment shader. can be null.
         std::vector<vk::VertexInputAttributeDescription>   va {};
         std::vector<vk::VertexInputBindingDescription>     vb {};
         vk::PipelineInputAssemblyStateCreateInfo           ia {defaultIAStates()};
