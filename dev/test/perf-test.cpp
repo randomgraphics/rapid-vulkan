@@ -42,8 +42,7 @@ TEST_CASE("texture-array", "[perf]") {
     auto a = std::vector<ImageSampler>(N);
     for (uint32_t i = 0; i < N; ++i) {
         ImageSampler & is = a[i];
-        is.imageView      = t.getView({});
-        is.imageLayout    = vk::ImageLayout::eShaderReadOnlyOptimal;
+        is.setImage(t.getView({}), t, vk::ImageLayout::eShaderReadOnlyOptimal);
     }
 
     // create drawable
@@ -52,7 +51,7 @@ TEST_CASE("texture-array", "[perf]") {
     auto u = Buffer(Buffer::ConstructParameters {{"texture-array"}, gi}.setSize(sizeof(TextureArrayUniform)).setUniform());
     d.b({0, 0}, {{u}});
     d.t({0, 1}, a);
-    d.s({0, 2}, {s.handle()});
+    d.s({0, 2}, {s});
 
     REQUIRE(sw.beginFrame() != nullptr);
 

@@ -89,13 +89,13 @@ void entry(const Options & options) {
     auto dr = Drawable({{}, &p});
 
     // Bind uniform buffer u0 to set 0, index 0
-    dr.b({0, 0}, {{u0.handle()}});
+    dr.b({0, 0}, {{u0}});
 
     // Bind uniform buffer u1 to set 0, index 1
-    dr.b({0, 1}, {{u1.handle()}});
+    dr.b({0, 1}, {{u1}});
 
     // Bind vb as the vertex buffer.
-    dr.v({{vb.handle()}});
+    dr.v({{vb}});
 
     // setup draw parameters of the drawable to have 3 non-indexed vertices.
     dr.draw(GraphicsPipeline::DrawParameters {}.setNonIndexed(3));

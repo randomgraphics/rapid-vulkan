@@ -110,6 +110,11 @@ private:
     }
 };
 
+template<typename T>
+auto ref2handle(const T & ref) -> decltype(ref->handle()) {
+    return ref ? ref->handle() : decltype(ref->handle()) {};
+}
+
 } // end of namespace details
 
 #define RVI_ONCE_PER_SECOND(payload)                                                                        \
@@ -1773,7 +1778,7 @@ void DrawPack::cmdRender(vk::CommandBuffer cb, const RenderParameters & rp) cons
         auto & w = descriptors[s];
         if (w.empty()) continue;
 
-        // check if the descriptor set is changed or not compared to the previous draw pack.
+        // check if the descriptor set is changed or not.
         if (rp.previous && s < rp.previous->descriptors.size() && sameDescriptorSet(rp.previous->descriptors[s], w)) continue;
 
         auto set = rp.descriptorSetAllocator(*pipeline, s);
@@ -1790,9 +1795,9 @@ void DrawPack::cmdRender(vk::CommandBuffer cb, const RenderParameters & rp) cons
             cb.bindVertexBuffers(0, (uint32_t) vertexBuffers.size(), vertexBuffers.data(), vertexOffsets.data());
         }
 
-        if (indexBuffer.buffer) {
+        if (indexBuffer) {
             // indexed draw
-            cb.bindIndexBuffer(indexBuffer.buffer, indexBuffer.offset, indexType);
+            cb.bindIndexBuffer(indexBuffer, indexOffset, indexType);
             cb.drawIndexed(draw.indexCount, draw.instanceCount, draw.firstIndex, draw.vertexOffset, draw.firstInstance);
         } else {
             // non-indexed draw
@@ -1880,7 +1885,7 @@ public:
         args.buffers.assign(v.begin(), v.end());
         args.infos.resize(args.buffers.size());
         for (size_t i = 0; i < args.buffers.size(); ++i) {
-            args.infos[i].buffer = args.buffers[i].buffer;
+            args.infos[i].buffer = details::ref2handle(args.buffers[i].buffer);
             args.infos[i].offset = args.buffers[i].offset;
             args.infos[i].range  = args.buffers[i].size;
         }
@@ -1906,11 +1911,11 @@ public:
         for (size_t i = 0; i < args.images.size(); ++i) {
             auto & info  = args.infos[i];
             auto & image = args.images[i];
-            info.sampler = image.sampler;
+            info.sampler = image.sampler ? image.sampler->handle() : vk::Sampler();
             ImageArgs::Type t;
-            if (image.imageView) {
-                info.imageLayout = image.imageLayout;
-                info.imageView   = image.imageView;
+            if (image.view) {
+                info.imageLayout = image.layout;
+                info.imageView   = image.view;
                 t                = info.sampler ? ImageArgs::COMBINED : ImageArgs::IMAGE;
             } else {
                 info.imageLayout = vk::ImageLayout::eUndefined;
@@ -2065,7 +2070,7 @@ public:
         _dirty.graphicsOrDispatch = true;
     }
 
-    std::shared_ptr<const DrawPack> compile() const {
+    Ref<const DrawPack> compile() const {
         // if the pipeline is not ready, return a failsafe pack.
         if (!_pipeline) return failsafe();
 
@@ -2078,10 +2083,10 @@ public:
         // The drawable is changed since the last call to compile(0). We can't directly
         // modify the cached pack, since it may be used for rendering. Instead, we'll
         // create a new pack to store the compile result.
-        auto newPack = std::make_shared<DrawPack>();
+        auto newPack = Ref<DrawPack>(new DrawPack({_owner.name()}));
         if (_cachedPack) {
             // copy content of the cached pack to the new one.
-            *newPack = *_cachedPack;
+            copyStates(*_cachedPack, *newPack);
         } else {
             newPack->pipeline = _pipeline;
             _dirty.setAll();
@@ -2106,7 +2111,7 @@ public:
         // done
         _cachedPack = newPack;
         _dirty.clearAll();
-        return _cachedPack;
+        return newPack;
     }
 
 private:
@@ -2133,13 +2138,29 @@ private:
     vk::IndexType                                          _indexType = vk::IndexType::eUint16;
     GraphicsPipeline::DrawParameters                       _drawParameters;
     ComputePipeline::DispatchParameters                    _dispatchParameters;
-    mutable std::shared_ptr<const DrawPack>                _cachedPack;
+    mutable Ref<const DrawPack>                            _cachedPack;
     mutable DirtyFlags                                     _dirty {};
 
 private:
-    static std::shared_ptr<DrawPack> failsafe() {
-        static std::shared_ptr<DrawPack> pack(new DrawPack);
+    static Ref<const DrawPack> failsafe() {
+        static Ref<const DrawPack> pack(new DrawPack({"failsafe draw pack"}));
         return pack;
+    }
+
+    void copyStates(const DrawPack & from, DrawPack & to) const {
+        to.pipeline    = from.pipeline;
+        to.descriptors = from.descriptors;
+        to.constants.assign(from.constants.begin(), from.constants.end());
+        to.vertexBuffers.assign(from.vertexBuffers.begin(), from.vertexBuffers.end());
+        to.vertexOffsets.assign(from.vertexOffsets.begin(), from.vertexOffsets.end());
+        to.indexBuffer = from.indexBuffer;
+        to.indexOffset = from.indexOffset;
+        to.indexType   = from.indexType;
+        if (from.pipeline->bindPoint() == vk::PipelineBindPoint::eGraphics) {
+            to.draw = from.draw;
+        } else if (from.pipeline->bindPoint() == vk::PipelineBindPoint::eCompute) {
+            to.dispatch = from.dispatch;
+        }
     }
 
     Argument * get(DescriptorIdentifier id) { return &_descriptors[id]; }
@@ -2226,7 +2247,7 @@ private:
                     if (b.descriptorType != vk::DescriptorType::eSampler) {
                         for (size_t j = 0; j < img->images.size(); ++j) {
                             const auto & v = img->images[j];
-                            if (!v.imageView) {
+                            if (!v.view) {
                                 RVI_LOGE("Drawable (%s) validation error: : set %u binding %u contains empty image view at index %zu", _owner.name().c_str(),
                                          si, i, j);
                                 return false;
@@ -2276,7 +2297,7 @@ private:
                 RVI_LOGE("Drawable (%s) validation error: vertex buffer %zu is not set.", _owner.name().c_str(), i);
                 return false;
             }
-            pack.vertexBuffers.push_back(v.buffer);
+            pack.vertexBuffers.push_back(v.buffer->handle());
             pack.vertexOffsets.push_back(v.offset);
         }
 
@@ -2286,7 +2307,12 @@ private:
                 RVI_LOGE("Drawable (%s) validation error: index buffer is not set.", _owner.name().c_str());
                 return false;
             }
-            pack.indexBuffer = _indexBuffer;
+            if (_indexBuffer.size < _drawParameters.indexCount * (_indexType == vk::IndexType::eUint16 ? 2 : 4)) {
+                RVI_LOGE("Drawable (%s) validation error: index buffer is too small.", _owner.name().c_str());
+                return false;
+            }
+            pack.indexBuffer = _indexBuffer.buffer->handle();
+            pack.indexOffset = _indexBuffer.offset;
             pack.indexType   = _indexType;
         }
 
@@ -2322,17 +2348,10 @@ auto Drawable::t(DescriptorIdentifier id, vk::ArrayProxy<const ImageSampler> v) 
     _impl->set(id, v);
     return *this;
 }
-auto Drawable::s(DescriptorIdentifier id, vk::ArrayProxy<const vk::Sampler> v) -> Drawable & {
-    std::vector<ImageSampler> is;
-    is.reserve(v.size());
-    for (const auto & s : v) is.push_back({{}, {}, s});
-    _impl->set(id, is);
-    return *this;
-}
 auto Drawable::s(DescriptorIdentifier id, vk::ArrayProxy<const Ref<const Sampler>> v) -> Drawable & {
     std::vector<ImageSampler> is;
     is.reserve(v.size());
-    for (const auto & s : v) is.push_back({{}, {}, s->handle()});
+    for (const auto & s : v) is.push_back({{}, {}, {}, s});
     _impl->set(id, is);
     return *this;
 }
@@ -2356,7 +2375,7 @@ auto Drawable::dispatch(const ComputePipeline::DispatchParameters & v) -> Drawab
     _impl->set(v);
     return *this;
 }
-auto Drawable::compile() const -> std::shared_ptr<const DrawPack> { return _impl->compile(); };
+auto Drawable::compile() const -> Ref<const DrawPack> { return _impl->compile(); };
 
 // *********************************************************************************************************************
 // DescriptorPool
@@ -2474,9 +2493,6 @@ public:
         _handle                 = _queue.desc().gi->device.allocateCommandBuffers(info)[0];
         setVkHandleName(_queue.desc().gi->device, _handle, _name);
         _handle.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
-        // Must clear the last draw pack too. So nothng is skipped, even when the same draw pack that was used
-        // in the last round is enqueued.
-        _last = {};
     }
 
     void hibernate() {
@@ -2484,17 +2500,16 @@ public:
         clear();
     }
 
-    void render(const DrawPack & d) {
+    void render(Ref<const DrawPack> d) {
+        if (!d || !*d) return; // ignore empty draw pack
         if (RECORDING != _state) {
             RVI_LOGE("Failed to enqueue drawable: command buffer %s is not in RECORDING state!", _name.c_str());
             return;
         }
-        d.cmdRender(_handle, {_queue.desc().gi->device, [&](const Pipeline & p, uint32_t i) { return allocateDescriptorSet(p, i); }, &_last});
+        d->cmdRender(_handle, {_queue.desc().gi->device, [&](const Pipeline & p, uint32_t i) { return allocateDescriptorSet(p, i); }, _last.get()});
         _last = d;
 
-        // Do not hold a reference to the pipeline, since it may be destroyed before the command buffer is destroyed.
-        // TODO: use WeakRef
-        _last.pipeline = nullptr;
+        updateResourceReferenceList(*d);
     }
 
     const std::string & name() const { return _name; }
@@ -2559,7 +2574,12 @@ private:
     vk::CommandBuffer      _handle {};
     State                  _state = RECORDING;
     DescriptorPoolMap      _descriptorPools;
-    DrawPack               _last {};
+    Ref<const DrawPack>    _last;
+
+    std::set<Ref<const Pipeline>> _pipelines;
+    std::set<Ref<const Buffer>>   _buffers;
+    std::set<Ref<const Image>>    _images;
+    std::set<Ref<const Sampler>>  _samplers;
 
     friend class CommandBuffer;
 
@@ -2569,6 +2589,11 @@ private:
         gi->safeDestroy(_handle, _pool);
         gi->device.resetCommandPool(_pool);
         for (auto & p : _descriptorPools) p.second.purge();
+        _last = {};
+        _pipelines.clear();
+        _buffers.clear();
+        _images.clear();
+        _samplers.clear();
     }
 
     vk::DescriptorSet allocateDescriptorSet(const Pipeline & p, uint32_t setIndex) {
@@ -2588,6 +2613,8 @@ private:
         }
         return iter->second.allocate();
     }
+
+    void updateResourceReferenceList(const DrawPack &) { RVI_ASSERT(false, "not implemented yet."); }
 };
 
 auto CommandBuffer::name() const -> const std::string & {
@@ -2598,11 +2625,11 @@ auto CommandBuffer::handle() const -> vk::CommandBuffer { return _impl ? _impl->
 bool CommandBuffer::finished() const { return _impl ? Impl::FINISHED == _impl->_state : false; }
 bool CommandBuffer::pending() const { return _impl ? Impl::EXECUTING == _impl->_state : false; }
 bool CommandBuffer::recording() const { return _impl ? Impl::RECORDING == _impl->_state : false; }
-auto CommandBuffer::render(const DrawPack & d) const -> const CommandBuffer & {
+auto CommandBuffer::render(Ref<const DrawPack> d) const -> const CommandBuffer & {
     if (_impl) _impl->render(d);
     return *this;
 }
-auto CommandBuffer::render(const DrawPack & d) -> CommandBuffer & {
+auto CommandBuffer::render(Ref<const DrawPack> d) -> CommandBuffer & {
     if (_impl) _impl->render(d);
     return *this;
 }

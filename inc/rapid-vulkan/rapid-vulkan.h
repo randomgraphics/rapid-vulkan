@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identify the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 21
+#define RAPID_VULKAN_HEADER_REVISION 22
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -1307,11 +1307,11 @@ public:
     ///               Set to vk::ImageAspectFlagBits::eNone to let the function determine the aspect flags.
     static vk::ImageAspectFlags determineImageAspect(vk::Format format, vk::ImageAspectFlags hint = vk::ImageAspectFlagBits::eNoneKHR);
 
-    /// @brief Construct an image from scratch
+    /// @brief Construct an image from scratch (will create a new vk::Image handle)
     Image(const ConstructParameters &);
 
     /// @brief Create an image class instance from an existing vk::Image.
-    /// Note that some functionalies of the image class could be limited.
+    /// It is caller's responsibility to make sure that the image handle is valid during the lifetime of the Image object.
     Image(const ImportParameters &);
 
     ~Image();
@@ -1320,6 +1320,7 @@ public:
     const Desc & desc() const;
 
     /// @brief Retrieve a vk::ImageView of the image.
+    /// The returned view object will hold a reference to the image object.
     vk::ImageView getView(const GetViewParameters &) const;
 
     /// @brief Synchronously set content of one subresource
@@ -1362,10 +1363,13 @@ public:
         }
     };
 
+    /// @brief Construct a new sampler object (will create a new vk::Sampler handle)
     Sampler(const ConstructParameters & cp): Root(cp), _gi(cp.gi) {
         _handle = _gi->device.createSampler(cp.info, _gi->allocator);
         onNameChanged("");
     }
+
+    // TODO: import from existing vk::Sampler handle
 
     ~Sampler() override { _gi->safeDestroy(_handle); }
 
@@ -1442,7 +1446,7 @@ private:
 // ---------------------------------------------------------------------------------------------------------------------
 /// @brief View to a sub-range of a buffer.
 struct BufferView {
-    vk::Buffer     buffer = {};
+    Ref<Buffer>    buffer = {};
     vk::DeviceSize offset = 0;
     vk::DeviceSize size   = vk::DeviceSize(-1);
 
@@ -1467,34 +1471,30 @@ struct BufferView {
 ///
 /// The case that both image and sampler are empty is not allowed and could trigger undefined behavior.
 struct ImageSampler {
-    /// @brief The view of the image
-    vk::ImageView imageView {};
+    vk::ImageView    view = {};
+    Ref<const Image> image; ///< The optional image object that the view belongs to. Note that this value is not really used in rendering, it is just here
+                            ///< to keep a reference to the image to keep it alive during rendering. If you can manage the lifetime of the image object
+                            ///< yourself, feel free to leave this field empty.
+    vk::ImageLayout layout = vk::ImageLayout::eUndefined;
 
-    /// @brief The layout of the image view. Ignored when image view is empty.
-    vk::ImageLayout imageLayout = vk::ImageLayout::eUndefined;
+    Ref<const Sampler> sampler;
 
-    /// @brief The sampler object.
-    vk::Sampler sampler {};
-
-    ImageSampler & setImageView(vk::ImageView v) {
-        imageView = v;
+    ImageSampler & setImage(vk::ImageView v, Ref<const Image> i, vk::ImageLayout l) {
+        view   = v;
+        image  = i;
+        layout = l;
         return *this;
     }
 
-    ImageSampler & setImageLayout(vk::ImageLayout v) {
-        imageLayout = v;
-        return *this;
-    }
-
-    ImageSampler & setSampler(vk::Sampler v) {
+    ImageSampler & setSampler(Ref<const Sampler> v) {
         sampler = v;
         return *this;
     }
 
     bool operator==(const ImageSampler & rhs) const {
         if (this == &rhs) return true;
-        if (imageView != rhs.imageView) return false;
-        return sampler != rhs.sampler;
+        if (view != rhs.view) return false;
+        return sampler == rhs.sampler;
     }
 
     bool operator!=(const ImageSampler & rhs) const { return !(*this == rhs); }
@@ -1764,43 +1764,48 @@ public:
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// @brief A compact snapshot of the drawable object.
-struct DrawPack {
+class DrawPack : public Root {
+public:
+    DrawPack(const Root::ConstructParameters & cp): Root(cp) {}
+
+    ~DrawPack() override = default;
+
     struct ConstantArgument {
         vk::ShaderStageFlags stages {};
         uint32_t             offset {};
         std::vector<uint8_t> value {};
     };
 
-    Ref<const Pipeline> pipeline;
+    Ref<const Pipeline>          pipeline; ///< Pipeline used by the draw pack.
+    std::set<Ref<const Image>>   images;   ///< Images used by the draw pack.
+    std::set<Ref<const Sampler>> samplers; ///< Samplers used by the draw pack.
+    std::set<Ref<const Buffer>>  buffers;  ///< Buffers used by the draw pack.
 
     std::vector<std::vector<vk::WriteDescriptorSet>> descriptors;
-
-    std::vector<ConstantArgument> constants;
-
-    std::vector<vk::Buffer>     vertexBuffers;
-    std::vector<vk::DeviceSize> vertexOffsets;
-
-    BufferView    indexBuffer;                        ///< Index buffer. Set to null for non-indexed draw.
-    vk::IndexType indexType = vk::IndexType::eUint16; ///< Type of index. Ignored for non-indexed draw.
+    std::vector<ConstantArgument>                    constants;
+    std::vector<vk::Buffer>                          vertexBuffers;
+    std::vector<vk::DeviceSize>                      vertexOffsets;
+    vk::Buffer                                       indexBuffer;                          ///< Index buffer. Null, if the draw is non-indexed.
+    vk::DeviceSize                                   indexOffset = 0;                      ///< Offset into the index buffer. Ignored for non-indexed draw.
+    vk::IndexType                                    indexType   = vk::IndexType::eUint16; ///< Type of index. Ignored for non-indexed draw.
 
     union {
         GraphicsPipeline::DrawParameters    draw;     ///< Draw parameters for graphics pipeline.
         ComputePipeline::DispatchParameters dispatch; ///< Dispatch parameters for compute pipeline.
     };
 
-    DrawPack() {}
-
-    ~DrawPack() {}
-
     typedef std::function<vk::DescriptorSet(const Pipeline &, uint32_t setIndex)> DescriptorSetAllocator;
-
     struct RenderParameters {
         vk::Device             device {};
         DescriptorSetAllocator descriptorSetAllocator {};
         const DrawPack *       previous {};
     };
-
     void cmdRender(vk::CommandBuffer cb, const RenderParameters &) const;
+
+    /// @brief A draw pack is considered empty if it does not contain any pipeline.
+    bool empty() const { return !pipeline; }
+
+    operator bool() const { return !empty(); }
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1848,9 +1853,6 @@ public:
     Drawable & t(DescriptorIdentifier id, vk::ArrayProxy<const ImageSampler>);
 
     /// @brief Set value of sampler argument. Do nothing if the argument is not used by the pipeline.
-    Drawable & s(DescriptorIdentifier id, vk::ArrayProxy<const vk::Sampler>);
-
-    /// @brief Set value of sampler argument. Do nothing if the argument is not used by the pipeline.
     Drawable & s(DescriptorIdentifier id, vk::ArrayProxy<const Ref<const Sampler>>);
 
     /// @brief Set value of push constant.
@@ -1874,8 +1876,8 @@ public:
     /// @brief Set dispatch parameters
     Drawable & dispatch(const ComputePipeline::DispatchParameters &);
 
-    /// @brief Create a compat snapshot of the drawable.
-    std::shared_ptr<const DrawPack> compile() const;
+    /// @brief Create a compact snapshot of the drawable.
+    Ref<const DrawPack> compile() const;
 
 private:
     class Impl;
@@ -1920,10 +1922,10 @@ public:
     /// @brief Enqueue a draw pack to the queue to be rendered later.
     /// The drawable and the associated resources are considered in-use until the command buffer is dropped or finished executing on GPU.
     /// Deleting the drawable object before the command buffer is dropped or finished executing on GPU will result in undefined behavior.
-    const CommandBuffer & render(const DrawPack &) const;
+    const CommandBuffer & render(Ref<const DrawPack>) const;
 
     /// @brief Enqueue a draw pack to the queue to be rendered later.
-    CommandBuffer & render(const DrawPack &);
+    CommandBuffer & render(Ref<const DrawPack>);
 
     CommandBuffer & operator=(const CommandBuffer & o) {
         _impl = o._impl;
@@ -2214,8 +2216,6 @@ public:
     void present(const PresentParameters &);
 
     /// @brief Begin a new built-in render pass. Can only be called between beginFrame() and present().
-    /// @param
-    /// @param
     void cmdBeginBuiltInRenderPass(vk::CommandBuffer, const BeginRenderPassParameters &);
 
     /// @brief End the built-in render pass.
