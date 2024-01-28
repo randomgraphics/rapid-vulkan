@@ -616,6 +616,13 @@ public:
         return Ref(t);
     }
 
+    /// @brief Construct a new instance directly from type T's construct parameter list.
+    template<typename... ARGS>
+    static Ref make(ARGS &&... args) {
+        typedef typename std::remove_const<T>::type T_nc;
+        return Ref(new T_nc(std::forward<ARGS>(args)...));
+    }
+
     constexpr Ref() = default;
 
     Ref(T * t) {
@@ -779,12 +786,6 @@ private:
     /// @brief Pointer smart pointer is wrapping.
     T * _ptr = nullptr;
 };
-
-template<typename T, typename... ARGS>
-Ref<T> makeRef(ARGS &&... args) {
-    typedef typename std::remove_const<T>::type T_nc;
-    return Ref<T>(new T_nc(std::forward<ARGS>(args)...));
-}
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// A helper function to insert resource/memory barriers to command buffer

@@ -68,14 +68,14 @@ void entry(const Options & options) {
     auto sw     = Swapchain(Swapchain::ConstructParameters {{"swapchain"}}.setDevice(device).setDimensions(options.headless ? w : 0, options.headless ? h : 0));
     auto vs     = Shader(Shader::ConstructParameters {{"vs"}}.setGi(gi).setSpirv(pipeline_vert));
     auto fs     = Shader(Shader::ConstructParameters {{"fs"}, gi}.setSpirv(pipeline_frag));
-    auto p      = Ref(new GraphicsPipeline(GraphicsPipeline::ConstructParameters {}
-                                               .setRenderPass(sw.renderPass())
-                                               .setVS(&vs)
-                                               .setFS(&fs)
-                                               .dynamicScissor()
-                                               .dynamicViewport()
-                                               .addVertexAttribute(0, 0, vk::Format::eR32G32Sfloat)
-                                               .addVertexBuffer(2 * sizeof(float))));
+    auto p      = Ref<GraphicsPipeline>::make(GraphicsPipeline::ConstructParameters {}
+                                                  .setRenderPass(sw.renderPass())
+                                                  .setVS(&vs)
+                                                  .setFS(&fs)
+                                                  .dynamicScissor()
+                                                  .dynamicViewport()
+                                                  .addVertexAttribute(0, 0, vk::Format::eR32G32Sfloat)
+                                                  .addVertexBuffer(2 * sizeof(float)));
 
     // This part is what this sample is about. We create some buffers and bind them to the drawable.
     auto u0 = Ref(new Buffer(Buffer::ConstructParameters {{"ub0"}, gi}.setUniform().setSize(sizeof(float) * 2)));
