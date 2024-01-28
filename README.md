@@ -86,7 +86,7 @@ VkPipeline sits at the center of Vulkan architecture that defines how GPU pipeli
 
 - **`CommandBuffer`** is a wrapper of VkCommandBuffer. It consumes the `DrawPack` instances and enqueues render commands to command buffer. It is an one-time use object, after you submit it to command queue, simply drop your own reference to it and never touch it again. It's life time will be managed by the `CommandQueue` automatically.
 
-- **`CommandQueue`** is a wrapper of VkCommandQueue. It is responsible for creating/deleting/executing `CommandBuffer` instances. This is the main object that manages the life time of other objects required for rendering. It'll keep references of all objects used by rendering to prevent them from being released. Once rendering is done, it'll release all references.
+- **`CommandQueue`** is a wrapper of VkCommandQueue. It is responsible for creating/deleting/executing `CommandBuffer` instances.
 
 Here is an simplified example of using these classes to issue a draw command. See [drawable](dev/sample/drawable.cpp) sample for full source code.
 
