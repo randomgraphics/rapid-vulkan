@@ -81,12 +81,12 @@ VkPipeline sits at the center of Vulkan architecture that defines how GPU pipeli
   - Unlike the `Pipeline` object, all parameters of `Drawable` object is changeable, with only one exception: the Pipeline object attached to it. If you want to switch to an different pipeline object, you'll have to create another `Drawable` instance.
   - Once you are satisfied with the state of the drawable, you can call `compile()` method to generate a `DrawPack` instance, which is basically a snapshot of the current state of the `Drawable` object. After the `DrawPack` instance is generated, you can change the state of the `Drawable` object freely w/o affecting the state of already created `DrawPack` instances.
   - `DrawPack` class, although is defined as a simple C++ structure, should be treated as **immutable** too. Once it is created, do nothing to it but enqueue it to a `CommandBuffer` object. Modifying an already enqueued `DrawPack` instance could lead to undefined behavior.
-    - A `DrawPack` instance (wrapped insided a std::shared_ptr) can be enqueued into command buffer multiple times, or enqueued into multiple command buffers. It'll just repeat the same draw or dispatch action again.
-    - In the very rare case, you can tweak member values of a `DrawPack` instance to suite your special needs, but be sure to only do so before it is enqueued into any command buffer.
+    - One `DrawPack` instance can be safely enqueued into command buffer multiple times, or enqueued into multiple command buffers.
+    - In the very rare case, you can tweak member values of a `DrawPack` instance to suite your special needs, but be sure to do so before it is enqueued into any command buffers.
 
 - **`CommandBuffer`** is a wrapper of VkCommandBuffer. It consumes the `DrawPack` instances and enqueues render commands to command buffer. It is an one-time use object, after you submit it to command queue, simply drop your own reference to it and never touch it again. It's life time will be managed by the `CommandQueue` automatically.
 
-- **`CommandQueue`** is a wrapper of VkCommandQueue. It is responsible for creating/deleting/executing `CommandBuffer` instances.
+- **`CommandQueue`** is a wrapper of VkCommandQueue. It is responsible for creating/deleting/executing `CommandBuffer` instances. This is also the main object that manages the life time of other objects required for rendering. It'll keep references of all dependencies, such as buffers, images and pipelines, until rendering completes on GPU, preventing them from being released too early.
 
 Here is an simplified example of using these classes to issue a draw command. See [drawable](dev/sample/drawable.cpp) sample for full source code.
 
