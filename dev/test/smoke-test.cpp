@@ -8,17 +8,30 @@ TEST_CASE("api-version") {
     CHECK(instance.cp().apiVersion >= vk::enumerateInstanceVersion());
 }
 
+TEST_CASE("instance-counter") {
+    class A : public Root, public InstanceCounter<A> {
+    public:
+        A(): Root({}) {}
+        ~A() override {}
+    };
+
+    Root * p = new A();
+    REQUIRE(A::instanceCount() == 1);
+    delete p;
+    REQUIRE(A::instanceCount() == 0);
+}
+
 TEST_CASE("ref") {
     class A : public Root {
     public:
         A(): Root({}) {}
-        virtual ~A() {}
+        ~A() override {}
     };
 
     class B : public A {
     public:
         B() {}
-        virtual ~B() {}
+        ~B() override {}
     };
 
     SECTION("copy") {

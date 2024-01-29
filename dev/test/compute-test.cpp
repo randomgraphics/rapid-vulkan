@@ -32,6 +32,9 @@ TEST_CASE("cs-buffer-args") {
     auto rdc = RenderDocCapture();
     if (rdc) rdc.begin("cs-buffer-args");
 
+    // store the number of buffer objects currently alive.
+    auto numBuffers = Buffer::instanceCount();
+
     // create buffers and drawable
     auto b1 = Ref(new Buffer({{"buf1"}, TestVulkanInstance::device->gi(), 4, vk::BufferUsageFlagBits::eStorageBuffer}));
     b1->setContent(Buffer::SetContentParameters {}.setData(vk::ArrayProxy<const float> {1.0f}));
@@ -43,8 +46,9 @@ TEST_CASE("cs-buffer-args") {
     ap->c(0, vk::ArrayProxy<const float> {1.0f});
     ap->dispatch(ComputePipeline::DispatchParameters {1, 1, 1});
 
-    // Release buffer pointers to verify that drawable object is keeping it alive.
+    // This is to verify that the drawable object is keeping buffer objects alive.
     b1 = nullptr;
+    REQUIRE(Buffer::instanceCount() == numBuffers + 2);
 
     // run the compute shader to copy data from b1 to b2
     auto q = dev->graphics();
@@ -56,7 +60,14 @@ TEST_CASE("cs-buffer-args") {
         pack = nullptr; // release draw pack object to verify that all resource are kept alive by the command buffer.
         q->submit({c});
     }
+
+    REQUIRE(Buffer::instanceCount() == numBuffers + 2);
+
+    // Wait for the queue to finish. Once it returns, all resources used by it should be released.
     q->waitIdle();
+
+    // b1 should be released after the command queue is idle.
+    REQUIRE(Buffer::instanceCount() == numBuffers + 1);
 
     // read contents of b2
     auto c2 = b2->readContent({});

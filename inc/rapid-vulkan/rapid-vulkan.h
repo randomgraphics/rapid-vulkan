@@ -584,24 +584,16 @@ public:
     /// @brief Get the reference count of the object.
     uint64_t refCount() const { return _ref; }
 
-    /// @brief Get the total number of instances of this class.
-    static uint64_t instanceCount() { return _instanceCount; }
-
 protected:
-    Root(const ConstructParameters & params): _name("<no-name>"s) {
-        ++_instanceCount; // why?
-        setName(params.name);
-        --_instanceCount; // why?
-    }
+    Root(const ConstructParameters & params): _name("<no-name>"s) { setName(params.name); }
 
     virtual void onNameChanged(const std::string & oldName) { (void) oldName; }
 
 private:
     friend class RefBase;
-    std::string                         _name;
-    mutable std::atomic<uint64_t>       _ref               = 0;
-    bool                                _noDeleteOnZeroRef = false;
-    inline static std::atomic<uint64_t> _instanceCount     = 0;
+    std::string                   _name;
+    mutable std::atomic<uint64_t> _ref               = 0;
+    bool                          _noDeleteOnZeroRef = false;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -811,6 +803,22 @@ private:
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
+/// A utility class to count number of instances of a class.
+template<typename T>
+class InstanceCounter {
+public:
+    InstanceCounter() { ++_instanceCount; }
+
+    ~InstanceCounter() { --_instanceCount; }
+
+    /// @brief Get the total number of instances of this class.
+    static uint64_t instanceCount() { return _instanceCount; }
+
+private:
+    inline static std::atomic<uint64_t> _instanceCount = 0;
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
 /// A helper function to insert resource/memory barriers to command buffer
 struct Barrier {
     vk::PipelineStageFlags               srcStage     = vk::PipelineStageFlagBits::eAllCommands;
@@ -898,7 +906,7 @@ class CommandQueue;
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// A wrapper class for VkBuffer
-class Buffer : public Root {
+class Buffer : public Root, public InstanceCounter<Buffer> {
 public:
     struct Desc {
         vk::Buffer              handle = {};
@@ -1111,7 +1119,7 @@ private:
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// A wrapper class for VkImage and VkImageView
-class Image : public Root {
+class Image : public Root, public InstanceCounter<Image> {
 public:
     struct ConstructParameters : Root::ConstructParameters {
         const GlobalInfo *      gi     = nullptr;
