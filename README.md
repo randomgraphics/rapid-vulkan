@@ -78,9 +78,9 @@ VkPipeline sits at the center of Vulkan architecture that defines how GPU pipeli
 - **`Pipeline`** class is basically a wrapper of VkPipeline object. It has 2 sub classes for compute and graphics pipeline. It comes with utility methods that makes constructing a pipeline object more intuitive. Similar as the raw VkPipeline handle, the pipeline object is **immutable** once constructed.
 
 - **`Drawable`** class stores reference to a pipeline along with data and parameters used by the pipeline for rendering, such as buffers, images and constants. It can not be used directly for rendering but can generate `DrawPack` structure via the `Drawable::compile()` method. The `DrawPack` is a compact and self-contained struct that can be enqueued into command buffer for rendering.
-  - Unlike the `Pipeline` object, all parameters of `Drawable` object is changeable, with only one exception: the Pipeline object attached to it. If you want to switch to an different pipeline object, you'll have to create another `Drawable` instance.
+  - Unlike the `Pipeline` object, all parameters of `Drawable` object is changeable, with only one exception: the Pipeline object attached to it. To switch to another pipeline object, you'll have to create another `Drawable` instance.
   - Once you are satisfied with the state of the drawable, you can call `compile()` method to generate a `DrawPack` instance, which is basically a snapshot of the current state of the `Drawable` object. After the `DrawPack` instance is generated, you can change the state of the `Drawable` object freely w/o affecting the state of already created `DrawPack` instances.
-  - `DrawPack` class, although is defined as a simple C++ structure, should be treated as **immutable** too. Once it is created, do nothing to it but enqueue it to a `CommandBuffer` object. Modifying an already enqueued `DrawPack` instance could lead to undefined behavior.
+  - `DrawPack` class, although is defined as a simple C++ structure, should be treated as **immutable** and **opaque** too. Once it is created, do nothing to it but enqueue it to a `CommandBuffer` object. Modifying an already enqueued `DrawPack` instance could lead to undefined behavior.
     - One `DrawPack` instance can be safely enqueued into command buffer multiple times, or enqueued into multiple command buffers.
     - In the very rare case, you can tweak member values of a `DrawPack` instance to suite your special needs, but be sure to do so before it is enqueued into any command buffers.
 
@@ -99,10 +99,10 @@ Here is an simplified example of using these classes to issue a draw command. Se
     // Create a pipeline object
     GraphicsPipeline::ConstructParameters gcp {"my pipeline", gi};
     gcp.setRenderPass(rp).setVS(&vs).setFS(&fs);
-    auto p = makeRef<GraphicsPipeline>(gcp);
+    auto p = Ref<GraphicsPipeline>::make(gcp);
 
     // Create a drawable out of the pipeline object. Then attach resources to the drawable as inputs to the pipeline.
-    auto d = makeRef<Drawable>({{"my drawable"}, p});
+    auto d = Ref<Drawable>::make({{"my drawable"}, p});
     d->b({0, 0}, {buffer1}); // bind buffer1 to set 0, binding 0
     d->i({1, 2}, {image1, image2}); // bind image1 and image2 to set 1, binding 2
 
@@ -113,7 +113,7 @@ Here is an simplified example of using these classes to issue a draw command. Se
     auto pack = d.compile();
 
     // render the draw pack.
-    c->render(*pack);
+    c->render(pack);
 
     // submit the command buffer to GPU.
     auto s = gi.device->graphics()->submit({c});
