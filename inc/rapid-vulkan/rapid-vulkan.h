@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identify the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 21
+#define RAPID_VULKAN_HEADER_REVISION 22
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -319,6 +319,27 @@ namespace RAPID_VULKAN_NAMESPACE {
 
 using namespace std::string_literals;
 
+// namespace rv_details {
+//     /// put this into detail namespace to avoid name conflict with other libraries.
+//     union uint128_t {
+//         uint64_t u64[2];
+//         uint32_t u32[4];
+//         uint16_t u16[8];
+//         uint8_t  u8[16];
+//     };
+// }
+// } // namespace RAPID_VULKAN_NAMESPACE
+// namespace std {
+// template<> struct hash<RAPID_VULKAN_NAMESPACE::rv_details::uint128_t> {
+//     size_t operator()(const RAPID_VULKAN_NAMESPACE::rv_details::uint128_t & x) const noexcept {
+//         auto h1 = std::hash<uint64_t>()(x.u64[0]);
+//         auto h2 = std::hash<uint64_t>()(x.u64[1]);
+//         return h1 + 0x9e3779b9 + (h2 << 6) + (h2 >> 2);
+//     }
+// };
+// } // namespace std
+// namespace RAPID_VULKAN_NAMESPACE {
+
 // ---------------------------------------------------------------------------------------------------------------------
 /// A utility class used to pass commonly used Vulkan global information around.
 struct GlobalInfo {
@@ -328,6 +349,7 @@ struct GlobalInfo {
     uint32_t                        apiVersion          = 0;
     vk::Device                      device              = nullptr;
     uint32_t                        graphicsQueueFamily = VK_QUEUE_FAMILY_IGNORED;
+
 #if RAPID_VULKAN_ENABLE_VMA
     VmaAllocator vmaAllocator = nullptr;
 #endif
@@ -562,24 +584,16 @@ public:
     /// @brief Get the reference count of the object.
     uint64_t refCount() const { return _ref; }
 
-    /// @brief Get the total number of instances of this class.
-    static uint64_t instanceCount() { return _instanceCount; }
-
 protected:
-    Root(const ConstructParameters & params): _name("<no-name>"s) {
-        ++_instanceCount; // why?
-        setName(params.name);
-        --_instanceCount; // why?
-    }
+    Root(const ConstructParameters & params): _name("<no-name>"s) { setName(params.name); }
 
     virtual void onNameChanged(const std::string & oldName) { (void) oldName; }
 
 private:
     friend class RefBase;
-    std::string                         _name;
-    mutable std::atomic<uint64_t>       _ref               = 0;
-    bool                                _noDeleteOnZeroRef = false;
-    inline static std::atomic<uint64_t> _instanceCount     = 0;
+    std::string                   _name;
+    mutable std::atomic<uint64_t> _ref               = 0;
+    bool                          _noDeleteOnZeroRef = false;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -607,6 +621,7 @@ protected:
 // ---------------------------------------------------------------------------------------------------------------------
 /// Reference counter of any class inherited from Root. Because it relies on the intrinsic counter variable in the Root
 /// class, it is much more efficient and memory friendly than thd std::shared_ptr.
+/// \todo Support custom allocator
 template<typename T>
 class Ref : public RefBase {
 public:
@@ -616,12 +631,14 @@ public:
         return Ref(t);
     }
 
-    constexpr Ref() = default;
-
-    Ref(T & t) {
-        _ptr = &t;
-        addRef(_ptr);
+    /// @brief Construct a new instance directly from type T's construct parameter list.
+    template<typename... ARGS>
+    static Ref make(ARGS &&... args) {
+        typedef typename std::remove_const<T>::type T_nc;
+        return Ref(new T_nc(std::forward<ARGS>(args)...));
     }
+
+    constexpr Ref() = default;
 
     Ref(T * t) {
         if (!t) return;
@@ -786,6 +803,22 @@ private:
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
+/// A utility class to count number of instances of a class.
+template<typename T>
+class InstanceCounter {
+public:
+    InstanceCounter() { ++_instanceCount; }
+
+    ~InstanceCounter() { --_instanceCount; }
+
+    /// @brief Get the total number of instances of this class.
+    static uint64_t instanceCount() { return _instanceCount; }
+
+private:
+    inline static std::atomic<uint64_t> _instanceCount = 0;
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
 /// A helper function to insert resource/memory barriers to command buffer
 struct Barrier {
     vk::PipelineStageFlags               srcStage     = vk::PipelineStageFlagBits::eAllCommands;
@@ -873,7 +906,7 @@ class CommandQueue;
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// A wrapper class for VkBuffer
-class Buffer : public Root {
+class Buffer : public Root, public InstanceCounter<Buffer> {
 public:
     struct Desc {
         vk::Buffer              handle = {};
@@ -1086,7 +1119,7 @@ private:
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// A wrapper class for VkImage and VkImageView
-class Image : public Root {
+class Image : public Root, public InstanceCounter<Image> {
 public:
     struct ConstructParameters : Root::ConstructParameters {
         const GlobalInfo *      gi     = nullptr;
@@ -1307,11 +1340,11 @@ public:
     ///               Set to vk::ImageAspectFlagBits::eNone to let the function determine the aspect flags.
     static vk::ImageAspectFlags determineImageAspect(vk::Format format, vk::ImageAspectFlags hint = vk::ImageAspectFlagBits::eNoneKHR);
 
-    /// @brief Construct an image from scratch
+    /// @brief Construct an image from scratch (will create a new vk::Image handle)
     Image(const ConstructParameters &);
 
     /// @brief Create an image class instance from an existing vk::Image.
-    /// Note that some functionalies of the image class could be limited.
+    /// It is caller's responsibility to make sure that the image handle is valid during the lifetime of the Image object.
     Image(const ImportParameters &);
 
     ~Image();
@@ -1320,6 +1353,7 @@ public:
     const Desc & desc() const;
 
     /// @brief Retrieve a vk::ImageView of the image.
+    /// The returned view object will hold a reference to the image object.
     vk::ImageView getView(const GetViewParameters &) const;
 
     /// @brief Synchronously set content of one subresource
@@ -1362,10 +1396,13 @@ public:
         }
     };
 
+    /// @brief Construct a new sampler object (will create a new vk::Sampler handle)
     Sampler(const ConstructParameters & cp): Root(cp), _gi(cp.gi) {
         _handle = _gi->device.createSampler(cp.info, _gi->allocator);
         onNameChanged("");
     }
+
+    // TODO: import from existing vk::Sampler handle
 
     ~Sampler() override { _gi->safeDestroy(_handle); }
 
@@ -1442,7 +1479,7 @@ private:
 // ---------------------------------------------------------------------------------------------------------------------
 /// @brief View to a sub-range of a buffer.
 struct BufferView {
-    vk::Buffer     buffer = {};
+    Ref<Buffer>    buffer = {};
     vk::DeviceSize offset = 0;
     vk::DeviceSize size   = vk::DeviceSize(-1);
 
@@ -1467,34 +1504,38 @@ struct BufferView {
 ///
 /// The case that both image and sampler are empty is not allowed and could trigger undefined behavior.
 struct ImageSampler {
-    /// @brief The view of the image
-    vk::ImageView imageView {};
+    /// @brief The view of the image.
+    vk::ImageView view = {};
 
-    /// @brief The layout of the image view. Ignored when image view is empty.
-    vk::ImageLayout imageLayout = vk::ImageLayout::eUndefined;
+    /// @brief The image object that the view belongs to.
+    /// Note that this value is not really used in rendering, it is to keep a reference to the image object to keep
+    /// it alive during rendering. If you are managing the lifetime of the image object yourself, feel free to
+    /// leave this field empty.
+    Ref<const Image> image;
 
-    /// @brief The sampler object.
-    vk::Sampler sampler {};
+    /// @brief The layout of the image.
+    /// This field is only used when the view is not empty.
+    vk::ImageLayout layout = vk::ImageLayout::eUndefined;
 
-    ImageSampler & setImageView(vk::ImageView v) {
-        imageView = v;
+    /// @brief Reference to the sampler object.
+    Ref<const Sampler> sampler;
+
+    ImageSampler & setImage(vk::ImageView v, Ref<const Image> i, vk::ImageLayout l) {
+        view   = v;
+        image  = i;
+        layout = l;
         return *this;
     }
 
-    ImageSampler & setImageLayout(vk::ImageLayout v) {
-        imageLayout = v;
-        return *this;
-    }
-
-    ImageSampler & setSampler(vk::Sampler v) {
+    ImageSampler & setSampler(Ref<const Sampler> v) {
         sampler = v;
         return *this;
     }
 
     bool operator==(const ImageSampler & rhs) const {
         if (this == &rhs) return true;
-        if (imageView != rhs.imageView) return false;
-        return sampler != rhs.sampler;
+        if (view != rhs.view) return false;
+        return sampler == rhs.sampler;
     }
 
     bool operator!=(const ImageSampler & rhs) const { return !(*this == rhs); }
@@ -1581,8 +1622,8 @@ public:
     struct ConstructParameters : public Root::ConstructParameters {
         vk::RenderPass                                     pass {};
         uint32_t                                           subpass {};
-        const Shader *                                     vs {};
-        const Shader *                                     fs {};
+        const Shader *                                     vs {}; ///< vertex shasder. can't be null.
+        const Shader *                                     fs {}; ///< fragment shader. can be null.
         std::vector<vk::VertexInputAttributeDescription>   va {};
         std::vector<vk::VertexInputBindingDescription>     vb {};
         vk::PipelineInputAssemblyStateCreateInfo           ia {defaultIAStates()};
@@ -1764,43 +1805,96 @@ public:
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// @brief A compact snapshot of the drawable object.
-struct DrawPack {
+class DrawPack : public Root {
+public:
+    DrawPack(const Root::ConstructParameters & cp): Root(cp) {}
+
+    ~DrawPack() override = default;
+
+    /// @brief A list of resources that all descriptors depend on.
+    struct Dependencies {
+        typedef std::shared_ptr<std::vector<uint8_t>> Blob;
+
+        std::set<Ref<const Buffer>>  buffers;  ///< Buffers used by descriptors
+        std::set<Ref<const Image>>   images;   ///< Images used by descriptors
+        std::set<Ref<const Sampler>> samplers; ///< Samplers used by descriptors
+        std::vector<Blob>            blobs;    ///< Binary data used by descriptors
+
+        Dependencies() = default;
+
+        Dependencies(const Dependencies & rhs) {
+            buffers  = rhs.buffers;
+            images   = rhs.images;
+            samplers = rhs.samplers;
+            blobs    = rhs.blobs;
+        }
+
+        Dependencies(Dependencies && rhs) {
+            buffers  = std::move(rhs.buffers);
+            images   = std::move(rhs.images);
+            samplers = std::move(rhs.samplers);
+            blobs    = std::move(rhs.blobs);
+        }
+
+        Dependencies & operator=(const Dependencies & rhs) {
+            if (this == &rhs) return *this;
+            buffers  = rhs.buffers;
+            images   = rhs.images;
+            samplers = rhs.samplers;
+            blobs    = rhs.blobs;
+            return *this;
+        }
+
+        Dependencies & operator=(Dependencies && rhs) {
+            if (this == &rhs) return *this;
+            buffers  = std::move(rhs.buffers);
+            images   = std::move(rhs.images);
+            samplers = std::move(rhs.samplers);
+            blobs    = std::move(rhs.blobs);
+            return *this;
+        }
+
+        void clear() {
+            buffers.clear();
+            images.clear();
+            samplers.clear();
+            blobs.clear();
+        }
+    };
+
     struct ConstantArgument {
         vk::ShaderStageFlags stages {};
         uint32_t             offset {};
         std::vector<uint8_t> value {};
     };
 
-    Ref<const Pipeline> pipeline;
-
+    Ref<const Pipeline>                              pipeline; ///< Pipeline used by the draw pack.
     std::vector<std::vector<vk::WriteDescriptorSet>> descriptors;
-
-    std::vector<ConstantArgument> constants;
-
-    std::vector<vk::Buffer>     vertexBuffers;
-    std::vector<vk::DeviceSize> vertexOffsets;
-
-    BufferView    indexBuffer;                        ///< Index buffer. Set to null for non-indexed draw.
-    vk::IndexType indexType = vk::IndexType::eUint16; ///< Type of index. Ignored for non-indexed draw.
+    Dependencies                                     dependencies;
+    std::vector<ConstantArgument>                    constants;
+    std::vector<Ref<Buffer>>                         vertexBuffers;
+    std::vector<vk::DeviceSize>                      vertexOffsets;
+    Ref<Buffer>                                      indexBuffer;                          ///< Index buffer. Null, if the draw is non-indexed.
+    vk::DeviceSize                                   indexOffset = 0;                      ///< Offset into the index buffer. Ignored for non-indexed draw.
+    vk::IndexType                                    indexType   = vk::IndexType::eUint16; ///< Type of index. Ignored for non-indexed draw.
 
     union {
         GraphicsPipeline::DrawParameters    draw;     ///< Draw parameters for graphics pipeline.
         ComputePipeline::DispatchParameters dispatch; ///< Dispatch parameters for compute pipeline.
     };
 
-    DrawPack() {}
-
-    ~DrawPack() {}
-
     typedef std::function<vk::DescriptorSet(const Pipeline &, uint32_t setIndex)> DescriptorSetAllocator;
-
     struct RenderParameters {
         vk::Device             device {};
         DescriptorSetAllocator descriptorSetAllocator {};
         const DrawPack *       previous {};
     };
-
     void cmdRender(vk::CommandBuffer cb, const RenderParameters &) const;
+
+    /// @brief A draw pack is considered empty if it does not contain any pipeline.
+    bool empty() const { return !pipeline; }
+
+    operator bool() const { return !empty(); }
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1848,9 +1942,6 @@ public:
     Drawable & t(DescriptorIdentifier id, vk::ArrayProxy<const ImageSampler>);
 
     /// @brief Set value of sampler argument. Do nothing if the argument is not used by the pipeline.
-    Drawable & s(DescriptorIdentifier id, vk::ArrayProxy<const vk::Sampler>);
-
-    /// @brief Set value of sampler argument. Do nothing if the argument is not used by the pipeline.
     Drawable & s(DescriptorIdentifier id, vk::ArrayProxy<const Ref<const Sampler>>);
 
     /// @brief Set value of push constant.
@@ -1874,8 +1965,8 @@ public:
     /// @brief Set dispatch parameters
     Drawable & dispatch(const ComputePipeline::DispatchParameters &);
 
-    /// @brief Create a compat snapshot of the drawable.
-    std::shared_ptr<const DrawPack> compile() const;
+    /// @brief Create a compact snapshot of the drawable.
+    Ref<const DrawPack> compile() const;
 
 private:
     class Impl;
@@ -1920,10 +2011,10 @@ public:
     /// @brief Enqueue a draw pack to the queue to be rendered later.
     /// The drawable and the associated resources are considered in-use until the command buffer is dropped or finished executing on GPU.
     /// Deleting the drawable object before the command buffer is dropped or finished executing on GPU will result in undefined behavior.
-    const CommandBuffer & render(const DrawPack &) const;
+    const CommandBuffer & render(Ref<const DrawPack>) const;
 
     /// @brief Enqueue a draw pack to the queue to be rendered later.
-    CommandBuffer & render(const DrawPack &);
+    CommandBuffer & render(Ref<const DrawPack>);
 
     CommandBuffer & operator=(const CommandBuffer & o) {
         _impl = o._impl;
@@ -2214,8 +2305,6 @@ public:
     void present(const PresentParameters &);
 
     /// @brief Begin a new built-in render pass. Can only be called between beginFrame() and present().
-    /// @param
-    /// @param
     void cmdBeginBuiltInRenderPass(vk::CommandBuffer, const BeginRenderPassParameters &);
 
     /// @brief End the built-in render pass.
