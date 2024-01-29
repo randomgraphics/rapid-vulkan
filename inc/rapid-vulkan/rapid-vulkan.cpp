@@ -84,7 +84,7 @@ namespace RAPID_VULKAN_NAMESPACE {
 #pragma warning(disable : 4201) // nonstandard extension used: nameless struct/union
 #endif
 
-namespace details {
+namespace rv_details {
 
 /// Utility class to schedule jobs in certain frequency.
 class Cron {
@@ -115,12 +115,12 @@ auto ref2handle(const T & ref) -> decltype(ref->handle()) {
     return ref ? ref->handle() : decltype(ref->handle()) {};
 }
 
-} // end of namespace details
+} // namespace rv_details
 
-#define RVI_ONCE_PER_SECOND(payload)                                                                        \
-    {                                                                                                       \
-        static details::Cron make_it_a_very_long_named_variable([&] { payload; }, std::chrono::seconds(1)); \
-        make_it_a_very_long_named_variable.check();                                                         \
+#define RVI_ONCE_PER_SECOND(payload)                                                                           \
+    {                                                                                                          \
+        static rv_details::Cron make_it_a_very_long_named_variable([&] { payload; }, std::chrono::seconds(1)); \
+        make_it_a_very_long_named_variable.check();                                                            \
     }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1792,13 +1792,20 @@ void DrawPack::cmdRender(vk::CommandBuffer cb, const RenderParameters & rp) cons
     if (vk::PipelineBindPoint::eGraphics == bp) {
         if (!vertexBuffers.empty()) {
             RVI_ASSERT(vertexBuffers.size() == vertexOffsets.size());
-            cb.bindVertexBuffers(0, (uint32_t) vertexBuffers.size(), vertexBuffers.data(), vertexOffsets.data());
+            std::vector<vk::Buffer> handles(vertexBuffers.size());
+            std::transform(vertexBuffers.begin(), vertexBuffers.end(), handles.begin(), [](const auto & v) { return v->handle(); });
+            cb.bindVertexBuffers(0, (uint32_t) vertexBuffers.size(), handles.data(), vertexOffsets.data());
         }
 
         if (indexBuffer) {
             // indexed draw
-            cb.bindIndexBuffer(indexBuffer, indexOffset, indexType);
-            cb.drawIndexed(draw.indexCount, draw.instanceCount, draw.firstIndex, draw.vertexOffset, draw.firstInstance);
+            auto ib = indexBuffer->handle();
+            if (ib) {
+                cb.bindIndexBuffer(ib, indexOffset, indexType);
+                cb.drawIndexed(draw.indexCount, draw.instanceCount, draw.firstIndex, draw.vertexOffset, draw.firstInstance);
+            } else {
+                RVI_LOGW("DrawPack %s has an invalid/empty index buffer.", name().c_str());
+            }
         } else {
             // non-indexed draw
             cb.draw(draw.vertexCount, draw.instanceCount, draw.firstVertex, draw.firstInstance);
@@ -1885,7 +1892,7 @@ public:
         args.buffers.assign(v.begin(), v.end());
         args.infos.resize(args.buffers.size());
         for (size_t i = 0; i < args.buffers.size(); ++i) {
-            args.infos[i].buffer = details::ref2handle(args.buffers[i].buffer);
+            args.infos[i].buffer = rv_details::ref2handle(args.buffers[i].buffer);
             args.infos[i].offset = args.buffers[i].offset;
             args.infos[i].range  = args.buffers[i].size;
         }
@@ -2083,6 +2090,7 @@ public:
         // The drawable is changed since the last call to compile(0). We can't directly
         // modify the cached pack, since it may be used for rendering. Instead, we'll
         // create a new pack to store the compile result.
+        // TODO: use a pool for faster memory allocation and better memory locality.
         auto newPack = Ref<DrawPack>(new DrawPack({_owner.name()}));
         if (_cachedPack) {
             // copy content of the cached pack to the new one.
@@ -2148,17 +2156,19 @@ private:
     }
 
     void copyStates(const DrawPack & from, DrawPack & to) const {
-        to.pipeline    = from.pipeline;
-        to.descriptors = from.descriptors;
+        to.pipeline     = from.pipeline;
+        to.descriptors  = from.descriptors;
+        to.dependencies = from.dependencies;
         to.constants.assign(from.constants.begin(), from.constants.end());
         to.vertexBuffers.assign(from.vertexBuffers.begin(), from.vertexBuffers.end());
         to.vertexOffsets.assign(from.vertexOffsets.begin(), from.vertexOffsets.end());
         to.indexBuffer = from.indexBuffer;
         to.indexOffset = from.indexOffset;
         to.indexType   = from.indexType;
-        if (from.pipeline->bindPoint() == vk::PipelineBindPoint::eGraphics) {
+        // draw and dispatch parameters are store in a union. So we only need to copy the one with larger size.
+        if constexpr (sizeof(to.draw) >= sizeof(to.dispatch)) {
             to.draw = from.draw;
-        } else if (from.pipeline->bindPoint() == vk::PipelineBindPoint::eCompute) {
+        } else {
             to.dispatch = from.dispatch;
         }
     }
@@ -2189,8 +2199,10 @@ private:
 
     bool compileDescriptors(DrawPack & pack) const {
         const auto & refl = _pipeline->reflection();
+        pack.dependencies.clear();
         pack.descriptors.clear();
         pack.descriptors.resize(refl.descriptors.size());
+        auto dep = DrawPack::Dependencies();
         for (uint32_t si = 0; si < refl.descriptors.size(); ++si) {
             const auto & s      = refl.descriptors[si];
             auto         writes = std::vector<vk::WriteDescriptorSet>();
@@ -2222,7 +2234,6 @@ private:
 
                 auto & value = a->value();
                 if (auto buf = std::get_if<Argument::Impl::BufferArgs>(&value)) {
-                    w.setBufferInfo(buf->infos);
                     for (size_t j = 0; j < buf->buffers.size(); ++j) {
                         const auto & v = buf->buffers[j];
                         if (!v.buffer) {
@@ -2230,9 +2241,14 @@ private:
                                      si, i, j);
                             return false;
                         }
+                        dep.buffers.insert(v.buffer);
                     }
+                    // Store a copy of buffer info in the DrawPack class. So its value is not affected by changes in the Drawable class after compilation.
+                    auto blob = std::make_shared<std::vector<uint8_t>>((uint8_t *) buf->infos.data(), (uint8_t *) (buf->infos.data() + buf->infos.size()));
+                    RVI_ASSERT(blob->size() == buf->infos.size() * sizeof(vk::DescriptorBufferInfo));
+                    dep.blobs.push_back(blob);
+                    w.setDescriptorCount((uint32_t) buf->infos.size()).setPBufferInfo((vk::DescriptorBufferInfo *) blob->data());
                 } else if (auto img = std::get_if<Argument::Impl::ImageArgs>(&value)) {
-                    w.setImageInfo(img->infos);
                     if (b.descriptorType == vk::DescriptorType::eSampler || b.descriptorType == vk::DescriptorType::eCombinedImageSampler) {
                         for (size_t j = 0; j < img->images.size(); ++j) {
                             const auto & v = img->images[j];
@@ -2241,7 +2257,7 @@ private:
                                          i, j);
                                 return false;
                             }
-                            // TODO: add the image to pack.images array to avoid it being released too early.
+                            dep.samplers.insert(v.sampler);
                         }
                     }
                     if (b.descriptorType != vk::DescriptorType::eSampler) {
@@ -2252,9 +2268,13 @@ private:
                                          si, i, j);
                                 return false;
                             }
-                            // TODO: add the image to pack.images array to avoid it being released too early.
+                            if (v.image) dep.images.insert(v.image);
                         }
                     }
+                    auto blob = std::make_shared<std::vector<uint8_t>>((uint8_t *) img->infos.data(), (uint8_t *) (img->infos.data() + img->infos.size()));
+                    RVI_ASSERT(blob->size() == img->infos.size() * sizeof(vk::DescriptorImageInfo));
+                    dep.blobs.emplace_back(blob);
+                    w.setDescriptorCount((uint32_t) img->infos.size()).setPImageInfo((vk::DescriptorImageInfo *) blob->data());
                 } else {
                     // we should not reach here, since we have already checked the type compatibility.
                     RAPID_VULKAN_ASSERT(false, "should never reach here.");
@@ -2268,6 +2288,7 @@ private:
                 writes.push_back(w);
             }
             pack.descriptors[si] = std::move(writes);
+            pack.dependencies    = std::move(dep);
         }
         return true;
     }
@@ -2297,7 +2318,7 @@ private:
                 RVI_LOGE("Drawable (%s) validation error: vertex buffer %zu is not set.", _owner.name().c_str(), i);
                 return false;
             }
-            pack.vertexBuffers.push_back(v.buffer->handle());
+            pack.vertexBuffers.push_back(v.buffer);
             pack.vertexOffsets.push_back(v.offset);
         }
 
@@ -2311,7 +2332,7 @@ private:
                 RVI_LOGE("Drawable (%s) validation error: index buffer is too small.", _owner.name().c_str());
                 return false;
             }
-            pack.indexBuffer = _indexBuffer.buffer->handle();
+            pack.indexBuffer = _indexBuffer.buffer;
             pack.indexOffset = _indexBuffer.offset;
             pack.indexType   = _indexType;
         }

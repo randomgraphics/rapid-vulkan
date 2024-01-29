@@ -43,11 +43,17 @@ TEST_CASE("cs-buffer-args") {
     ap->c(0, vk::ArrayProxy<const float> {1.0f});
     ap->dispatch(ComputePipeline::DispatchParameters {1, 1, 1});
 
+    // Release buffer pointers to verify that drawable object is keeping it alive.
+    b1 = nullptr;
+
     // run the compute shader to copy data from b1 to b2
     auto q = dev->graphics();
     REQUIRE(q);
     if (auto c = q->begin("cs-buffer-args")) {
-        c.render(ap->compile());
+        auto pack = ap->compile();
+        ap        = nullptr; // release drawable object to verify that all resource are kept alive by the draw pack object.
+        c.render(pack);
+        pack = nullptr; // release draw pack object to verify that all resource are kept alive by the command buffer.
         q->submit({c});
     }
     q->waitIdle();

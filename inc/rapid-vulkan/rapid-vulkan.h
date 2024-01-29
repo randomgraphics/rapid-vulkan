@@ -319,6 +319,27 @@ namespace RAPID_VULKAN_NAMESPACE {
 
 using namespace std::string_literals;
 
+// namespace rv_details {
+//     /// put this into detail namespace to avoid name conflict with other libraries.
+//     union uint128_t {
+//         uint64_t u64[2];
+//         uint32_t u32[4];
+//         uint16_t u16[8];
+//         uint8_t  u8[16];
+//     };
+// }
+// } // namespace RAPID_VULKAN_NAMESPACE
+// namespace std {
+// template<> struct hash<RAPID_VULKAN_NAMESPACE::rv_details::uint128_t> {
+//     size_t operator()(const RAPID_VULKAN_NAMESPACE::rv_details::uint128_t & x) const noexcept {
+//         auto h1 = std::hash<uint64_t>()(x.u64[0]);
+//         auto h2 = std::hash<uint64_t>()(x.u64[1]);
+//         return h1 + 0x9e3779b9 + (h2 << 6) + (h2 >> 2);
+//     }
+// };
+// } // namespace std
+// namespace RAPID_VULKAN_NAMESPACE {
+
 // ---------------------------------------------------------------------------------------------------------------------
 /// A utility class used to pass commonly used Vulkan global information around.
 struct GlobalInfo {
@@ -328,6 +349,7 @@ struct GlobalInfo {
     uint32_t                        apiVersion          = 0;
     vk::Device                      device              = nullptr;
     uint32_t                        graphicsQueueFamily = VK_QUEUE_FAMILY_IGNORED;
+
 #if RAPID_VULKAN_ENABLE_VMA
     VmaAllocator vmaAllocator = nullptr;
 #endif
@@ -607,6 +629,7 @@ protected:
 // ---------------------------------------------------------------------------------------------------------------------
 /// Reference counter of any class inherited from Root. Because it relies on the intrinsic counter variable in the Root
 /// class, it is much more efficient and memory friendly than thd std::shared_ptr.
+/// \todo Support custom allocator
 template<typename T>
 class Ref : public RefBase {
 public:
@@ -1473,12 +1496,20 @@ struct BufferView {
 ///
 /// The case that both image and sampler are empty is not allowed and could trigger undefined behavior.
 struct ImageSampler {
-    vk::ImageView    view = {};
-    Ref<const Image> image; ///< The optional image object that the view belongs to. Note that this value is not really used in rendering, it is just here
-                            ///< to keep a reference to the image to keep it alive during rendering. If you can manage the lifetime of the image object
-                            ///< yourself, feel free to leave this field empty.
+    /// @brief The view of the image.
+    vk::ImageView view = {};
+
+    /// @brief The image object that the view belongs to.
+    /// Note that this value is not really used in rendering, it is to keep a reference to the image object to keep
+    /// it alive during rendering. If you are managing the lifetime of the image object yourself, feel free to
+    /// leave this field empty.
+    Ref<const Image> image;
+
+    /// @brief The layout of the image.
+    /// This field is only used when the view is not empty.
     vk::ImageLayout layout = vk::ImageLayout::eUndefined;
 
+    /// @brief Reference to the sampler object.
     Ref<const Sampler> sampler;
 
     ImageSampler & setImage(vk::ImageView v, Ref<const Image> i, vk::ImageLayout l) {
@@ -1772,22 +1803,70 @@ public:
 
     ~DrawPack() override = default;
 
+    /// @brief A list of resources that all descriptors depend on.
+    struct Dependencies {
+        typedef std::shared_ptr<std::vector<uint8_t>> Blob;
+
+        std::set<Ref<const Buffer>>  buffers;  ///< Buffers used by descriptors
+        std::set<Ref<const Image>>   images;   ///< Images used by descriptors
+        std::set<Ref<const Sampler>> samplers; ///< Samplers used by descriptors
+        std::vector<Blob>            blobs;    ///< Binary data used by descriptors
+
+        Dependencies() = default;
+
+        Dependencies(const Dependencies & rhs) {
+            buffers  = rhs.buffers;
+            images   = rhs.images;
+            samplers = rhs.samplers;
+            blobs    = rhs.blobs;
+        }
+
+        Dependencies(Dependencies && rhs) {
+            buffers  = std::move(rhs.buffers);
+            images   = std::move(rhs.images);
+            samplers = std::move(rhs.samplers);
+            blobs    = std::move(rhs.blobs);
+        }
+
+        Dependencies & operator=(const Dependencies & rhs) {
+            if (this == &rhs) return *this;
+            buffers  = rhs.buffers;
+            images   = rhs.images;
+            samplers = rhs.samplers;
+            blobs    = rhs.blobs;
+            return *this;
+        }
+
+        Dependencies & operator=(Dependencies && rhs) {
+            if (this == &rhs) return *this;
+            buffers  = std::move(rhs.buffers);
+            images   = std::move(rhs.images);
+            samplers = std::move(rhs.samplers);
+            blobs    = std::move(rhs.blobs);
+            return *this;
+        }
+
+        void clear() {
+            buffers.clear();
+            images.clear();
+            samplers.clear();
+            blobs.clear();
+        }
+    };
+
     struct ConstantArgument {
         vk::ShaderStageFlags stages {};
         uint32_t             offset {};
         std::vector<uint8_t> value {};
     };
 
-    Ref<const Pipeline>          pipeline; ///< Pipeline used by the draw pack.
-    std::set<Ref<const Image>>   images;   ///< Images used by the draw pack.
-    std::set<Ref<const Sampler>> samplers; ///< Samplers used by the draw pack.
-    std::set<Ref<const Buffer>>  buffers;  ///< Buffers used by the draw pack.
-
+    Ref<const Pipeline>                              pipeline; ///< Pipeline used by the draw pack.
     std::vector<std::vector<vk::WriteDescriptorSet>> descriptors;
+    Dependencies                                     dependencies;
     std::vector<ConstantArgument>                    constants;
-    std::vector<vk::Buffer>                          vertexBuffers;
+    std::vector<Ref<Buffer>>                         vertexBuffers;
     std::vector<vk::DeviceSize>                      vertexOffsets;
-    vk::Buffer                                       indexBuffer;                          ///< Index buffer. Null, if the draw is non-indexed.
+    Ref<Buffer>                                      indexBuffer;                          ///< Index buffer. Null, if the draw is non-indexed.
     vk::DeviceSize                                   indexOffset = 0;                      ///< Offset into the index buffer. Ignored for non-indexed draw.
     vk::IndexType                                    indexType   = vk::IndexType::eUint16; ///< Type of index. Ignored for non-indexed draw.
 
