@@ -1,3 +1,5 @@
+[![circleci](https://circleci.com/gh/randomgraphics/rapid-vulkan.svg?style=shield)](https://circleci.com/gh/randomgraphics/rapid-vulkan)
+
 # rapid-vulkan
 rapid-vulkan is a lightweight wrappers and utilities for rapid creation of Vulkan app. It is designed in a header-only manner that can be easiy integrated into any Vulkan based applications.
 
