@@ -1319,7 +1319,7 @@ public:
         uint32_t       mipLevel;
         uint32_t       arrayLayer;
         vk::Extent3D   extent; ///< size of the image in pixels.
-        uint32_t       pitch;  ///< size in byte of one pixel block.
+        uint32_t       pitch;  ///< size in byte of one row of pixel blocks.
         vk::DeviceSize offset; ///< offset in bytes into the pixel storage buffer.
     };
 
@@ -1353,7 +1353,6 @@ public:
     const Desc & desc() const;
 
     /// @brief Retrieve a vk::ImageView of the image.
-    /// The returned view object will hold a reference to the image object.
     vk::ImageView getView(const GetViewParameters &) const;
 
     /// @brief Synchronously set content of one subresource
