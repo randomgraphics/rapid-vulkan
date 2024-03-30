@@ -2533,6 +2533,11 @@ public:
             return *this;
         }
 
+        ConstructParameters & setPrintVkInfo(Device::Verbosity v) {
+            printVkInfo = v;
+            return *this;
+        }
+
         template<class FUNC>
         ConstructParameters & setBacktrace(FUNC func) {
             backtrace = func;
