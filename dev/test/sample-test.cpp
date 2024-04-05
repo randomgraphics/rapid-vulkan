@@ -11,14 +11,14 @@ TEST_CASE("sample-triangle", "[sample]") {
     o.headless = 10; // render 10 frames.
 
     SECTION("dynamic viewports") {
-        o.inst            = TestVulkanInstance::instance->handle();
+        o.inst            = TestVulkanInstance::instance.get();
         o.dynamicViewport = true;
         o.verbosity       = rapid_vulkan::Device::SILENCE;
         triangle::entry(o);
     }
 
     SECTION("static viewports") {
-        o.inst            = TestVulkanInstance::instance->handle();
+        o.inst            = TestVulkanInstance::instance.get();
         o.dynamicViewport = false;
         o.verbosity       = rapid_vulkan::Device::SILENCE;
         triangle::entry(o);
@@ -29,7 +29,7 @@ TEST_CASE("sample-triangle", "[sample]") {
 TEST_CASE("sample-drawable", "[sample]") {
     drawable::Options o;
     o.headless  = 10; // render 10 frames.
-    o.inst      = TestVulkanInstance::instance->handle();
+    o.inst      = TestVulkanInstance::instance.get();
     o.verbosity = rapid_vulkan::Device::SILENCE;
     drawable::entry(o);
 }

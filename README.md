@@ -15,7 +15,7 @@ The library is aiming for decreasing the code you have to write yourself to use 
 int main() {
   using namespace rapid_vulkan;
   auto instance = Instance({});
-  auto device   = Device({instance.handle()});
+  auto device   = Device(instance);
   auto spv      = loadSPRIV(...); // load spirv shader binary into std::vector container.
   auto cs       = Shader(Shader::ConstructParameters{{"my shader"}, device->gi}.setSpriv(spv));
   auto pipeline = ComputePipeline({{"my pipline"}, &cs});

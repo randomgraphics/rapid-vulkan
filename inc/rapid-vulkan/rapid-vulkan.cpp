@@ -68,11 +68,6 @@ SOFTWARE.
 #include <signal.h>
 #include <inttypes.h>
 
-#if RAPID_VULKAN_ENABLE_LOADER
-// implement the default dynamic dispatcher storage. Has to use this macro outside of any namespace.
-VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE;
-#endif
-
 #ifdef _WIN32
 extern "C" __declspec(dllimport) void __stdcall DebugBreak();
 #endif
@@ -112,7 +107,7 @@ private:
 
 template<typename T>
 auto ref2handle(const T & ref) -> decltype(ref->handle()) {
-    return ref ? ref->handle() : decltype(ref->handle()) {};
+    return ref.empty() ? decltype(ref->handle()) {} : ref->handle();
 }
 
 } // namespace rv_details
@@ -125,19 +120,21 @@ auto ref2handle(const T & ref) -> decltype(ref->handle()) {
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
-std::vector<vk::PhysicalDevice> enumeratePhysicalDevices(vk::Instance instance) {
-    return completeEnumerate<vk::PhysicalDevice>([&](uint32_t * count, vk::PhysicalDevice * data) { return instance.enumeratePhysicalDevices(count, data); });
+std::vector<vk::PhysicalDevice> enumeratePhysicalDevices(const vk::DispatchLoaderDynamic & dispatcher, vk::Instance instance) {
+    return completeEnumerate<vk::PhysicalDevice>(
+        [&](uint32_t * count, vk::PhysicalDevice * data) { return instance.enumeratePhysicalDevices(count, data, dispatcher); });
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
 // This function currently selects the device with the longest extension list.
-vk::PhysicalDevice selectTheMostPowerfulPhysicalDevice(vk::ArrayProxy<const vk::PhysicalDevice> phydevs) {
+vk::PhysicalDevice selectTheMostPowerfulPhysicalDevice(const vk::DispatchLoaderDynamic & dispatcher, vk::ArrayProxy<const vk::PhysicalDevice> phydevs) {
     size_t result = 0;
     size_t maxext = 0;
     for (size_t i = 0; i < phydevs.size(); ++i) {
         auto dev        = phydevs.data()[i];
-        auto extensions = completeEnumerate<vk::ExtensionProperties>(
-            [&](uint32_t * count, vk::ExtensionProperties * data) -> vk::Result { return dev.enumerateDeviceExtensionProperties(nullptr, count, data); });
+        auto extensions = completeEnumerate<vk::ExtensionProperties>([&](uint32_t * count, vk::ExtensionProperties * data) -> vk::Result {
+            return dev.enumerateDeviceExtensionProperties(nullptr, count, data, dispatcher);
+        });
         if (extensions.size() > maxext) {
             maxext = extensions.size();
             result = i;
@@ -148,16 +145,16 @@ vk::PhysicalDevice selectTheMostPowerfulPhysicalDevice(vk::ArrayProxy<const vk::
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
-std::vector<vk::ExtensionProperties> enumerateDeviceExtensions(vk::PhysicalDevice dev) {
+std::vector<vk::ExtensionProperties> enumerateDeviceExtensions(const vk::DispatchLoaderDynamic & dispatcher, vk::PhysicalDevice dev) {
     auto extensions = completeEnumerate<vk::ExtensionProperties>(
-        [&](uint32_t * count, vk::ExtensionProperties * data) { return dev.enumerateDeviceExtensionProperties(nullptr, count, data); });
+        [&](uint32_t * count, vk::ExtensionProperties * data) { return dev.enumerateDeviceExtensionProperties(nullptr, count, data, dispatcher); });
     std::sort(extensions.begin(), extensions.end(), [](const auto & a, const auto & b) -> bool { return strcmp(a.extensionName, b.extensionName) < 0; });
     return extensions;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
-vk::Format queryDepthFormat(vk::PhysicalDevice dev, int stencil) {
+vk::Format queryDepthFormat(const vk::DispatchLoaderDynamic & dispatcher, vk::PhysicalDevice dev, int stencil) {
     static const vk::Format DEPTH_STENCIL[] = {
         vk::Format::eD24UnormS8Uint,
         vk::Format::eD32SfloatS8Uint,
@@ -171,14 +168,14 @@ vk::Format queryDepthFormat(vk::PhysicalDevice dev, int stencil) {
     // first, query depth and stencil format, when stencil is not off.
     if (stencil != 0) {
         for (auto f : DEPTH_STENCIL) {
-            auto p = dev.getFormatProperties(f);
+            auto p = dev.getFormatProperties(f, dispatcher);
             if (p.optimalTilingFeatures & vk::FormatFeatureFlagBits::eDepthStencilAttachment) return f;
         }
     }
     // then, query depth only format, when stencil is optional or off.
     if (stencil <= 0) {
         for (auto f : DEPTH_ONLY) {
-            auto p = dev.getFormatProperties(f);
+            auto p = dev.getFormatProperties(f, dispatcher);
             if (p.optimalTilingFeatures & vk::FormatFeatureFlagBits::eDepthStencilAttachment) return f;
         }
     }
@@ -187,10 +184,10 @@ vk::Format queryDepthFormat(vk::PhysicalDevice dev, int stencil) {
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
-void threadSafeWaitForDeviceIdle(vk::Device device) {
+void threadSafeWaitForDeviceIdle(const vk::DispatchLoaderDynamic & dispatcher, vk::Device device) {
     static std::mutex mutex;
     auto              lock = std::lock_guard {mutex};
-    device.waitIdle();
+    device.waitIdle(dispatcher);
 }
 
 // *********************************************************************************************************************
@@ -200,7 +197,7 @@ void threadSafeWaitForDeviceIdle(vk::Device device) {
 /// TODO: Defer to VMA for memory allocations if it's enabled
 static vk::DeviceMemory allocateDeviceMemory(const GlobalInfo & g, const vk::MemoryRequirements & memRequirements, vk::MemoryPropertyFlags memoryProperties,
                                              const vk::MemoryAllocateFlags allocFlags) {
-    auto memProperties = g.physical.getMemoryProperties();
+    auto memProperties = g.physical.getMemoryProperties(*g.dispatcher);
 
     uint32_t memoryIndex = uint32_t(-1);
     for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
@@ -217,7 +214,7 @@ static vk::DeviceMemory allocateDeviceMemory(const GlobalInfo & g, const vk::Mem
     auto afi = vk::MemoryAllocateFlagsInfo {allocFlags};
     if (allocFlags) ai.setPNext(&afi);
 
-    return g.device.allocateMemory(ai);
+    return g.device.allocateMemory(ai, g.allocator, *g.dispatcher);
 }
 
 class Buffer::Impl {
@@ -238,11 +235,11 @@ public:
 #endif
         {
             // create buffer
-            _handle = _gi->device.createBuffer(ci, _gi->allocator);
+            _handle = _gi->device.createBuffer(ci, _gi->allocator, *_gi->dispatcher);
             // allocate & bind memory
-            auto requirements = _gi->device.getBufferMemoryRequirements(_handle);
+            auto requirements = _gi->device.getBufferMemoryRequirements(_handle, *_gi->dispatcher);
             _memory           = allocateDeviceMemory(*_gi, requirements, cp.memory, cp.alloc);
-            _gi->device.bindBufferMemory(_handle, _memory, 0);
+            _gi->device.bindBufferMemory(_handle, _memory, 0, *_gi->dispatcher);
         }
 
         // set buffer name.
@@ -296,7 +293,7 @@ public:
         RVI_ASSERT(srcOffset + size <= _desc.size);
         RVI_ASSERT(dstOffset + size <= params.dstCapacity);
 
-        params.cb.copyBuffer(_desc.handle, params.dst, {{srcOffset, dstOffset, size}});
+        params.cb.copyBuffer(_desc.handle, params.dst, {{srcOffset, dstOffset, size}}, *_gi->dispatcher);
     }
 
     void setContent(const SetContentParameters & params) {
@@ -378,7 +375,7 @@ public:
         //     RVI_VK_REQUIRE(vmaMapMemory(global->vmaAllocator, allocation, (void **) &dst));
         //     dst += offsetInUnitOfT;
         // } else {
-        auto p = _gi->device.mapMemory(_memory, o, s);
+        auto p = _gi->device.mapMemory(_memory, o, s, {}, *_gi->dispatcher);
         if (!p) {
             RVI_LOGE("Failed to map buffer %s.", _owner.name().c_str());
             return {};
@@ -390,15 +387,15 @@ public:
     void unmap() {
         auto lock = std::lock_guard {_mutex};
         if (_mapped) {
-            _gi->device.unmapMemory(_memory);
+            _gi->device.unmapMemory(_memory, *_gi->dispatcher);
             _mapped = false;
         }
     }
 
     void onNameChanged() {
         const auto & name = _owner.name();
-        if (_handle) setVkHandleName(_gi->device, _handle, name);
-        if (_memory) setVkHandleName(_gi->device, _memory, name);
+        if (_handle) setVkHandleName(*_gi->dispatcher, _gi->device, _handle, name);
+        if (_memory) setVkHandleName(*_gi->dispatcher, _gi->device, _memory, name);
 #if RAPID_VULKAN_ENABLE_VMA
         if (_allocation) vmaSetAllocationName(_gi->vmaAllocator, _allocation, name.c_str());
 #endif
@@ -754,9 +751,9 @@ public:
         } else
 #endif
         {
-            _handle = _gi->device.createImage(cp.info, _gi->allocator);
-            _memory = allocateDeviceMemory(*_gi, _gi->device.getImageMemoryRequirements(_handle), cp.memory, cp.alloc);
-            _gi->device.bindImageMemory(_handle, _memory, 0);
+            _handle = _gi->device.createImage(cp.info, _gi->allocator, *_gi->dispatcher);
+            _memory = allocateDeviceMemory(*_gi, _gi->device.getImageMemoryRequirements(_handle, *_gi->dispatcher), cp.memory, cp.alloc);
+            _gi->device.bindImageMemory(_handle, _memory, 0, *_gi->dispatcher);
         }
 
         onNameChanged();
@@ -814,7 +811,9 @@ public:
         p.type             = determineViewType(p.type, p.range);
         if ((int) p.type < 0) return {};
         auto & view = _views[p];
-        if (!view) view = _gi->device.createImageView(vk::ImageViewCreateInfo({}, _desc.handle, p.type, p.format).setSubresourceRange(p.range), _gi->allocator);
+        if (!view)
+            view = _gi->device.createImageView(vk::ImageViewCreateInfo({}, _desc.handle, p.type, p.format).setSubresourceRange(p.range), _gi->allocator,
+                                               *_gi->dispatcher);
         return view;
     }
 
@@ -876,8 +875,8 @@ public:
                 .s(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer)
                 .i(_desc.handle, vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead,
                    vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, r)
-                .cmdWrite(c);
-            c.handle().copyBufferToImage(staging, _desc.handle, vk::ImageLayout::eTransferDstOptimal, {copyRegion});
+                .cmdWrite(*_gi->dispatcher, c);
+            c.handle().copyBufferToImage(staging, _desc.handle, vk::ImageLayout::eTransferDstOptimal, {copyRegion}, *_gi->dispatcher);
             q.wait(q.submit({{c}}));
         }
     }
@@ -927,8 +926,8 @@ public:
                 .s(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer)
                 .i(_desc.handle, vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead,
                    vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferSrcOptimal, r)
-                .cmdWrite(c);
-            c.handle().copyImageToBuffer(_desc.handle, vk::ImageLayout::eTransferSrcOptimal, staging, copyRegions);
+                .cmdWrite(*_gi->dispatcher, c);
+            c.handle().copyImageToBuffer(_desc.handle, vk::ImageLayout::eTransferSrcOptimal, staging, copyRegions, *_gi->dispatcher);
             q.wait(q.submit({c}));
         }
 
@@ -944,8 +943,8 @@ public:
 
     void onNameChanged() {
         const auto & name = _owner.name();
-        if (_handle) setVkHandleName(_gi->device, _handle, name);
-        if (_memory) setVkHandleName(_gi->device, _memory, name);
+        if (_handle) setVkHandleName(*_gi->dispatcher, _gi->device, _handle, name);
+        if (_memory) setVkHandleName(*_gi->dispatcher, _gi->device, _memory, name);
 #if RAPID_VULKAN_ENABLE_VMA
         if (_allocation) vmaSetAllocationName(_gi->vmaAllocator, _allocation, name.c_str());
         (void) _allocation; // silence unused private member warning.
@@ -1086,7 +1085,7 @@ Shader Shader::EMPTY({});
 
 Shader::Shader(const ConstructParameters & params): Root(params), _gi(params.gi) {
     if (params.spirv.empty()) return; // Constructing an empty shader module. Not an error.
-    _handle = _gi->device.createShaderModule({{}, params.spirv.size() * sizeof(uint32_t), params.spirv.data()}, _gi->allocator);
+    _handle = _gi->device.createShaderModule({{}, params.spirv.size() * sizeof(uint32_t), params.spirv.data()}, _gi->allocator, *_gi->dispatcher);
     _entry  = params.entry;
     _spirv.assign(params.spirv.begin(), params.spirv.end());
 }
@@ -1198,7 +1197,7 @@ RenderPass::RenderPass(const ConstructParameters & cp): Root(cp), _gi(cp.gi) {
     ci.setAttachments(cp.attachments);
     ci.setSubpasses(subpasses);
     ci.setDependencies(cp.dependencies);
-    _handle = _gi->device.createRenderPass(ci, _gi->allocator);
+    _handle = _gi->device.createRenderPass(ci, _gi->allocator, *_gi->dispatcher);
 
 #if RAPID_VULKAN_ENABLE_DEBUG_BUILD
     _cp = cp;
@@ -1210,15 +1209,15 @@ RenderPass::~RenderPass() { _gi->safeDestroy(_handle); }
 
 void RenderPass::cmdBegin(vk::CommandBuffer cb, vk::RenderPassBeginInfo info) const {
     info.setRenderPass(_handle);
-    cb.beginRenderPass(info, vk::SubpassContents::eInline);
+    cb.beginRenderPass(info, vk::SubpassContents::eInline, *_gi->dispatcher);
 }
 
-void RenderPass::cmdNext(vk::CommandBuffer cb) const { cb.nextSubpass(vk::SubpassContents::eInline); }
+void RenderPass::cmdNext(vk::CommandBuffer cb) const { cb.nextSubpass(vk::SubpassContents::eInline, *_gi->dispatcher); }
 
-void RenderPass::cmdEnd(vk::CommandBuffer cb) const { cb.endRenderPass(); }
+void RenderPass::cmdEnd(vk::CommandBuffer cb) const { cb.endRenderPass(*_gi->dispatcher); }
 
 void RenderPass::onNameChanged(const std::string &) {
-    if (_handle) setVkHandleName(_gi->device, _handle, name());
+    if (_handle) setVkHandleName(*_gi->dispatcher, _gi->device, _handle, name());
 }
 
 // *********************************************************************************************************************
@@ -1290,13 +1289,13 @@ Framebuffer::ConstructParameters & Framebuffer::ConstructParameters::addImage(Im
 Framebuffer::Framebuffer(const ConstructParameters & cp): Root(cp), _gi(cp.gi) {
     vk::FramebufferCreateInfo ci({}, cp.pass);
     ci.setAttachments(cp.attachments).setWidth((uint32_t) cp.width).setHeight((uint32_t) cp.height).setLayers((uint32_t) 1);
-    _handle = _gi->device.createFramebuffer(ci, _gi->allocator);
+    _handle = _gi->device.createFramebuffer(ci, _gi->allocator, *_gi->dispatcher);
 }
 
 Framebuffer::~Framebuffer() { _gi->safeDestroy(_handle); }
 
 void Framebuffer::onNameChanged(const std::string &) {
-    if (_handle) setVkHandleName(_gi->device, _handle, name());
+    if (_handle) setVkHandleName(*_gi->dispatcher, _gi->device, _handle, name());
 }
 
 // *********************************************************************************************************************
@@ -1504,7 +1503,8 @@ public:
                 if (d.empty()) continue; // skip empty descriptor
                 bindings.push_back(d.binding);
             }
-            _setLayouts[s] = _gi->device.createDescriptorSetLayout(vk::DescriptorSetLayoutCreateInfo {}.setBindings(bindings), _gi->allocator);
+            _setLayouts[s] =
+                _gi->device.createDescriptorSetLayout(vk::DescriptorSetLayoutCreateInfo {}.setBindings(bindings), _gi->allocator, *_gi->dispatcher);
         }
 
         // create push constant array
@@ -1516,7 +1516,8 @@ public:
         }
 
         // create pipeline layout
-        _handle = _gi->device.createPipelineLayout(vk::PipelineLayoutCreateInfo().setSetLayouts(_setLayouts).setPushConstantRanges(pc), _gi->allocator);
+        _handle = _gi->device.createPipelineLayout(vk::PipelineLayoutCreateInfo().setSetLayouts(_setLayouts).setPushConstantRanges(pc), _gi->allocator,
+                                                   *_gi->dispatcher);
 
         // done
         onNameChanged();
@@ -1535,7 +1536,7 @@ public:
     const PipelineReflection & reflection() const { return _reflection; }
 
     void onNameChanged() {
-        if (_handle) setVkHandleName(_gi->device, _handle, _owner.name());
+        if (_handle) setVkHandleName(*_gi->dispatcher, _gi->device, _handle, _owner.name());
     }
 
 private:
@@ -1587,7 +1588,8 @@ public:
     }
 
     void setName(const std::string & name) {
-        if (_handle) setVkHandleName(_layout->gi().device, _handle, name);
+        const auto & gi = _layout->gi();
+        if (_handle) setVkHandleName(*gi.dispatcher, gi.device, _handle, name);
     }
 
 private:
@@ -1603,6 +1605,7 @@ Pipeline::~Pipeline() {
     delete _impl;
     _impl = nullptr;
 }
+auto Pipeline::gi() const -> const GlobalInfo & { return _impl->layout().gi(); }
 auto Pipeline::bindPoint() const -> vk::PipelineBindPoint { return _impl->bindPoint(); }
 auto Pipeline::handle() const -> vk::Pipeline { return _impl->handle(); }
 auto Pipeline::layout() const -> vk::PipelineLayout { return _impl->layout().handle(); }
@@ -1687,18 +1690,19 @@ GraphicsPipeline::GraphicsPipeline(const ConstructParameters & params): Pipeline
                                              params.subpass, params.baseHandle, params.baseIndex);
 
     // create the shader.
-    _impl->setHandle(gi->device.createGraphicsPipeline(nullptr, ci, gi->allocator).value, name());
+    _impl->setHandle(gi->device.createGraphicsPipeline(nullptr, ci, gi->allocator, *gi->dispatcher).value, name());
 }
 
 void GraphicsPipeline::cmdDraw(vk::CommandBuffer cb, const DrawParameters & dp) const {
     if (!_impl->handle()) return;
-    cb.bindPipeline(vk::PipelineBindPoint::eGraphics, _impl->handle());
+    auto & dsp = *gi().dispatcher;
+    cb.bindPipeline(vk::PipelineBindPoint::eGraphics, _impl->handle(), dsp);
     if (dp.indexCount) {
         // indexed draw
-        cb.drawIndexed(dp.indexCount, dp.instanceCount, dp.firstIndex, dp.vertexOffset, dp.firstInstance);
+        cb.drawIndexed(dp.indexCount, dp.instanceCount, dp.firstIndex, dp.vertexOffset, dp.firstInstance, dsp);
     } else {
         // non-indexed draw
-        cb.draw(dp.vertexCount, dp.instanceCount, dp.firstVertex, dp.firstInstance);
+        cb.draw(dp.vertexCount, dp.instanceCount, dp.firstVertex, dp.firstInstance, dsp);
     }
 }
 
@@ -1711,12 +1715,13 @@ ComputePipeline::ComputePipeline(const ConstructParameters & params): Pipeline(p
     ci.setStage({{}, vk::ShaderStageFlagBits::eCompute, params.cs->handle(), params.cs->entry().c_str()});
     ci.setLayout(_impl->layout().handle());
     auto gi = params.cs->gi();
-    _impl->setHandle(gi->device.createComputePipeline(nullptr, ci, gi->allocator).value, name());
+    _impl->setHandle(gi->device.createComputePipeline(nullptr, ci, gi->allocator, *gi->dispatcher).value, name());
 }
 
 void ComputePipeline::cmdDispatch(vk::CommandBuffer cb, const DispatchParameters & dp) const {
-    cb.bindPipeline(vk::PipelineBindPoint::eCompute, _impl->handle());
-    cb.dispatch((uint32_t) dp.width, (uint32_t) dp.height, (uint32_t) dp.depth);
+    auto & dsp = *gi().dispatcher;
+    cb.bindPipeline(vk::PipelineBindPoint::eCompute, _impl->handle(), dsp);
+    cb.dispatch((uint32_t) dp.width, (uint32_t) dp.height, (uint32_t) dp.depth, dsp);
 }
 
 // *********************************************************************************************************************
@@ -1769,10 +1774,11 @@ static inline bool sameDescriptorSet(const std::vector<vk::WriteDescriptorSet> &
 void DrawPack::cmdRender(vk::CommandBuffer cb, const RenderParameters & rp) const {
     if (!pipeline) return;
 
-    auto layout = pipeline->layout();
-    auto bp     = pipeline->bindPoint();
+    auto & dsp    = *pipeline->gi().dispatcher;
+    auto   layout = pipeline->layout();
+    auto   bp     = pipeline->bindPoint();
 
-    cb.bindPipeline(bp, pipeline->handle());
+    cb.bindPipeline(bp, pipeline->handle(), dsp);
 
     for (uint32_t s = 0; s < descriptors.size(); ++s) {
         auto & w = descriptors[s];
@@ -1783,35 +1789,35 @@ void DrawPack::cmdRender(vk::CommandBuffer cb, const RenderParameters & rp) cons
 
         auto set = rp.descriptorSetAllocator(*pipeline, s);
         for (auto & d : w) const_cast<vk::WriteDescriptorSet &>(d).dstSet = set;
-        rp.device.updateDescriptorSets(w, {});
-        cb.bindDescriptorSets(bp, layout, s, 1, &set, 0, nullptr);
+        rp.device.updateDescriptorSets(w, {}, dsp);
+        cb.bindDescriptorSets(bp, layout, s, 1, &set, 0, nullptr, dsp);
     }
 
-    for (const auto & c : constants) cb.pushConstants(layout, c.stages, c.offset, (uint32_t) c.value.size(), c.value.data());
+    for (const auto & c : constants) cb.pushConstants(layout, c.stages, c.offset, (uint32_t) c.value.size(), c.value.data(), dsp);
 
     if (vk::PipelineBindPoint::eGraphics == bp) {
         if (!vertexBuffers.empty()) {
             RVI_ASSERT(vertexBuffers.size() == vertexOffsets.size());
             std::vector<vk::Buffer> handles(vertexBuffers.size());
             std::transform(vertexBuffers.begin(), vertexBuffers.end(), handles.begin(), [](const auto & v) { return v->handle(); });
-            cb.bindVertexBuffers(0, (uint32_t) vertexBuffers.size(), handles.data(), vertexOffsets.data());
+            cb.bindVertexBuffers(0, (uint32_t) vertexBuffers.size(), handles.data(), vertexOffsets.data(), dsp);
         }
 
-        if (indexBuffer) {
+        if (indexBuffer.get()) {
             // indexed draw
             auto ib = indexBuffer->handle();
             if (ib) {
-                cb.bindIndexBuffer(ib, indexOffset, indexType);
-                cb.drawIndexed(draw.indexCount, draw.instanceCount, draw.firstIndex, draw.vertexOffset, draw.firstInstance);
+                cb.bindIndexBuffer(ib, indexOffset, indexType, dsp);
+                cb.drawIndexed(draw.indexCount, draw.instanceCount, draw.firstIndex, draw.vertexOffset, draw.firstInstance, dsp);
             } else {
                 RVI_LOGW("DrawPack %s has an invalid/empty index buffer.", name().c_str());
             }
         } else {
             // non-indexed draw
-            cb.draw(draw.vertexCount, draw.instanceCount, draw.firstVertex, draw.firstInstance);
+            cb.draw(draw.vertexCount, draw.instanceCount, draw.firstVertex, draw.firstInstance, dsp);
         }
     } else if (vk::PipelineBindPoint::eCompute == bp) {
-        cb.dispatch((uint32_t) dispatch.width, (uint32_t) dispatch.height, (uint32_t) dispatch.depth);
+        cb.dispatch((uint32_t) dispatch.width, (uint32_t) dispatch.height, (uint32_t) dispatch.depth, dsp);
     } else {
         RVI_THROW("Invalid pipeline bind point");
     }
@@ -1918,7 +1924,7 @@ public:
         for (size_t i = 0; i < args.images.size(); ++i) {
             auto & info  = args.infos[i];
             auto & image = args.images[i];
-            info.sampler = image.sampler ? image.sampler->handle() : vk::Sampler();
+            info.sampler = image.sampler.empty() ? vk::Sampler() : image.sampler->handle();
             ImageArgs::Type t;
             if (image.view) {
                 info.imageLayout = image.layout;
@@ -2092,7 +2098,7 @@ public:
         // create a new pack to store the compile result.
         // TODO: use a pool for faster memory allocation and better memory locality.
         auto newPack = Ref<DrawPack>(new DrawPack({_owner.name()}));
-        if (_cachedPack) {
+        if (!!_cachedPack) {
             // copy content of the cached pack to the new one.
             copyStates(*_cachedPack, *newPack);
         } else {
@@ -2268,7 +2274,7 @@ private:
                                          si, i, j);
                                 return false;
                             }
-                            if (v.image) dep.images.insert(v.image);
+                            if (v.image.get()) dep.images.insert(v.image);
                         }
                     }
                     auto blob = std::make_shared<std::vector<uint8_t>>((uint8_t *) img->infos.data(), (uint8_t *) (img->infos.data() + img->infos.size()));
@@ -2417,11 +2423,12 @@ public:
     vk::DescriptorSet allocate() {
         if (_availableSets == 0) {
             if (_pool) _full.push_back(_pool), _pool = VK_NULL_HANDLE;
-            _pool          = _gi->device.createDescriptorPool(vk::DescriptorPoolCreateInfo().setPoolSizes(_sizes).setMaxSets(_maxSets), _gi->allocator);
+            _pool =
+                _gi->device.createDescriptorPool(vk::DescriptorPoolCreateInfo().setPoolSizes(_sizes).setMaxSets(_maxSets), _gi->allocator, *_gi->dispatcher);
             _availableSets = _maxSets;
         }
         --_availableSets;
-        return _gi->device.allocateDescriptorSets({_pool, 1, &_layout})[0];
+        return _gi->device.allocateDescriptorSets({_pool, 1, &_layout}, *_gi->dispatcher)[0];
     }
 
     /// Release all already-full descriptor pools.
@@ -2444,8 +2451,8 @@ private:
 
 private:
     void updateName() {
-        setVkHandleName(_gi->device, _layout, name() + ".layout");
-        setVkHandleName(_gi->device, _pool, name() + ".pool");
+        setVkHandleName(*_gi->dispatcher, _gi->device, _layout, name() + ".layout");
+        setVkHandleName(*_gi->dispatcher, _gi->device, _pool, name() + ".pool");
     }
 
     void construct(const ConstructParameters & cp) {
@@ -2466,7 +2473,7 @@ private:
         if (bindings.empty()) return; // no descriptor to allocate
 
         // create set layout
-        _layout = _gi->device.createDescriptorSetLayout(vk::DescriptorSetLayoutCreateInfo {}.setBindings(bindings), _gi->allocator);
+        _layout = _gi->device.createDescriptorSetLayout(vk::DescriptorSetLayoutCreateInfo {}.setBindings(bindings), _gi->allocator, *_gi->dispatcher);
 
         // setup pool size array
         _sizes.reserve(sizesMap.size());
@@ -2494,7 +2501,7 @@ class CommandBuffer::Impl : public CommandBuffer {
 public:
     Impl(CommandQueue & queue, const std::string & name_, vk::CommandBufferLevel level): _queue(queue), _name(name_), _level(level) {
         const auto & d = queue.desc();
-        _pool          = d.gi->device.createCommandPool(vk::CommandPoolCreateInfo().setQueueFamilyIndex(d.family), d.gi->allocator);
+        _pool          = d.gi->device.createCommandPool(vk::CommandPoolCreateInfo().setQueueFamilyIndex(d.family), d.gi->allocator, *d.gi->dispatcher);
         wakeup();
     }
 
@@ -2506,14 +2513,16 @@ public:
     // Wake up a newly created or previously hibernated command buffer. Make it ready for command recording.
     void wakeup() {
         clear();
-        _state = RECORDING;
-        vk::CommandBufferAllocateInfo info;
+        _state                  = RECORDING;
+        const auto & gi         = _queue.desc().gi;
+        const auto & dsp        = *gi->dispatcher;
+        auto         info       = vk::CommandBufferAllocateInfo {};
         info.commandPool        = _pool;
         info.level              = _level;
         info.commandBufferCount = 1;
-        _handle                 = _queue.desc().gi->device.allocateCommandBuffers(info)[0];
-        setVkHandleName(_queue.desc().gi->device, _handle, _name);
-        _handle.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+        _handle                 = gi->device.allocateCommandBuffers(info, dsp)[0];
+        setVkHandleName(dsp, _queue.desc().gi->device, _handle, _name);
+        _handle.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit}, dsp);
     }
 
     void hibernate() {
@@ -2540,7 +2549,7 @@ public:
     bool end() {
         if (_state == RECORDING) {
             // end the command buffer
-            _handle.end();
+            _handle.end(*_queue.desc().gi->dispatcher);
             _state = ENDED;
         } else if (_state != ENDED) {
             RVI_LOGE("Command buffer %s is not in RECORDING or ENDED state!", _name.c_str());
@@ -2608,7 +2617,7 @@ private:
     void clear() {
         auto gi = _queue.desc().gi;
         gi->safeDestroy(_handle, _pool);
-        gi->device.resetCommandPool(_pool);
+        gi->device.resetCommandPool(_pool, vk::CommandPoolResetFlagBits::eReleaseResources, *gi->dispatcher);
         for (auto & p : _descriptorPools) p.second.purge();
         _last = {};
         _pipelines.clear();
@@ -2664,7 +2673,7 @@ public:
         _desc.gi     = params.gi;
         _desc.family = params.family;
         _desc.index  = params.index;
-        _desc.handle = params.gi->device.getQueue(params.family, params.index);
+        _desc.handle = params.gi->device.getQueue(params.family, params.index, *_desc.gi->dispatcher);
     }
 
     ~Impl() { waitIdle(); }
@@ -2709,11 +2718,13 @@ public:
         s->index = ++_nextSubmissionId;
         if (0 == s->index) s->index = ++_nextSubmissionId;
 
+        const auto & dsp = *_desc.gi->dispatcher;
+
         // set fence
         s->fence = sp.signalFence;
         if (!s->fence) {
-            s->builtInFence = _desc.gi->device.createFenceUnique({});
-            setVkHandleName(_desc.gi->device, s->builtInFence.get(), name());
+            s->builtInFence = _desc.gi->device.createFenceUnique({}, _desc.gi->allocator, dsp);
+            setVkHandleName(dsp, _desc.gi->device, s->builtInFence.get(), name());
             s->fence = s->builtInFence.get();
         }
 
@@ -2724,7 +2735,7 @@ public:
         si.setSignalSemaphores(sp.signalSemaphores);
         si.setCommandBuffers(handles);
         si.setPWaitDstStageMask(flags.data());
-        _desc.handle.submit({si}, s->fence);
+        _desc.handle.submit({si}, s->fence, dsp);
 
         // Mark the command buffers as pending. remove them from the active list.
         for (auto cb : s->commandBuffers) {
@@ -2734,7 +2745,7 @@ public:
 
         // going through the pending list in reverse order to find the first submission that is already finished the execution on GPU.
         for (auto iter = _pending.rbegin(); iter != _pending.rend(); ++iter) {
-            auto status = _desc.gi->device.getFenceStatus((*iter)->fence);
+            auto status = _desc.gi->device.getFenceStatus((*iter)->fence, dsp);
             if (vk::Result::eNotReady == status) continue; // the submission is still in progress.
             finishSubmission(iter.base() - 1);
             break;
@@ -2819,7 +2830,7 @@ public:
 
     void setName(const std::string & name) {
         auto lock = std::lock_guard {_mutex};
-        setVkHandleName(_desc.gi->device, _desc.handle, name.c_str());
+        setVkHandleName(*_desc.gi->dispatcher, _desc.gi->device, _desc.handle, name.c_str());
     }
 
 private:
@@ -2871,7 +2882,7 @@ private:
         RVI_ASSERT(iter != _pending.end());
         const auto & submission = **iter;
         RVI_ASSERT(submission.fence);
-        auto result = _desc.gi->device.waitForFences(1, &submission.fence, true, UINT64_MAX);
+        auto result = _desc.gi->device.waitForFences(1, &submission.fence, true, UINT64_MAX, *_desc.gi->dispatcher);
         if (result != vk::Result::eSuccess) {
             RVI_LOGE("Submission %" PRIi64 " failed to wait for finish: %s", submission.index, vk::to_string(result).c_str());
         }
@@ -2990,22 +3001,24 @@ public:
 
         auto bb = currentFrame().backbuffer;
 
+        const auto & dsp = *_cp.gi->dispatcher;
+
         // transition back buffer layout if necessary.
         if (params.backbufferStatus.layout != DESIRED_PRESENT_STATUS.layout) {
             Barrier()
                 .i(bb->image->handle(), params.backbufferStatus.access, DESIRED_PRESENT_STATUS.access, params.backbufferStatus.layout,
                    DESIRED_PRESENT_STATUS.layout, vk::ImageAspectFlagBits::eColor)
                 .s(params.backbufferStatus.stages, DESIRED_PRESENT_STATUS.stages)
-                .cmdWrite(cb);
+                .cmdWrite(dsp, cb);
         }
 
         // set dynamic viewport and scissor
         const auto & extent = bb->image->desc().extent;
         vk::Viewport vp(0, 0, (float) extent.width, (float) extent.height, 0, 1);
-        cb.setViewport(0, 1, &vp);
+        cb.setViewport(0, 1, &vp, dsp);
 
         vk::Rect2D scissor({0, 0}, {extent.width, extent.height});
-        cb.setScissor(0, 1, &scissor);
+        cb.setScissor(0, 1, &scissor, dsp);
 
         std::array cv = {vk::ClearValue().setColor(params.clearColor), vk::ClearValue().setDepthStencil(params.clearDepth)};
         _renderPass->cmdBegin(cb, vk::RenderPassBeginInfo {{}, bb->framebuffer, vk::Rect2D({0, 0}, {extent.width, extent.height})}.setClearValues(cv));
@@ -3038,7 +3051,7 @@ public:
         // Acquire the next available swapchain image. Only do this if we are not in headless mode.
         if (_handle) {
             try {
-                auto result = _cp.gi->device.acquireNextImageKHR(_handle, uint64_t(-1), frame.imageAvailable);
+                auto result = _cp.gi->device.acquireNextImageKHR(_handle, uint64_t(-1), frame.imageAvailable, {}, *_cp.gi->dispatcher);
                 if (vk::Result::eSuccess == result.result || vk::Result::eSuboptimalKHR == result.result) {
                     // we acquired the frame (might be suboptimal, but stil usable) and is ready for rendering.
                     frame.imageIndex = result.value;
@@ -3065,6 +3078,7 @@ public:
 
     void present(const PresentParameters & pp) {
         // TODO: check if built-in render pass is ended.
+        const auto & dsp = *_cp.gi->dispatcher;
 
         if (READY == _frameStatus) {
             auto & frame = (FrameImpl &) currentFrame();
@@ -3077,7 +3091,7 @@ public:
                     .i(bb->image->handle(), pp.backbufferStatus.access, DESIRED_PRESENT_STATUS.access, pp.backbufferStatus.layout,
                        DESIRED_PRESENT_STATUS.layout, vk::ImageAspectFlagBits::eColor)
                     .s(pp.backbufferStatus.stages, DESIRED_PRESENT_STATUS.stages)
-                    .cmdWrite(cb);
+                    .cmdWrite(dsp, cb);
                 bb->status = DESIRED_PRESENT_STATUS;
             } else {
                 bb->status = pp.backbufferStatus;
@@ -3093,7 +3107,7 @@ public:
                                        .setPImageIndices(&frame.imageIndex)
                                        .setWaitSemaphoreCount(1)
                                        .setPWaitSemaphores(&frame.frameEndSemaphore);
-                auto result = _presentQueue.presentKHR(&presentInfo);
+                auto result = _presentQueue.presentKHR(&presentInfo, dsp);
                 if (result == vk::Result::eErrorOutOfDateKHR) {
                     recoverSwapchainOnPresentError();
                     frame.frameEndSubmission = {};
@@ -3168,12 +3182,12 @@ private:
             break;
         case DepthStencilFormat::AUTO_DEPTH_ONLY:
             RVI_LOGD("Search for depth only format...");
-            _cp.depthStencilFormat.format = queryDepthFormat(_cp.gi->physical, 0);
+            _cp.depthStencilFormat.format = queryDepthFormat(*_cp.gi->dispatcher, _cp.gi->physical, 0);
             RVI_LOGD("Depth only format found: %s", vk::to_string(_cp.depthStencilFormat.format).c_str());
             break;
         case DepthStencilFormat::AUTO_DEPTH_STENCIL:
             RVI_LOGD("Search for depth stencil format...");
-            _cp.depthStencilFormat.format = queryDepthFormat(_cp.gi->physical, 1);
+            _cp.depthStencilFormat.format = queryDepthFormat(*_cp.gi->dispatcher, _cp.gi->physical, 1);
             RVI_LOGD("Depth stencil format found: %s", vk::to_string(_cp.depthStencilFormat.format).c_str());
             break;
         default:
@@ -3184,12 +3198,13 @@ private:
 
     void recoverSwapchainOnPresentError() {
         // RVI_LOGD("Waiting for graphics queue to idle...");
-        _graphicsQueue->waitIdle(); // make sure frame rendering is done.
-        _presentQueue.waitIdle();   // also need to make sure present is done.
+        const auto & dsp = *_cp.gi->dispatcher;
+        _graphicsQueue->waitIdle();  // make sure frame rendering is done.
+        _presentQueue.waitIdle(dsp); // also need to make sure present is done.
         // RVI_LOGD("Graphics queue is idle.");
 
         // verify surface caps.
-        auto surfaceCaps = _cp.gi->physical.getSurfaceCapabilitiesKHR(_cp.surface);
+        auto surfaceCaps = _cp.gi->physical.getSurfaceCapabilitiesKHR(_cp.surface, dsp);
         if (0 == surfaceCaps.maxImageExtent.width || 0 == surfaceCaps.maxImageExtent.height) {
             RVI_LOGE("Can't Re-create swapchain, since the surface is minimized.");
             return;
@@ -3205,9 +3220,11 @@ private:
         _graphicsQueue.reset(
             new CommandQueue(CommandQueue::ConstructParameters {{"swapchain graphics queue"}, _cp.gi, _cp.graphicsQueueFamily, _cp.graphicsQueueIndex}));
 
+        const auto & dsp = *_cp.gi->dispatcher;
+
         // retrieve present queue handle.
         if (_cp.presentQueueFamily != VK_QUEUE_FAMILY_IGNORED) {
-            _presentQueue = _cp.gi->device.getQueue(_cp.presentQueueFamily, _cp.presentQueueIndex);
+            _presentQueue = _cp.gi->device.getQueue(_cp.presentQueueFamily, _cp.presentQueueIndex, dsp);
             RVI_REQUIRE(_presentQueue);
         } else {
             // use graphics queue as present queue.
@@ -3215,7 +3232,7 @@ private:
         }
 
         // check if the back buffer format is supported.
-        auto supportedFormats = _cp.gi->physical.getSurfaceFormatsKHR(_cp.surface);
+        auto supportedFormats = _cp.gi->physical.getSurfaceFormatsKHR(_cp.surface, dsp);
         if (_cp.backbufferFormat == vk::Format::eUndefined) {
             // use the first supported format.
             RVI_REQUIRE(supportedFormats.size() > 0);
@@ -3276,7 +3293,7 @@ private:
         auto gi = _cp.gi;
 
         // verify surface caps.
-        auto surfaceCaps = gi->physical.getSurfaceCapabilitiesKHR(_cp.surface);
+        auto surfaceCaps = gi->physical.getSurfaceCapabilitiesKHR(_cp.surface, *gi->dispatcher);
         if (0 == surfaceCaps.maxImageExtent.width || 0 == surfaceCaps.maxImageExtent.height) {
             RVI_THROW("Can't create swapchain, since the surface is minimized.");
         }
@@ -3328,10 +3345,10 @@ private:
                 .setClipped(true)
                 .setPreTransform(vk::SurfaceTransformFlagBitsKHR::eIdentity); // TODO: pass in surfaceCaps.currentTransform here and handle rotation directly in
                                                                               // rendering code.
-        _handle = gi->device.createSwapchainKHR(swapchainCreateInfo, gi->allocator);
+        _handle = gi->device.createSwapchainKHR(swapchainCreateInfo, gi->allocator, *gi->dispatcher);
 
         // acquire swapchain images
-        auto              images = gi->device.getSwapchainImagesKHR(_handle);
+        auto              images = gi->device.getSwapchainImagesKHR(_handle, *gi->dispatcher);
         std::stringstream ss;
         ss << "Swapchain created with " << images.size() << " images: ";
         for (const auto & i : images) { ss << " " << std::hex << i; }
@@ -3346,7 +3363,7 @@ private:
             Barrier()
                 .i(_depthBuffer->handle(), vk::AccessFlagBits::eNone, vk::AccessFlagBits::eNone, vk::ImageLayout::eUndefined,
                    vk::ImageLayout::eDepthStencilAttachmentOptimal, vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil)
-                .cmdWrite(c);
+                .cmdWrite(*gi->dispatcher, c);
         }
 
         // initialize back buffer array.
@@ -3362,13 +3379,13 @@ private:
                                                                   {w, h, 1},
                                                               }}));
             bb.view = bb.image->getView({vk::ImageViewType::e2D, swapchainCreateInfo.imageFormat});
-            setVkHandleName(gi->device, images[i], format("back buffer image %zu", i));
-            setVkHandleName(gi->device, bb.view, format("back buffer view %zu", i));
+            setVkHandleName(*gi->dispatcher, gi->device, images[i], format("back buffer image %zu", i));
+            setVkHandleName(*gi->dispatcher, gi->device, bb.view, format("back buffer view %zu", i));
 
             // create frame buffer
             auto fbcp = Framebuffer::ConstructParameters {{format("swapchain framebuffer %zu", i)}, gi}.addImageView(bb.view).setExtent(w, h).setRenderPass(
                 *_renderPass);
-            if (_depthBuffer) fbcp.addImageView(_depthBuffer->getView({}));
+            if (_depthBuffer.get()) fbcp.addImageView(_depthBuffer->getView({}));
             bb.fb.reset(new Framebuffer(fbcp));
             bb.framebuffer = bb.fb->handle();
 
@@ -3377,7 +3394,7 @@ private:
                 .i(bb.image->handle(), vk::AccessFlagBits::eNone, DESIRED_PRESENT_STATUS.access, vk::ImageLayout::eUndefined, DESIRED_PRESENT_STATUS.layout,
                    vk::ImageAspectFlagBits::eColor)
                 .s(vk::PipelineStageFlagBits::eAllCommands, DESIRED_PRESENT_STATUS.stages)
-                .cmdWrite(c);
+                .cmdWrite(*gi->dispatcher, c);
         }
 
         // execute the command buffer to update image layout
@@ -3388,12 +3405,12 @@ private:
         _frames.resize(std::max<size_t>(1u, _backbuffers.size() - surfaceCaps.minImageCount));
         for (size_t i = 0; i < _frames.size(); ++i) {
             auto & f            = _frames[i];
-            f.imageAvailable    = gi->device.createSemaphore({}, gi->allocator);
-            f.renderFinished    = gi->device.createSemaphore({}, gi->allocator);
-            f.frameEndSemaphore = gi->device.createSemaphore({}, gi->allocator);
-            setVkHandleName(gi->device, f.imageAvailable, format("image available semaphore %zu", i));
-            setVkHandleName(gi->device, f.renderFinished, format("render finished semaphore %zu", i));
-            setVkHandleName(gi->device, f.frameEndSemaphore, format("frame end semaphore %zu", i));
+            f.imageAvailable    = gi->device.createSemaphore({}, gi->allocator, *gi->dispatcher);
+            f.renderFinished    = gi->device.createSemaphore({}, gi->allocator, *gi->dispatcher);
+            f.frameEndSemaphore = gi->device.createSemaphore({}, gi->allocator, *gi->dispatcher);
+            setVkHandleName(*gi->dispatcher, gi->device, f.imageAvailable, format("image available semaphore %zu", i));
+            setVkHandleName(*gi->dispatcher, gi->device, f.renderFinished, format("render finished semaphore %zu", i));
+            setVkHandleName(*gi->dispatcher, gi->device, f.frameEndSemaphore, format("frame end semaphore %zu", i));
         }
     }
 
@@ -3415,7 +3432,7 @@ private:
             Barrier()
                 .i(_depthBuffer->handle(), vk::AccessFlagBits::eNone, vk::AccessFlagBits::eNone, vk::ImageLayout::eUndefined,
                    vk::ImageLayout::eDepthStencilAttachmentOptimal, vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil)
-                .cmdWrite(c);
+                .cmdWrite(*gi->dispatcher, c);
         }
 
         // create back buffer and frame array.
@@ -3428,35 +3445,35 @@ private:
             auto & f            = _frames[i];
             f.backbuffer        = &bb;
             f.imageIndex        = i;
-            f.imageAvailable    = gi->device.createSemaphore({}, gi->allocator);
-            f.renderFinished    = gi->device.createSemaphore({}, gi->allocator);
-            f.frameEndSemaphore = gi->device.createSemaphore({}, gi->allocator);
+            f.imageAvailable    = gi->device.createSemaphore({}, gi->allocator, *gi->dispatcher);
+            f.renderFinished    = gi->device.createSemaphore({}, gi->allocator, *gi->dispatcher);
+            f.frameEndSemaphore = gi->device.createSemaphore({}, gi->allocator, *gi->dispatcher);
             f.headlessImage.reset(new Image(Image::ConstructParameters {{"swapchain headless image"}, gi}
                                                 .setFormat(_cp.backbufferFormat)
                                                 .set2D(w, h)
                                                 .addUsage(vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst)));
-            setVkHandleName(gi->device, f.imageAvailable, format("image available semaphore %u", i));
-            setVkHandleName(gi->device, f.renderFinished, format("render finished semaphore %u", i));
-            setVkHandleName(gi->device, f.frameEndSemaphore, format("frame end semaphore %u", i));
+            setVkHandleName(*gi->dispatcher, gi->device, f.imageAvailable, format("image available semaphore %u", i));
+            setVkHandleName(*gi->dispatcher, gi->device, f.renderFinished, format("render finished semaphore %u", i));
+            setVkHandleName(*gi->dispatcher, gi->device, f.frameEndSemaphore, format("frame end semaphore %u", i));
 
             // transfer the image into desired layout.
             Barrier()
                 .i(f.headlessImage->handle(), vk::AccessFlagBits::eNone, DESIRED_PRESENT_STATUS.access, vk::ImageLayout::eUndefined,
                    DESIRED_PRESENT_STATUS.layout, vk::ImageAspectFlagBits::eColor)
                 .s(vk::PipelineStageFlagBits::eAllCommands, DESIRED_PRESENT_STATUS.stages)
-                .cmdWrite(c);
+                .cmdWrite(*gi->dispatcher, c);
 
             // Store the image to back buffer structure
             bb.image = f.headlessImage;
 
             // create back buffer view
             bb.view = bb.image->getView({vk::ImageViewType::e2D, _cp.backbufferFormat});
-            setVkHandleName(gi->device, bb.view, format("back buffer view %u", i));
+            setVkHandleName(*gi->dispatcher, gi->device, bb.view, format("back buffer view %u", i));
 
             // create frame buffer
             auto fbcp = Framebuffer::ConstructParameters {{format("swapchain framebuffer %u", i)}, gi}.addImageView(bb.view).setExtent(w, h).setRenderPass(
                 *_renderPass);
-            if (_depthBuffer) fbcp.addImageView(_depthBuffer->getView({}));
+            if (_depthBuffer.get()) fbcp.addImageView(_depthBuffer->getView({}));
             bb.fb.reset(new Framebuffer(fbcp));
             bb.framebuffer = bb.fb->handle();
         }
@@ -3557,12 +3574,13 @@ static std::string printVulkanVersion(uint32_t v) {
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
-static void printPhysicalDeviceInfo(const std::vector<vk::PhysicalDevice> & available, vk::PhysicalDevice selected, bool) {
+static void printPhysicalDeviceInfo(const std::vector<vk::PhysicalDevice> & available, vk::PhysicalDevice selected,
+                                    const vk::DispatchLoaderDynamic & dispatcher) {
 #define PRINT_LIMIT(name) "        " #name " = " << p.limits.name << std::endl
     std::stringstream ss;
     ss << "===================================" << std::endl << "Available Vulkan physical devices :" << std::endl;
     for (const auto & d : available) {
-        auto         p2 = d.getProperties2();
+        auto         p2 = d.getProperties2(dispatcher);
         const auto & p  = p2.properties;
         ss << ((d == selected) ? "  * " : "    ") << p.deviceName << std::endl
            << "        API version = " << printVulkanVersion(p.apiVersion) << std::endl
@@ -3593,12 +3611,13 @@ static void printPhysicalDeviceInfo(const std::vector<vk::PhysicalDevice> & avai
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
-static void printDeviceFeatures(vk::PhysicalDevice physical, const PhysicalDeviceFeatureList & enabled, bool verbose) {
+static void printDeviceFeatures(vk::PhysicalDevice physical, const vk::DispatchLoaderDynamic & dispatcher, const PhysicalDeviceFeatureList & enabled,
+                                bool verbose) {
     // retrieve physical device properties
-    vk::PhysicalDeviceProperties properties = physical.getProperties();
+    vk::PhysicalDeviceProperties properties = physical.getProperties(dispatcher);
 
     // retrieve supported feature list
-    vk::PhysicalDeviceFeatures supported = physical.getFeatures();
+    vk::PhysicalDeviceFeatures supported = physical.getFeatures(dispatcher);
 
     // print enabled feature list
     bool              none = true;
@@ -3678,10 +3697,10 @@ static void printDeviceFeatures(vk::PhysicalDevice physical, const PhysicalDevic
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
-static void printDeviceExtensions(vk::PhysicalDevice physical, const std::vector<vk::ExtensionProperties> & available,
-                                  const std::vector<const char *> & enabled, bool verbose) {
+static void printDeviceExtensions(vk::PhysicalDevice physical, const vk::DispatchLoaderDynamic & dispatcher,
+                                  const std::vector<vk::ExtensionProperties> & available, const std::vector<const char *> & enabled, bool verbose) {
     // retrieve physical device properties
-    auto properties = physical.getProperties();
+    auto properties = physical.getProperties(dispatcher);
 
     std::stringstream ss;
     ss << "=====================================================================" << std::endl;
@@ -3707,8 +3726,9 @@ static void printDeviceExtensions(vk::PhysicalDevice physical, const std::vector
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
-static void printAvailableQueues(vk::PhysicalDevice physical, const std::vector<vk::QueueFamilyProperties> & queues, bool) {
-    auto properties = physical.getProperties();
+static void printAvailableQueues(vk::PhysicalDevice physical, const vk::DispatchLoaderDynamic & dispatcher,
+                                 const std::vector<vk::QueueFamilyProperties> & queues) {
+    auto properties = physical.getProperties(dispatcher);
 
     auto flags2str = [](vk::QueueFlags flags) -> std::string {
         std::stringstream ss;
@@ -3798,19 +3818,25 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
     RVI_REQUIRE(cp.instance);
     _gi.instance = cp.instance;
 
+    // check getIntanceProcAddr is valid
+    RVI_REQUIRE(cp.getInstanceProcAddr);
+
+    // initialize dispatcher with instance function pointers.
+    _dispatcher.init(cp.getInstanceProcAddr);
+    _dispatcher.init(_gi.instance);
+
     // select physical device
     // TODO: pick the one specified by user.
-    auto phydevs = enumeratePhysicalDevices(_gi.instance);
-    _gi.physical = selectTheMostPowerfulPhysicalDevice(phydevs);
+    auto phydevs = enumeratePhysicalDevices(*_gi.dispatcher, _gi.instance);
+    _gi.physical = selectTheMostPowerfulPhysicalDevice(*_gi.dispatcher, phydevs);
 
     // Retrieve physical device properties
-    _gi.apiVersion = _gi.physical.getProperties().apiVersion;
-    bool verbose   = cp.printVkInfo == VERBOSE;
-    if (cp.printVkInfo) printPhysicalDeviceInfo(phydevs, _gi.physical, verbose);
+    _gi.apiVersion = _gi.physical.getProperties(_dispatcher).apiVersion;
+    if (cp.printVkInfo) printPhysicalDeviceInfo(phydevs, _gi.physical, _dispatcher);
 
     // query queues
-    auto families = _gi.physical.getQueueFamilyProperties();
-    if (cp.printVkInfo) printAvailableQueues(_gi.physical, families, verbose);
+    auto families = _gi.physical.getQueueFamilyProperties(_dispatcher);
+    if (cp.printVkInfo) printAvailableQueues(_gi.physical, _dispatcher, families);
 
     // setup device feature and extension
     PhysicalDeviceFeatureList   deviceFeatures(cp.features1, cp.features2, cp.features3);
@@ -3837,7 +3863,7 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
     // #endif
 
     // make sure all extensions are actually supported by the hardware.
-    auto availableDeviceExtensions = enumerateDeviceExtensions(_gi.physical);
+    auto availableDeviceExtensions = enumerateDeviceExtensions(*_gi.dispatcher, _gi.physical);
     auto enabledDeviceExtensions   = validateExtensions(availableDeviceExtensions, askedDeviceExtensions);
 
     // create device, one queue for each family
@@ -3850,7 +3876,10 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
     deviceCreateInfo.setPNext(&deviceFeatures);
     deviceCreateInfo.setQueueCreateInfos(queueCreateInfo);
     deviceCreateInfo.setPEnabledExtensionNames(enabledDeviceExtensions);
-    _gi.device = _gi.physical.createDevice(deviceCreateInfo, _gi.allocator);
+    _gi.device = _gi.physical.createDevice(deviceCreateInfo, _gi.allocator, _dispatcher);
+
+    // initialize dispatcher for the device
+    _dispatcher.init(_gi.device);
 
     //     // initialize a memory allocator for Vulkan images
     //     if (cp.enableVmaAllocator) {
@@ -3875,8 +3904,9 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
 
     // print device information
     if (cp.printVkInfo) {
-        printDeviceFeatures(_gi.physical, deviceFeatures, verbose);
-        printDeviceExtensions(_gi.physical, availableDeviceExtensions, enabledDeviceExtensions, verbose);
+        bool verbose = cp.printVkInfo == VERBOSE;
+        printDeviceFeatures(_gi.physical, _dispatcher, deviceFeatures, verbose);
+        printDeviceExtensions(_gi.physical, _dispatcher, availableDeviceExtensions, enabledDeviceExtensions, verbose);
     }
 
     // classify queue families. create command pool for each of them.
@@ -3902,7 +3932,7 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
             _transfer = q;
 
         if (cp.surface && !_present) {
-            auto supportPresenting = _gi.physical.getSurfaceSupportKHR(i, cp.surface);
+            auto supportPresenting = _gi.physical.getSurfaceSupportKHR(i, cp.surface, _dispatcher);
             if (supportPresenting) _present = q;
         }
     }
@@ -3919,7 +3949,7 @@ Device::~Device() {
     if (_gi.vmaAllocator) vmaDestroyAllocator(_gi.vmaAllocator), _gi.vmaAllocator = nullptr;
 #endif
     if (_gi.device) {
-        _gi.device.destroy(_gi.allocator);
+        _gi.device.destroy(_gi.allocator, _dispatcher);
         _gi.device = nullptr;
         RVI_LOGI("Vulkan device destroyed");
     }
@@ -3942,25 +3972,25 @@ struct InstanceInfo {
     std::vector<vk::ExtensionProperties> extensions;
 
     /// initialize the structure. Populate all data members.
-    void init() {
-        version = vk::enumerateInstanceVersion();
+    void init(const vk::DispatchLoaderDynamic & d) {
+        version = vk::enumerateInstanceVersion(d);
 
         auto properties = completeEnumerate<vk::LayerProperties>(
-            [&](uint32_t * count, vk::LayerProperties * data) { return vk::enumerateInstanceLayerProperties(count, data); });
+            [&](uint32_t * count, vk::LayerProperties * data) { return vk::enumerateInstanceLayerProperties(count, data, d); });
 
         layers.resize(properties.size());
 
         for (size_t i = 0; i < layers.size(); ++i) {
             layers[i].properties = properties[i];
             layers[i].extensions = completeEnumerate<vk::ExtensionProperties>([&](uint32_t * count, vk::ExtensionProperties * data) {
-                return vk::enumerateInstanceExtensionProperties(properties[i].layerName, count, data);
+                return vk::enumerateInstanceExtensionProperties(properties[i].layerName, count, data, d);
             });
         }
 
         std::sort(layers.begin(), layers.end(), [](const auto & a, const auto & b) { return strcmp(a.properties.layerName, b.properties.layerName) < 0; });
 
         extensions = completeEnumerate<vk::ExtensionProperties>(
-            [&](uint32_t * count, vk::ExtensionProperties * data) { return vk::enumerateInstanceExtensionProperties(nullptr, count, data); });
+            [&](uint32_t * count, vk::ExtensionProperties * data) { return vk::enumerateInstanceExtensionProperties(nullptr, count, data, d); });
 
         std::sort(extensions.begin(), extensions.end(), [](const auto & a, const auto & b) { return strcmp(a.extensionName, b.extensionName) < 0; });
     }
@@ -4103,19 +4133,19 @@ struct PhysicalDeviceInfo {
     vk::PhysicalDeviceProperties         properties;
     std::vector<vk::ExtensionProperties> extensions;
 
-    void query(vk::PhysicalDevice dev) {
-        properties = dev.getProperties();
+    void query(vk::PhysicalDevice dev, const vk::DispatchLoaderDynamic & d) {
+        properties = dev.getProperties(d);
         extensions = completeEnumerate<vk::ExtensionProperties>(
-            [&](uint32_t * count, vk::ExtensionProperties * data) -> vk::Result { return dev.enumerateDeviceExtensionProperties(nullptr, count, data); });
+            [&](uint32_t * count, vk::ExtensionProperties * data) -> vk::Result { return dev.enumerateDeviceExtensionProperties(nullptr, count, data, d); });
     }
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
-static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT objectType, uint64_t object, size_t location,
-                                              int32_t messageCode, const char * prefix, const char * message, void * userData) {
+VkBool32 VKAPI_PTR Instance::staticDebugCallback(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT objectType, uint64_t object, size_t location,
+                                                 int32_t messageCode, const char * prefix, const char * message, void * userData) {
     auto instance   = (Instance *) userData;
-    auto validation = instance->cp().validation;
+    auto validation = instance->_cp.validation;
 
     auto reportError = [&](bool breakIntoDebugger, bool throwException) {
         // if (objectType == vk::DebugReportObjectTypeEXT::eDevice && _lost) {
@@ -4130,7 +4160,7 @@ static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDeb
 
         auto ss = std::stringstream();
         ss << "[Vulkan] " << prefix << " : " << message;
-        auto & bt = instance->cp().backtrace;
+        auto & bt = instance->_cp.backtrace;
         if (bt) { ss << std::endl << bt(); }
         auto str = ss.str();
         RVI_LOGE("%s", str.data());
@@ -4187,15 +4217,16 @@ static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDeb
 // ---------------------------------------------------------------------------------------------------------------------
 //
 Instance::Instance(ConstructParameters cp): _cp(cp) {
-#if RAPID_VULKAN_ENABLE_LOADER
-    RVI_LOGD("Initializing Vulkan loader...");
-    auto getProcAddress = _cp.getInstanceProcAddr;
-    if (!getProcAddress) getProcAddress = _loader.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
-    VULKAN_HPP_DEFAULT_DISPATCHER.init(getProcAddress);
-#endif
+    // Initialize the dispatcher for instance creation.
+    if (!_cp.getInstanceProcAddr) {
+        RVI_LOGD("Initializing built-in Vulkan loader...");
+        _loader                 = std::make_unique<vk::DynamicLoader>();
+        _cp.getInstanceProcAddr = _loader->getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
+    }
+    _dispatcher.init(_cp.getInstanceProcAddr);
 
     InstanceInfo instanceInfo;
-    instanceInfo.init();
+    instanceInfo.init(_dispatcher);
 
     // Determine API version
     if (0 == _cp.apiVersion)
@@ -4277,7 +4308,7 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
     ici.flags |= vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR;
 #endif
     try {
-        _instance = vk::createInstance(ici);
+        _instance = vk::createInstance(ici, nullptr, _dispatcher);
     } catch (vk::SystemError & e) {
         // TODO: print instance information
         RVI_LOGE("Failed to create Vulkan instance: %s", e.what());
@@ -4290,10 +4321,8 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
         RVI_LOGI("%s", message.data());
     }
 
-#if RAPID_VULKAN_ENABLE_LOADER
-    // load all function pointers.
-    VULKAN_HPP_DEFAULT_DISPATCHER.init(_instance);
-#endif
+    // load the rest of instance functions
+    _dispatcher.init(_instance);
 
     // setup debug callback
     if (cp.validation) {
@@ -4301,7 +4330,7 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
                            .setFlags(vk::DebugReportFlagBitsEXT::eError | vk::DebugReportFlagBitsEXT::eWarning)
                            .setPfnCallback(staticDebugCallback)
                            .setPUserData(this);
-        _debugReport = _instance.createDebugReportCallbackEXT(debugci);
+        _debugReport = _instance.createDebugReportCallbackEXT(debugci, nullptr, _dispatcher);
     }
 
     RVI_LOGI("Vulkan instance initialized.");
@@ -4310,19 +4339,11 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
 // ---------------------------------------------------------------------------------------------------------------------
 //
 Instance::~Instance() {
-#if RAPID_VULKAN_ENABLE_LOADER
-    // This is a hack to ensure that all instance function pointers are valid,
-    // specially when there are multiple instances
-    if (_instance) {
-        // load all function pointers.
-        VULKAN_HPP_DEFAULT_DISPATCHER.init(_instance);
-    }
-#endif
     if (_debugReport) {
-        _instance.destroyDebugReportCallbackEXT(_debugReport);
+        _instance.destroyDebugReportCallbackEXT(_debugReport, {}, _dispatcher);
         _debugReport = VK_NULL_HANDLE;
     }
-    if (_instance) _instance.destroy(), _instance = VK_NULL_HANDLE;
+    if (_instance) _instance.destroy(nullptr, _dispatcher), _instance = VK_NULL_HANDLE;
     RVI_LOGI("Vulkan instance destroyed.");
 }
 

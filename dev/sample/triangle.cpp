@@ -10,10 +10,11 @@ namespace triangle {
 #include "shader/triangle.frag.spv.h"
 
 struct GLFWInit {
-    vk::Instance inst;
-    GLFWwindow * window  = nullptr;
-    VkSurfaceKHR surface = nullptr;
-    GLFWInit(bool headless, vk::Instance instance, uint32_t w, uint32_t h, const char * title): inst(instance) {
+    rapid_vulkan::Instance & inst;
+    GLFWwindow *             window  = nullptr;
+    VkSurfaceKHR             surface = nullptr;
+
+    GLFWInit(bool headless, rapid_vulkan::Instance & instance, uint32_t w, uint32_t h, const char * title): inst(instance) {
         if (headless) return; // do nothing in headless mode.
         glfwInit();
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
@@ -23,7 +24,7 @@ struct GLFWInit {
         RVI_REQUIRE(surface, "Failed to create surface.");
     }
     ~GLFWInit() {
-        if (surface) inst.destroySurfaceKHR(surface), surface = VK_NULL_HANDLE;
+        if (surface) inst.handle().destroySurfaceKHR(surface, nullptr, inst.dispatcher()), surface = VK_NULL_HANDLE;
         if (window) glfwDestroyWindow(window), window = nullptr;
         glfwTerminate();
     }
@@ -43,7 +44,7 @@ struct GLFWInit {
 };
 
 struct Options {
-    vk::Instance                    inst            = VK_NULL_HANDLE;
+    rapid_vulkan::Instance *        inst            = nullptr;
     uint32_t                        headless        = 0; // Set to non-zero to enable headless mode. The value is number of frames to render.
     bool                            dynamicViewport = true;
     rapid_vulkan::Device::Verbosity verbosity       = rapid_vulkan::Device::BRIEF;
@@ -55,12 +56,12 @@ void entry(const Options & options) {
     std::unique_ptr<Instance> instancePtr;
     if (!instance) {
         instancePtr = std::make_unique<Instance>(Instance::ConstructParameters {}.setValidation(Instance::BREAK_ON_VK_ERROR));
-        instance    = instancePtr->handle();
+        instance    = instancePtr.get();
     }
     auto w      = uint32_t(1280);
     auto h      = uint32_t(720);
-    auto glfw   = GLFWInit(options.headless, instance, w, h, "triangle");
-    auto device = Device(Device::ConstructParameters {instance}.setSurface(glfw.surface).setPrintVkInfo(options.verbosity));
+    auto glfw   = GLFWInit(options.headless, *instance, w, h, "triangle");
+    auto device = Device(Device::ConstructParameters {*instance}.setSurface(glfw.surface).setPrintVkInfo(options.verbosity));
     auto gi     = device.gi();
     auto vs     = Shader(Shader::ConstructParameters {{"triangle-vs"}}.setGi(gi).setSpirv(triangle_vert));
     auto fs     = Shader(Shader::ConstructParameters {{"triangle-fs"}, gi}.setSpirv(triangle_frag));

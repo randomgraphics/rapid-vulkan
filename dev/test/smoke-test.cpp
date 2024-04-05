@@ -5,7 +5,7 @@ using namespace rapid_vulkan;
 
 TEST_CASE("api-version") {
     Instance instance({});
-    CHECK(instance.cp().apiVersion >= vk::enumerateInstanceVersion());
+    CHECK(instance._cp.apiVersion >= vk::enumerateInstanceVersion(instance.dispatcher()));
 }
 
 TEST_CASE("instance-counter") {

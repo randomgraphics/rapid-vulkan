@@ -11,4 +11,5 @@ add_executable(rapid-vulkan-test
     smoke-test.cpp
     test-main.cpp
 )
+target_compile_definitions(rapid-vulkan-test PRIVATE RAPID_VULKAN_UNIT_TEST=1)
 target_link_libraries(rapid-vulkan-test PUBLIC rapid-vulkan-static)

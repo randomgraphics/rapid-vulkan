@@ -26,9 +26,6 @@ endif()
 
 add_sample(hello-world)
 add_sample_no_link_to_rv(alternative-namespace)
-if (HAS_VOLK_H)
-    add_sample_no_link_to_rv(use-with-volk-loader)
-endif()
 add_sample(noop-compute)
 
 if (NOT ANDROID)

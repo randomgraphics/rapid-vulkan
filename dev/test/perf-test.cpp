@@ -30,7 +30,7 @@ TEST_CASE("texture-array", "[perf]") {
     auto q      = device->graphics();
 
     // Determine if how many images we can use in a single draw call. Max is 1000.
-    auto N = std::min(1000u, gi->physical.getProperties().limits.maxPerStageDescriptorSampledImages);
+    auto N = std::min(1000u, gi->physical.getProperties(*gi->dispatcher).limits.maxPerStageDescriptorSampledImages);
     std::cout << "Using " << N << " images in a single draw call" << std::endl;
 
     // The shader we use in test (texture-array.frag) requires at least 32 images.
@@ -59,7 +59,7 @@ TEST_CASE("texture-array", "[perf]") {
     Barrier()
         .i(t->handle(), vk::AccessFlagBits::eNone, vk::AccessFlagBits::eShaderRead, vk::ImageLayout::eUndefined, vk::ImageLayout::eShaderReadOnlyOptimal,
            vk::ImageAspectFlagBits::eColor)
-        .cmdWrite(c);
+        .cmdWrite(*gi->dispatcher, c);
     sw.cmdBeginBuiltInRenderPass(c.handle(), {});
     {
         ScopedTimer timer("render-drawbles");

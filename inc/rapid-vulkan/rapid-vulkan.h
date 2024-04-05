@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identify the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 23
+#define RAPID_VULKAN_HEADER_REVISION 24
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -38,13 +38,6 @@ SOFTWARE.
 /// Set to non-zero value to enable debug build. Disabled by default.
 #ifndef RAPID_VULKAN_ENABLE_DEBUG_BUILD
 #define RAPID_VULKAN_ENABLE_DEBUG_BUILD 0
-#endif
-
-/// \def RAPID_VULKAN_ENABLE_LOADER
-/// Set to 0 to disable built-in Vulkan API loader. Enabled by default.
-/// \todo explain in what cases and why you might wnat to disable the built-in loader.
-#ifndef RAPID_VULKAN_ENABLE_LOADER
-#define RAPID_VULKAN_ENABLE_LOADER 1
 #endif
 
 /// \def RAPID_VULKAN_ENABLE_VMA
@@ -135,26 +128,21 @@ SOFTWARE.
 // ---------------------------------------------------------------------------------------------------------------------
 // include vulkan.hpp
 
-#if RAPID_VULKAN_ENABLE_LOADER
-#define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
+// No global Vulkan function pointers/prototypes. We are always using dynamic dispatcher.
+#ifndef VK_NO_PROTOTYPES
+#define VK_NO_PROTOTYPES
 #endif
 
-#ifdef VOLK_H_
-// volk.h defines VK_NO_PROTOTYPES to avoid symbol conflicting with vulkan.h. But it
-// causes vulkan.hpp to automatically switch to dynamic loader. So we have to undefine it,
-// before including vulkan.hpp
-#undef VK_NO_PROTOTYPES
+// The rapid-vulkan library does not use defualt dispatcher to maitain max flexibility. The dispathcer is stored
+// as a per-device data in GlobalInfo struct and passed around.
+#ifndef VULKAN_HPP_NO_DEFAULT_DISPATCHER
+#define VULKAN_HPP_NO_DEFAULT_DISPATCHER
 #endif
 
 #ifdef __ANDROID__
 #include "3rd-party/android/vulkan/vulkan.hpp"
 #else
 #include <vulkan/vulkan.hpp>
-#endif
-
-#ifdef VOLK_H_
-// Now restore it.
-#define VK_NO_PROTOTYPES
 #endif
 
 // check for minimal required vulkan.hpp version.
@@ -343,12 +331,19 @@ using namespace std::string_literals;
 // ---------------------------------------------------------------------------------------------------------------------
 /// A utility class used to pass commonly used Vulkan global information around.
 struct GlobalInfo {
-    const vk::AllocationCallbacks * allocator           = nullptr;
-    vk::Instance                    instance            = nullptr;
-    vk::PhysicalDevice              physical            = nullptr;
-    uint32_t                        apiVersion          = 0;
-    vk::Device                      device              = nullptr;
-    uint32_t                        graphicsQueueFamily = VK_QUEUE_FAMILY_IGNORED;
+    // store full set of Vulkan function pointers. Use this and only this to invoke Vulkan functions.
+    // In a valid GlobalInfo object, this pointer is always valid.
+    const vk::DispatchLoaderDynamic * dispatcher = nullptr;
+
+    /// @brief A optional memory allocator. Alway use pointer to allocate Vulkan handle and memory, regardless if
+    /// it is nullptr or not.
+    const vk::AllocationCallbacks * allocator = nullptr;
+
+    vk::Instance       instance            = nullptr;
+    vk::PhysicalDevice physical            = nullptr;
+    uint32_t           apiVersion          = 0;
+    vk::Device         device              = nullptr;
+    uint32_t           graphicsQueueFamily = VK_QUEUE_FAMILY_IGNORED;
 
 #if RAPID_VULKAN_ENABLE_VMA
     VmaAllocator vmaAllocator = nullptr;
@@ -358,14 +353,14 @@ struct GlobalInfo {
     void safeDestroy(T & handle, ARGS... args) const {
         if (!handle) return;
         if constexpr (std::is_same_v<T, vk::CommandPool>) {
-            device.resetCommandPool(handle, vk::CommandPoolResetFlagBits::eReleaseResources);
-            device.destroy(handle, allocator);
+            device.resetCommandPool(handle, vk::CommandPoolResetFlagBits::eReleaseResources, *dispatcher);
+            device.destroy(handle, allocator, *dispatcher);
         } else if constexpr (std::is_same_v<T, vk::CommandBuffer>) {
-            device.freeCommandBuffers(args..., {handle});
+            device.freeCommandBuffers(args..., {handle}, *dispatcher);
         } else if constexpr (std::is_same_v<T, vk::DeviceMemory>) {
-            device.freeMemory(handle, allocator);
+            device.freeMemory(handle, allocator, *dispatcher);
         } else {
-            device.destroy(handle, allocator);
+            device.destroy(handle, allocator, *dispatcher);
         }
         handle = nullptr;
     }
@@ -435,12 +430,8 @@ inline T clampRange2(T & srcOffset, T & dstOffset, T & length, const T & srcCapa
 // ---------------------------------------------------------------------------------------------------------------------
 /// Helper function to set Vulkan opaque handle's name (VK_EXT_debug_utils).
 template<typename T>
-inline void setVkHandleName(vk::Device device, T handle, const char * name) {
-#if VULKAN_HPP_DISPATCH_LOADER_DYNAMIC == 1
-    if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkSetDebugUtilsObjectNameEXT) return;
-#else
-    if (!::vkSetDebugUtilsObjectNameEXT) return;
-#endif
+inline void setVkHandleName(const vk::DispatchLoaderDynamic & dsp, vk::Device device, T handle, const char * name) {
+    if (!dsp.vkSetDebugUtilsObjectNameEXT) return;
     if (!device || !handle || !name) return;
 
     union HandleAlias {
@@ -451,36 +442,29 @@ inline void setVkHandleName(vk::Device device, T handle, const char * name) {
     HandleAlias alias;
     alias.object = handle;
     auto info    = vk::DebugUtilsObjectNameInfoEXT().setObjectType(handle.objectType).setObjectHandle(alias.u64).setPObjectName(name);
-    device.setDebugUtilsObjectNameEXT(info);
+    device.setDebugUtilsObjectNameEXT(info, dsp);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// Helper function to set Vulkan opaque handle's name (VK_EXT_debug_utils).
 template<typename T>
-inline void setVkHandleName(vk::Device device, T handle, std::string name) {
-    setVkHandleName(device, handle, name.c_str());
+inline void setVkHandleName(const vk::DispatchLoaderDynamic & dsp, vk::Device device, T handle, std::string name) {
+    setVkHandleName(dsp, device, handle, name.c_str());
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// @brief Helper function to insert a begin label to command buffer
-inline bool cmdBeginDebugLabel(vk::CommandBuffer cmd, const char * name, const std::array<float, 4> & color = {1, 1, 1, 1}) {
-#if VULKAN_HPP_DISPATCH_LOADER_DYNAMIC == 1
-    if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdBeginDebugUtilsLabelEXT) return false;
-#else
-    if (!::vkCmdBeginDebugUtilsLabelEXT) return false;
-#endif
+inline bool cmdBeginDebugLabel(const vk::DispatchLoaderDynamic & dsp, vk::CommandBuffer cmd, const char * name,
+                               const std::array<float, 4> & color = {1, 1, 1, 1}) {
+    if (!dsp.vkCmdBeginDebugUtilsLabelEXT) return false;
     if (!cmd || !name) return false;
-    cmd.beginDebugUtilsLabelEXT(vk::DebugUtilsLabelEXT().setPLabelName(name).setColor(color));
+    cmd.beginDebugUtilsLabelEXT(vk::DebugUtilsLabelEXT().setPLabelName(name).setColor(color), dsp);
     return true;
 }
 
-inline void cmdEndDebugLabel(vk::CommandBuffer cmd) {
-#if VULKAN_HPP_DISPATCH_LOADER_DYNAMIC == 1
-    if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdEndDebugUtilsLabelEXT) return;
-#else
-    if (!::vkCmdEndDebugUtilsLabelEXT) return;
-#endif
-    if (cmd) cmd.endDebugUtilsLabelEXT();
+inline void cmdEndDebugLabel(const vk::DispatchLoaderDynamic & dsp, vk::CommandBuffer cmd) {
+    if (!dsp.vkCmdEndDebugUtilsLabelEXT) return;
+    if (cmd) cmd.endDebugUtilsLabelEXT(dsp);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -518,36 +502,36 @@ inline std::vector<T> completeEnumerate(Q query) {
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
-std::vector<vk::PhysicalDevice> enumeratePhysicalDevices(vk::Instance instance);
+std::vector<vk::PhysicalDevice> enumeratePhysicalDevices(const vk::DispatchLoaderDynamic & dispatcher, vk::Instance instance);
 
 // ---------------------------------------------------------------------------------------------------------------------
 // This function currently selects the device with the longest extension list.
-vk::PhysicalDevice selectTheMostPowerfulPhysicalDevice(vk::ArrayProxy<const vk::PhysicalDevice> phydevs);
+vk::PhysicalDevice selectTheMostPowerfulPhysicalDevice(const vk::DispatchLoaderDynamic & dispatcher, vk::ArrayProxy<const vk::PhysicalDevice> phydevs);
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
-std::vector<vk::ExtensionProperties> enumerateDeviceExtensions(vk::PhysicalDevice dev);
+std::vector<vk::ExtensionProperties> enumerateDeviceExtensions(const vk::DispatchLoaderDynamic & dispatcher, vk::PhysicalDevice dev);
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// Query an usable/default depth format of the device.
 /// \param dev The physical device in question
 /// \param stencil If we need stencil format. <0: don't care. 0: no. >0: required. Default value is -1.
 /// \return An format that is suitble to create depth/stencil buffer. Or vk::eUndefined if failed.
-vk::Format queryDepthFormat(vk::PhysicalDevice dev, int stencil = -1);
+vk::Format queryDepthFormat(const vk::DispatchLoaderDynamic & dispatcher, vk::PhysicalDevice dev, int stencil = -1);
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// @brief Calling vkDeviceWaitIdle() in a thread-safe manner.
-void threadSafeWaitForDeviceIdle(vk::Device device);
+void threadSafeWaitForDeviceIdle(const vk::DispatchLoaderDynamic & dispatcher, vk::Device device);
 
-#if RAPID_VULKAN_ENABLE_GLFW3
-// ---------------------------------------------------------------------------------------------------------------------
-/// @brief Helper functions to create a Vulkan surface from GLFW window.
-inline vk::UniqueSurfaceKHR createGLFWSurface(vk::Instance instance, GLFWwindow * window) {
-    VkSurfaceKHR surface;
-    if (::glfwCreateWindowSurface(instance, window, nullptr, &surface) != VK_SUCCESS) { RVI_THROW("failed to create window surface!"); }
-    return vk::UniqueSurfaceKHR(surface, {instance});
-}
-#endif
+// #if RAPID_VULKAN_ENABLE_GLFW3
+// // ---------------------------------------------------------------------------------------------------------------------
+// /// @brief Helper functions to create a Vulkan surface from GLFW window.
+// inline vk::UniqueSurfaceKHR createGLFWSurface(const vk::DispatchLoaderDynamic & dsp, vk::Instance instance, GLFWwindow * window) {
+//     VkSurfaceKHR surface;
+//     if (::glfwCreateWindowSurface(instance, window, nullptr, &surface) != VK_SUCCESS) { RVI_THROW("failed to create window surface!"); }
+//     return vk::UniqueSurfaceKHR(surface, {instance});
+// }
+// #endif
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// The root class of most of the other public classes in this library.
@@ -777,10 +761,6 @@ public:
     /// comparison operator
     bool operator<(std::nullptr_t) const { return _ptr < (T *) nullptr; }
 
-    /// @brief boolean cast.
-    /// @return true if not null, false otherwise.
-    explicit operator bool() const { return 0 != _ptr; }
-
     /// @brief not operator
     /// @return true if null, false otherwise.
     bool operator!() const { return 0 == _ptr; }
@@ -896,9 +876,9 @@ struct Barrier {
     }
 
     /// @brief Write barriers to command buffer
-    void cmdWrite(vk::CommandBuffer cb) const {
+    void cmdWrite(const vk::DispatchLoaderDynamic & dsp, vk::CommandBuffer cb) const {
         if (memories.empty() && buffers.empty() && images.empty()) return;
-        cb.pipelineBarrier(srcStage, dstStage, dependencies, memories, buffers, images);
+        cb.pipelineBarrier(srcStage, dstStage, dependencies, memories, buffers, images, dsp);
     }
 };
 
@@ -1397,7 +1377,7 @@ public:
 
     /// @brief Construct a new sampler object (will create a new vk::Sampler handle)
     Sampler(const ConstructParameters & cp): Root(cp), _gi(cp.gi) {
-        _handle = _gi->device.createSampler(cp.info, _gi->allocator);
+        _handle = _gi->device.createSampler(cp.info, _gi->allocator, *_gi->dispatcher);
         onNameChanged("");
     }
 
@@ -1413,7 +1393,7 @@ public:
 
 protected:
     void onNameChanged(const std::string &) override {
-        if (_handle) setVkHandleName(_gi->device, _handle, name());
+        if (_handle) setVkHandleName(*_gi->dispatcher, _gi->device, _handle, name());
     }
 
 private:
@@ -1596,6 +1576,8 @@ struct PipelineReflection {
 class Pipeline : public Root {
 public:
     ~Pipeline() override;
+
+    const GlobalInfo & gi() const;
 
     vk::PipelineBindPoint bindPoint() const;
 
@@ -2365,8 +2347,11 @@ public:
     };
 
     struct ConstructParameters {
-        /// Handle to Vulkan instance.
+        /// Required parameter to specify handle to the Vulkan instance. Must be valid.
         vk::Instance instance;
+
+        /// Required parameter to query Vulkan function pointers. Must be valid.
+        PFN_vkGetInstanceProcAddr getInstanceProcAddr = nullptr;
 
         /// Leave it at zero to create an headless device w/o presentation support.
         vk::SurfaceKHR surface {};
@@ -2392,8 +2377,17 @@ public:
         /// set to false to make the creation log less verbose.
         Verbosity printVkInfo = BRIEF;
 
+        ConstructParameters() = default;
+
+        ConstructParameters(const Instance &);
+
         ConstructParameters & setInstance(vk::Instance i) {
             instance = i;
+            return *this;
+        }
+
+        ConstructParameters & setGetInstanceProcAddr(PFN_vkGetInstanceProcAddr p) {
+            getInstanceProcAddr = p;
             return *this;
         }
 
@@ -2431,12 +2425,17 @@ public:
         }
     };
 
+    // /// @brief Create a new device object from existing VkDevice handle.
+    // static Device import(...);
+
     Device(const ConstructParameters &);
 
     ~Device();
 
     /// Get the vulkan global info structure.
     const GlobalInfo * gi() const { return &_gi; }
+
+    const vk::DispatchLoaderDynamic & dispatcher() const { return _dispatcher; }
 
     /// The surface that this device is created for. Could be null if the device is headless.
     vk::SurfaceKHR surface() const { return _cp.surface; }
@@ -2456,7 +2455,7 @@ public:
 
     bool separatePresentQueue() const { return _present != _graphics; }
 
-    void waitIdle() const { return threadSafeWaitForDeviceIdle(_gi.device); }
+    void waitIdle() const { return threadSafeWaitForDeviceIdle(_dispatcher, _gi.device); }
 
     vk::Device handle() const { return _gi.device; }
 
@@ -2464,10 +2463,9 @@ public:
 
     operator VkDevice() const { return _gi.device; }
 
-    vk::Device operator->() const { return _gi.device; }
-
 private:
     ConstructParameters         _cp;
+    vk::DispatchLoaderDynamic   _dispatcher;
     GlobalInfo                  _gi {};
     std::vector<CommandQueue *> _queues; // one for each queue family
     CommandQueue *              _graphics = nullptr;
@@ -2499,6 +2497,7 @@ public:
 
     friend inline Validation operator|(Validation a, Validation b) { return static_cast<Validation>(static_cast<int>(a) | static_cast<int>(b)); }
 
+    /// @brief Construct Instance object from scratch, creating new VkInstance handle.
     struct ConstructParameters {
         /// @brief Optional parameter to specify which version of the API you want to use to create the instance.
         /// Leaving it as zero means using the highest available version.
@@ -2525,7 +2524,6 @@ public:
         Device::Verbosity printVkInfo {Device::BRIEF};
 
         /// Define custom function pointer to load Vulkan function pointers. Set to null to use the built-in one.
-        /// Ignored when RAPID_VULKAN_ENABLE_LOADER is not 1.
         PFN_vkGetInstanceProcAddr getInstanceProcAddr {nullptr};
 
         ConstructParameters & setValidation(Validation v) {
@@ -2541,6 +2539,11 @@ public:
         template<class FUNC>
         ConstructParameters & setBacktrace(FUNC func) {
             backtrace = func;
+            return *this;
+        }
+
+        ConstructParameters & setGetInstanceProcAddr(PFN_vkGetInstanceProcAddr p) {
+            getInstanceProcAddr = p;
             return *this;
         }
 
@@ -2570,28 +2573,31 @@ public:
 
     ~Instance();
 
-    const ConstructParameters & cp() const { return _cp; }
-
     vk::Instance handle() const { return _instance; }
+
+    const vk::DispatchLoaderDynamic & dispatcher() const { return _dispatcher; }
 
     operator vk::Instance() const { return _instance; }
 
     operator VkInstance() const { return _instance; }
 
-    vk::Instance operator->() const { return _instance; }
-
+#ifndef RAPID_VULKAN_UNIT_TEST
 private:
-    ConstructParameters _cp;
-    vk::Instance        _instance {};
-#if RAPID_VULKAN_ENABLE_LOADER
-#if 1 != VULKAN_HPP_DISPATCH_LOADER_DYNAMIC
-#error \
-    "rapid-vulkan does not support static dispatch loader yet. When RAPID_VULKAN_ENABLE_LOADER is set to 1, VULKAN_HPP_DISPATCH_LOADER_DYNAMIC must be set to 1 as well."
 #endif
-    vk::DynamicLoader _loader;
-#endif
-    vk::DebugReportCallbackEXT _debugReport {};
+    ConstructParameters                _cp;
+    std::unique_ptr<vk::DynamicLoader> _loader;
+    vk::DispatchLoaderDynamic          _dispatcher;
+    vk::Instance                       _instance {};
+    vk::DebugReportCallbackEXT         _debugReport {};
+
+    static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT objectType, uint64_t object, size_t location,
+                                                  int32_t messageCode, const char * prefix, const char * message, void * userData);
 };
+
+inline Device::ConstructParameters::ConstructParameters(const Instance & i) {
+    instance            = i.handle();
+    getInstanceProcAddr = i.dispatcher().vkGetInstanceProcAddr;
+}
 
 #ifdef _MSC_VER
 #pragma warning(pop)
