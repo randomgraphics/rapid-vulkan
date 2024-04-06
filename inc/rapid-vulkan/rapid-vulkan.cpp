@@ -3824,11 +3824,12 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
     // initialize dispatcher with instance function pointers.
     _dispatcher.init(cp.getInstanceProcAddr);
     _dispatcher.init(_gi.instance);
+    _gi.dispatcher = &_dispatcher;
 
     // select physical device
     // TODO: pick the one specified by user.
-    auto phydevs = enumeratePhysicalDevices(*_gi.dispatcher, _gi.instance);
-    _gi.physical = selectTheMostPowerfulPhysicalDevice(*_gi.dispatcher, phydevs);
+    auto phydevs = enumeratePhysicalDevices(_dispatcher, _gi.instance);
+    _gi.physical = selectTheMostPowerfulPhysicalDevice(_dispatcher, phydevs);
 
     // Retrieve physical device properties
     _gi.apiVersion = _gi.physical.getProperties(_dispatcher).apiVersion;
