@@ -120,14 +120,14 @@ auto ref2handle(const T & ref) -> decltype(ref->handle()) {
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
-std::vector<vk::PhysicalDevice> enumeratePhysicalDevices(const vk::DispatchLoaderDynamic & dispatcher, vk::Instance instance) {
+std::vector<vk::PhysicalDevice> enumeratePhysicalDevices(const RAPID_VULKAN_DISPATCHER_TYPE & dispatcher, vk::Instance instance) {
     return completeEnumerate<vk::PhysicalDevice>(
         [&](uint32_t * count, vk::PhysicalDevice * data) { return instance.enumeratePhysicalDevices(count, data, dispatcher); });
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
 // This function currently selects the device with the longest extension list.
-vk::PhysicalDevice selectTheMostPowerfulPhysicalDevice(const vk::DispatchLoaderDynamic & dispatcher, vk::ArrayProxy<const vk::PhysicalDevice> phydevs) {
+vk::PhysicalDevice selectTheMostPowerfulPhysicalDevice(const RAPID_VULKAN_DISPATCHER_TYPE & dispatcher, vk::ArrayProxy<const vk::PhysicalDevice> phydevs) {
     size_t result = 0;
     size_t maxext = 0;
     for (size_t i = 0; i < phydevs.size(); ++i) {
@@ -145,7 +145,7 @@ vk::PhysicalDevice selectTheMostPowerfulPhysicalDevice(const vk::DispatchLoaderD
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
-std::vector<vk::ExtensionProperties> enumerateDeviceExtensions(const vk::DispatchLoaderDynamic & dispatcher, vk::PhysicalDevice dev) {
+std::vector<vk::ExtensionProperties> enumerateDeviceExtensions(const RAPID_VULKAN_DISPATCHER_TYPE & dispatcher, vk::PhysicalDevice dev) {
     auto extensions = completeEnumerate<vk::ExtensionProperties>(
         [&](uint32_t * count, vk::ExtensionProperties * data) { return dev.enumerateDeviceExtensionProperties(nullptr, count, data, dispatcher); });
     std::sort(extensions.begin(), extensions.end(), [](const auto & a, const auto & b) -> bool { return strcmp(a.extensionName, b.extensionName) < 0; });
@@ -154,7 +154,7 @@ std::vector<vk::ExtensionProperties> enumerateDeviceExtensions(const vk::Dispatc
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
-vk::Format queryDepthFormat(const vk::DispatchLoaderDynamic & dispatcher, vk::PhysicalDevice dev, int stencil) {
+vk::Format queryDepthFormat(const RAPID_VULKAN_DISPATCHER_TYPE & dispatcher, vk::PhysicalDevice dev, int stencil) {
     static const vk::Format DEPTH_STENCIL[] = {
         vk::Format::eD24UnormS8Uint,
         vk::Format::eD32SfloatS8Uint,
@@ -184,7 +184,7 @@ vk::Format queryDepthFormat(const vk::DispatchLoaderDynamic & dispatcher, vk::Ph
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
-void threadSafeWaitForDeviceIdle(const vk::DispatchLoaderDynamic & dispatcher, vk::Device device) {
+void threadSafeWaitForDeviceIdle(const RAPID_VULKAN_DISPATCHER_TYPE & dispatcher, vk::Device device) {
     static std::mutex mutex;
     auto              lock = std::lock_guard {mutex};
     device.waitIdle(dispatcher);
@@ -3575,7 +3575,7 @@ static std::string printVulkanVersion(uint32_t v) {
 // ---------------------------------------------------------------------------------------------------------------------
 //
 static void printPhysicalDeviceInfo(const std::vector<vk::PhysicalDevice> & available, vk::PhysicalDevice selected,
-                                    const vk::DispatchLoaderDynamic & dispatcher) {
+                                    const RAPID_VULKAN_DISPATCHER_TYPE & dispatcher) {
 #define PRINT_LIMIT(name) "        " #name " = " << p.limits.name << std::endl
     std::stringstream ss;
     ss << "===================================" << std::endl << "Available Vulkan physical devices :" << std::endl;
@@ -3611,7 +3611,7 @@ static void printPhysicalDeviceInfo(const std::vector<vk::PhysicalDevice> & avai
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
-static void printDeviceFeatures(vk::PhysicalDevice physical, const vk::DispatchLoaderDynamic & dispatcher, const PhysicalDeviceFeatureList & enabled,
+static void printDeviceFeatures(vk::PhysicalDevice physical, const RAPID_VULKAN_DISPATCHER_TYPE & dispatcher, const PhysicalDeviceFeatureList & enabled,
                                 bool verbose) {
     // retrieve physical device properties
     vk::PhysicalDeviceProperties properties = physical.getProperties(dispatcher);
@@ -3697,7 +3697,7 @@ static void printDeviceFeatures(vk::PhysicalDevice physical, const vk::DispatchL
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
-static void printDeviceExtensions(vk::PhysicalDevice physical, const vk::DispatchLoaderDynamic & dispatcher,
+static void printDeviceExtensions(vk::PhysicalDevice physical, const RAPID_VULKAN_DISPATCHER_TYPE & dispatcher,
                                   const std::vector<vk::ExtensionProperties> & available, const std::vector<const char *> & enabled, bool verbose) {
     // retrieve physical device properties
     auto properties = physical.getProperties(dispatcher);
@@ -3726,7 +3726,7 @@ static void printDeviceExtensions(vk::PhysicalDevice physical, const vk::Dispatc
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
-static void printAvailableQueues(vk::PhysicalDevice physical, const vk::DispatchLoaderDynamic & dispatcher,
+static void printAvailableQueues(vk::PhysicalDevice physical, const RAPID_VULKAN_DISPATCHER_TYPE & dispatcher,
                                  const std::vector<vk::QueueFamilyProperties> & queues) {
     auto properties = physical.getProperties(dispatcher);
 
@@ -3973,7 +3973,7 @@ struct InstanceInfo {
     std::vector<vk::ExtensionProperties> extensions;
 
     /// initialize the structure. Populate all data members.
-    void init(const vk::DispatchLoaderDynamic & d) {
+    void init(const RAPID_VULKAN_DISPATCHER_TYPE & d) {
         version = vk::enumerateInstanceVersion(d);
 
         auto properties = completeEnumerate<vk::LayerProperties>(
@@ -4134,7 +4134,7 @@ struct PhysicalDeviceInfo {
     vk::PhysicalDeviceProperties         properties;
     std::vector<vk::ExtensionProperties> extensions;
 
-    void query(vk::PhysicalDevice dev, const vk::DispatchLoaderDynamic & d) {
+    void query(vk::PhysicalDevice dev, const RAPID_VULKAN_DISPATCHER_TYPE & d) {
         properties = dev.getProperties(d);
         extensions = completeEnumerate<vk::ExtensionProperties>(
             [&](uint32_t * count, vk::ExtensionProperties * data) -> vk::Result { return dev.enumerateDeviceExtensionProperties(nullptr, count, data, d); });

@@ -125,6 +125,21 @@ SOFTWARE.
         void(0)
 #endif
 
+/// \def RAPID_VULKAN_VULKAN_DISPATCHER_TYPE
+/// \brief The type of Vulkan dispatcher to use. By default, it is vk::DispatchLoaderDynamic,
+/// Your custom dispatcher type must meet the following requirements:
+/// - It must be inherited from vk::DispatchLoaderBase.
+/// - It must have the following public methods defined:
+///   - void init(PFN_vkGetInstanceProcAddr);
+///     This method is called to initialize the dispatcher with the instance and device neutral function pointers.
+///   - void init(vk::Instance);
+///     This method is called to initialize the dispatcher with the instance specific function pointers.
+///   - void init(vk::Device);
+///     This method is called to initialize the dispatcher with the device specific function pointers.
+#ifndef RAPID_VULKAN_DISPATCHER_TYPE
+#define RAPID_VULKAN_DISPATCHER_TYPE vk::DispatchLoaderDynamic
+#endif
+
 // ---------------------------------------------------------------------------------------------------------------------
 // include vulkan.hpp
 
@@ -133,7 +148,7 @@ SOFTWARE.
 #define VK_NO_PROTOTYPES
 #endif
 
-// The rapid-vulkan library does not use defualt dispatcher to maitain max flexibility. The dispathcer is stored
+// The rapid-vulkan library does not use default dispatcher to maintain max flexibility. The dispatcher is stored
 // as a per-device data in GlobalInfo struct and passed around.
 #ifndef VULKAN_HPP_NO_DEFAULT_DISPATCHER
 #define VULKAN_HPP_NO_DEFAULT_DISPATCHER
@@ -333,7 +348,7 @@ using namespace std::string_literals;
 struct GlobalInfo {
     // store full set of Vulkan function pointers. Use this and only this to invoke Vulkan functions.
     // In a valid GlobalInfo object, this pointer is always valid.
-    const vk::DispatchLoaderDynamic * dispatcher = nullptr;
+    const RAPID_VULKAN_DISPATCHER_TYPE * dispatcher = nullptr;
 
     /// @brief A optional memory allocator. Alway use pointer to allocate Vulkan handle and memory, regardless if
     /// it is nullptr or not.
@@ -430,7 +445,7 @@ inline T clampRange2(T & srcOffset, T & dstOffset, T & length, const T & srcCapa
 // ---------------------------------------------------------------------------------------------------------------------
 /// Helper function to set Vulkan opaque handle's name (VK_EXT_debug_utils).
 template<typename T>
-inline void setVkHandleName(const vk::DispatchLoaderDynamic & dsp, vk::Device device, T handle, const char * name) {
+inline void setVkHandleName(const RAPID_VULKAN_DISPATCHER_TYPE & dsp, vk::Device device, T handle, const char * name) {
     if (!dsp.vkSetDebugUtilsObjectNameEXT) return;
     if (!device || !handle || !name) return;
 
@@ -448,13 +463,13 @@ inline void setVkHandleName(const vk::DispatchLoaderDynamic & dsp, vk::Device de
 // ---------------------------------------------------------------------------------------------------------------------
 /// Helper function to set Vulkan opaque handle's name (VK_EXT_debug_utils).
 template<typename T>
-inline void setVkHandleName(const vk::DispatchLoaderDynamic & dsp, vk::Device device, T handle, std::string name) {
+inline void setVkHandleName(const RAPID_VULKAN_DISPATCHER_TYPE & dsp, vk::Device device, T handle, std::string name) {
     setVkHandleName(dsp, device, handle, name.c_str());
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// @brief Helper function to insert a begin label to command buffer
-inline bool cmdBeginDebugLabel(const vk::DispatchLoaderDynamic & dsp, vk::CommandBuffer cmd, const char * name,
+inline bool cmdBeginDebugLabel(const RAPID_VULKAN_DISPATCHER_TYPE & dsp, vk::CommandBuffer cmd, const char * name,
                                const std::array<float, 4> & color = {1, 1, 1, 1}) {
     if (!dsp.vkCmdBeginDebugUtilsLabelEXT) return false;
     if (!cmd || !name) return false;
@@ -462,7 +477,7 @@ inline bool cmdBeginDebugLabel(const vk::DispatchLoaderDynamic & dsp, vk::Comman
     return true;
 }
 
-inline void cmdEndDebugLabel(const vk::DispatchLoaderDynamic & dsp, vk::CommandBuffer cmd) {
+inline void cmdEndDebugLabel(const RAPID_VULKAN_DISPATCHER_TYPE & dsp, vk::CommandBuffer cmd) {
     if (!dsp.vkCmdEndDebugUtilsLabelEXT) return;
     if (cmd) cmd.endDebugUtilsLabelEXT(dsp);
 }
@@ -502,31 +517,31 @@ inline std::vector<T> completeEnumerate(Q query) {
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
-std::vector<vk::PhysicalDevice> enumeratePhysicalDevices(const vk::DispatchLoaderDynamic & dispatcher, vk::Instance instance);
+std::vector<vk::PhysicalDevice> enumeratePhysicalDevices(const RAPID_VULKAN_DISPATCHER_TYPE & dispatcher, vk::Instance instance);
 
 // ---------------------------------------------------------------------------------------------------------------------
 // This function currently selects the device with the longest extension list.
-vk::PhysicalDevice selectTheMostPowerfulPhysicalDevice(const vk::DispatchLoaderDynamic & dispatcher, vk::ArrayProxy<const vk::PhysicalDevice> phydevs);
+vk::PhysicalDevice selectTheMostPowerfulPhysicalDevice(const RAPID_VULKAN_DISPATCHER_TYPE & dispatcher, vk::ArrayProxy<const vk::PhysicalDevice> phydevs);
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
-std::vector<vk::ExtensionProperties> enumerateDeviceExtensions(const vk::DispatchLoaderDynamic & dispatcher, vk::PhysicalDevice dev);
+std::vector<vk::ExtensionProperties> enumerateDeviceExtensions(const RAPID_VULKAN_DISPATCHER_TYPE & dispatcher, vk::PhysicalDevice dev);
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// Query an usable/default depth format of the device.
 /// \param dev The physical device in question
 /// \param stencil If we need stencil format. <0: don't care. 0: no. >0: required. Default value is -1.
 /// \return An format that is suitble to create depth/stencil buffer. Or vk::eUndefined if failed.
-vk::Format queryDepthFormat(const vk::DispatchLoaderDynamic & dispatcher, vk::PhysicalDevice dev, int stencil = -1);
+vk::Format queryDepthFormat(const RAPID_VULKAN_DISPATCHER_TYPE & dispatcher, vk::PhysicalDevice dev, int stencil = -1);
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// @brief Calling vkDeviceWaitIdle() in a thread-safe manner.
-void threadSafeWaitForDeviceIdle(const vk::DispatchLoaderDynamic & dispatcher, vk::Device device);
+void threadSafeWaitForDeviceIdle(const RAPID_VULKAN_DISPATCHER_TYPE & dispatcher, vk::Device device);
 
 // #if RAPID_VULKAN_ENABLE_GLFW3
 // // ---------------------------------------------------------------------------------------------------------------------
 // /// @brief Helper functions to create a Vulkan surface from GLFW window.
-// inline vk::UniqueSurfaceKHR createGLFWSurface(const vk::DispatchLoaderDynamic & dsp, vk::Instance instance, GLFWwindow * window) {
+// inline vk::UniqueSurfaceKHR createGLFWSurface(const RAPID_VULKAN_DISPATCHER_TYPE & dsp, vk::Instance instance, GLFWwindow * window) {
 //     VkSurfaceKHR surface;
 //     if (::glfwCreateWindowSurface(instance, window, nullptr, &surface) != VK_SUCCESS) { RVI_THROW("failed to create window surface!"); }
 //     return vk::UniqueSurfaceKHR(surface, {instance});
@@ -876,7 +891,7 @@ struct Barrier {
     }
 
     /// @brief Write barriers to command buffer
-    void cmdWrite(const vk::DispatchLoaderDynamic & dsp, vk::CommandBuffer cb) const {
+    void cmdWrite(const RAPID_VULKAN_DISPATCHER_TYPE & dsp, vk::CommandBuffer cb) const {
         if (memories.empty() && buffers.empty() && images.empty()) return;
         cb.pipelineBarrier(srcStage, dstStage, dependencies, memories, buffers, images, dsp);
     }
@@ -2435,7 +2450,7 @@ public:
     /// Get the vulkan global info structure.
     const GlobalInfo * gi() const { return &_gi; }
 
-    const vk::DispatchLoaderDynamic & dispatcher() const { return _dispatcher; }
+    const RAPID_VULKAN_DISPATCHER_TYPE & dispatcher() const { return _dispatcher; }
 
     /// The surface that this device is created for. Could be null if the device is headless.
     vk::SurfaceKHR surface() const { return _cp.surface; }
@@ -2465,7 +2480,7 @@ public:
 
 private:
     ConstructParameters         _cp;
-    vk::DispatchLoaderDynamic   _dispatcher;
+    RAPID_VULKAN_DISPATCHER_TYPE   _dispatcher;
     GlobalInfo                  _gi {};
     std::vector<CommandQueue *> _queues; // one for each queue family
     CommandQueue *              _graphics = nullptr;
@@ -2575,7 +2590,7 @@ public:
 
     vk::Instance handle() const { return _instance; }
 
-    const vk::DispatchLoaderDynamic & dispatcher() const { return _dispatcher; }
+    const RAPID_VULKAN_DISPATCHER_TYPE & dispatcher() const { return _dispatcher; }
 
     operator vk::Instance() const { return _instance; }
 
@@ -2586,7 +2601,7 @@ private:
 #endif
     ConstructParameters                _cp;
     std::unique_ptr<vk::DynamicLoader> _loader;
-    vk::DispatchLoaderDynamic          _dispatcher;
+    RAPID_VULKAN_DISPATCHER_TYPE       _dispatcher;
     vk::Instance                       _instance {};
     vk::DebugReportCallbackEXT         _debugReport {};
 
