@@ -97,7 +97,6 @@ void entry(const Options & options) {
         }
         sw.present({});
     }
-    device.waitIdle(); // don't forget to wait for the device to be idle before destroying vulkan objects.
 }
 
 } // namespace triangle

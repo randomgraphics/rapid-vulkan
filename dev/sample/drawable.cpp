@@ -139,7 +139,6 @@ void entry(const Options & options) {
         // end of the frame.
         sw.present({});
     }
-    device.waitIdle();
 }
 
 } // namespace drawable
