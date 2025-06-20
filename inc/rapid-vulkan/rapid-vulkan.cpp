@@ -2946,9 +2946,20 @@ void CommandQueue::onNameChanged(const std::string &) { _impl->setName(name()); 
 
 Swapchain::ConstructParameters & Swapchain::ConstructParameters::setDevice(const Device & d) {
     gi                  = d.gi();
-    surface             = d.surface();
     graphicsQueueFamily = d.graphics()->family();
     graphicsQueueIndex  = d.graphics()->index();
+
+    // go through devices queue family to find out the present queue.
+    if (surface) {
+        for (auto q : d.queues()) {
+            if (q->family() == graphicsQueueFamily) {
+                presentQueueFamily = q->family();
+                presentQueueIndex  = q->index();
+                break;
+            }
+        }
+    }
+
     if (d.present()) {
         presentQueueFamily = d.present()->family();
         presentQueueIndex  = d.present()->index();
@@ -2956,6 +2967,7 @@ Swapchain::ConstructParameters & Swapchain::ConstructParameters::setDevice(const
         presentQueueFamily = VK_QUEUE_FAMILY_IGNORED;
         presentQueueIndex  = 0;
     }
+
     return *this;
 }
 
@@ -4190,7 +4202,31 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
 #if RAPID_VULKAN_ENABLE_LOADER
     RVI_LOGD("Initializing Vulkan loader...");
     auto getProcAddress = _cp.getInstanceProcAddr;
-    if (!getProcAddress) getProcAddress = _loader.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
+    if (!getProcAddress) {
+        // load the vulkan library
+#if defined(__unix__) || defined(__QNXNTO__) || defined(__Fuchsia__)
+        _library = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
+        if (_library == nullptr) { _library = dlopen("libvulkan.so.1", RTLD_NOW | RTLD_LOCAL); }
+#elif defined(__APPLE__)
+        _library       = dlopen("libvulkan.dylib", RTLD_NOW | RTLD_LOCAL);
+#elif defined(_WIN32)
+        _library = ::LoadLibraryA("vulkan-1.dll");
+#else
+#error unsupported platform
+#endif
+        if (!_library) {
+            // NOTE there should be an InitializationFailedError, but msvc insists on the symbol does not exist within the scope of this function.
+            RVI_THROW("Failed to load vulkan library!");
+        }
+#if defined(__unix__) || defined(__APPLE__) || defined(__QNXNTO__) || defined(__Fuchsia__)
+        getProcAddress = (PFN_vkGetInstanceProcAddr) dlsym(_library, "vkGetInstanceProcAddr");
+#elif defined(_WIN32)
+        getProcAddress = (PFN_vkGetInstanceProcAddr)::GetProcAddress(mlibrary, "vkGetInstanceProcAddr");
+#else
+#error unsupported platform
+#endif
+        if (!getProcAddress) { RVI_THROW("Failed to load vulkan library!"); }
+    }
     VULKAN_HPP_DEFAULT_DISPATCHER.init(getProcAddress);
 #endif
 
@@ -4324,6 +4360,19 @@ Instance::~Instance() {
     }
     if (_instance) _instance.destroy(), _instance = VK_NULL_HANDLE;
     RVI_LOGI("Vulkan instance destroyed.");
+
+#if RAPID_VULKAN_ENABLE_LOADER
+    // Free the vulkan library
+    if (_library) {
+#if defined(__unix__) || defined(__APPLE__) || defined(__QNXNTO__) || defined(__Fuchsia__)
+        dlclose(_library);
+#elif defined(_WIN32)
+        ::FreeLibrary(m_library);
+#else
+#error unsupported platform
+#endif
+#endif
+    }
 }
 
 #ifdef _MSC_VER

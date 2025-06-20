@@ -146,10 +146,26 @@ SOFTWARE.
 #undef VK_NO_PROTOTYPES
 #endif
 
+// Disable warnings for vulkan.hpp
+#ifdef _MSC_VER
+#pragma warning(push, 0)
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wconversion"
+#endif
+
+// Include vulkan.hpp
 #ifdef __ANDROID__
 #include "3rd-party/android/vulkan/vulkan.hpp"
 #else
 #include <vulkan/vulkan.hpp>
+#endif
+
+// Restore warnings
+#ifdef _MSC_VER
+#pragma warning(pop)
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
 #endif
 
 #ifdef VOLK_H_
@@ -2292,6 +2308,17 @@ public:
 
     CommandQueue & graphics() const;
 
+    /// @brief Get pointer to the presentation queue.
+    /// Could be null if the swapchain is headless. Could be same as the graphics queue, if the device does not support separate
+    /// present queue.
+    CommandQueue * presentQueue() const;
+
+    /// @brief Check if the swapchain is using a separate present queue.
+    bool separatePresentQueue() const {
+        auto pq = presentQueue();
+        return pq && pq != &graphics();
+    }
+
     /// @brief Begin a new rendering frame. Must be called in pair with present().
     /// Behavior is undefined if calling beginFrame() more than once w/o calling present() in between.
     /// \returns The pointer to the current frame structure, or null if failed.
@@ -2368,9 +2395,6 @@ public:
         /// Handle to Vulkan instance.
         vk::Instance instance;
 
-        /// Leave it at zero to create an headless device w/o presentation support.
-        vk::SurfaceKHR surface {};
-
         /// Specify extra extension to initialize VK device. Value indicate if the extension is required or not.
         std::map<std::string, bool> deviceExtensions {};
 
@@ -2394,11 +2418,6 @@ public:
 
         ConstructParameters & setInstance(vk::Instance i) {
             instance = i;
-            return *this;
-        }
-
-        ConstructParameters & setSurface(vk::SurfaceKHR s) {
-            surface = s;
             return *this;
         }
 
@@ -2438,15 +2457,8 @@ public:
     /// Get the vulkan global info structure.
     const GlobalInfo * gi() const { return &_gi; }
 
-    /// The surface that this device is created for. Could be null if the device is headless.
-    vk::SurfaceKHR surface() const { return _cp.surface; }
-
     /// The general purpose graphics queue that is able to do everything: graphics, compute and transfer. Should always be available.
     CommandQueue * graphics() const { return _graphics; }
-
-    /// The presentation queue. Could be null if the device is headless. Could be same as the graphics queue, if the device does not support separate
-    /// present queue.
-    CommandQueue * present() const { return _present; }
 
     /// the async compute queue. could be null if the device does not support async compute.
     CommandQueue * compute() const { return _compute; }
@@ -2581,15 +2593,15 @@ public:
     vk::Instance operator->() const { return _instance; }
 
 private:
-    ConstructParameters _cp;
-    vk::Instance        _instance {};
-#if RAPID_VULKAN_ENABLE_LOADER
-#if 1 != VULKAN_HPP_DISPATCH_LOADER_DYNAMIC
-#error \
-    "rapid-vulkan does not support static dispatch loader yet. When RAPID_VULKAN_ENABLE_LOADER is set to 1, VULKAN_HPP_DISPATCH_LOADER_DYNAMIC must be set to 1 as well."
+#if defined(__unix__) || defined(__APPLE__) || defined(__QNXNTO__) || defined(__Fuchsia__)
+    void * _library {};
+#elif defined(_WIN32)
+    ::HINSTANCE _library {};
+#else
+#error unsupported platform
 #endif
-    vk::DynamicLoader _loader;
-#endif
+    ConstructParameters        _cp;
+    vk::Instance               _instance {};
     vk::DebugReportCallbackEXT _debugReport {};
 };
 
