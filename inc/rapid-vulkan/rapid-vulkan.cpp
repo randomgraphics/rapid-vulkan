@@ -4196,8 +4196,9 @@ static vk::Bool32 VKAPI_PTR staticDebugCallback(vk::DebugReportFlagsEXT flags, v
 
 #if VK_HEADER_VERSION < 313
 static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT objectType, uint64_t object, size_t location,
-                                                int32_t messageCode, const char * prefix, const char * message, void * userData) {
-       return staticDebugCallback(vk::DebugReportFlagsEXT(flags), vk::DebugReportObjectTypeEXT(objectType), object, location, messageCode, prefix, message, userData);
+                                              int32_t messageCode, const char * prefix, const char * message, void * userData) {
+    return staticDebugCallback(vk::DebugReportFlagsEXT(flags), vk::DebugReportObjectTypeEXT(objectType), object, location, messageCode, prefix, message,
+                               userData);
 }
 #endif
 
@@ -4219,7 +4220,7 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
 #elif defined(__APPLE__)
         _library       = dlopen("libvulkan.dylib", RTLD_NOW | RTLD_LOCAL);
 #elif defined(_WIN32)
-        _library = ::LoadLibraryA("vulkan-1.dll");
+        _library = (void *) ::LoadLibraryA("vulkan-1.dll");
 #else
 #error unsupported platform
 #endif
@@ -4230,7 +4231,7 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
 #if defined(__unix__) || defined(__APPLE__) || defined(__QNXNTO__) || defined(__Fuchsia__)
         getProcAddress = (PFN_vkGetInstanceProcAddr) dlsym(_library, "vkGetInstanceProcAddr");
 #elif defined(_WIN32)
-        getProcAddress = (PFN_vkGetInstanceProcAddr)::GetProcAddress(mlibrary, "vkGetInstanceProcAddr");
+        getProcAddress = (PFN_vkGetInstanceProcAddr)::GetProcAddress((HINSTANCE)_library, "vkGetInstanceProcAddr");
 #else
 #error unsupported platform
 #endif
@@ -4376,12 +4377,12 @@ Instance::~Instance() {
 #if defined(__unix__) || defined(__APPLE__) || defined(__QNXNTO__) || defined(__Fuchsia__)
         dlclose(_library);
 #elif defined(_WIN32)
-        ::FreeLibrary(m_library);
+        ::FreeLibrary((HINSTANCE) _library);
 #else
 #error unsupported platform
 #endif
-#endif
     }
+#endif
 }
 
 #ifdef _MSC_VER

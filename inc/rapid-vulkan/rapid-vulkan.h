@@ -454,8 +454,6 @@ template<typename T>
 inline void setVkHandleName(vk::Device device, T handle, const char * name) {
 #if VULKAN_HPP_DISPATCH_LOADER_DYNAMIC == 1
     if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkSetDebugUtilsObjectNameEXT) return;
-#else
-    if (!::vkSetDebugUtilsObjectNameEXT) return;
 #endif
     if (!device || !handle || !name) return;
 
@@ -482,8 +480,6 @@ inline void setVkHandleName(vk::Device device, T handle, std::string name) {
 inline bool cmdBeginDebugLabel(vk::CommandBuffer cmd, const char * name, const std::array<float, 4> & color = {1, 1, 1, 1}) {
 #if VULKAN_HPP_DISPATCH_LOADER_DYNAMIC == 1
     if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdBeginDebugUtilsLabelEXT) return false;
-#else
-    if (!::vkCmdBeginDebugUtilsLabelEXT) return false;
 #endif
     if (!cmd || !name) return false;
     cmd.beginDebugUtilsLabelEXT(vk::DebugUtilsLabelEXT().setPLabelName(name).setColor(color));
@@ -493,8 +489,6 @@ inline bool cmdBeginDebugLabel(vk::CommandBuffer cmd, const char * name, const s
 inline void cmdEndDebugLabel(vk::CommandBuffer cmd) {
 #if VULKAN_HPP_DISPATCH_LOADER_DYNAMIC == 1
     if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdEndDebugUtilsLabelEXT) return;
-#else
-    if (!::vkCmdEndDebugUtilsLabelEXT) return;
 #endif
     if (cmd) cmd.endDebugUtilsLabelEXT();
 }
@@ -2607,12 +2601,8 @@ public:
     vk::Instance operator->() const { return _instance; }
 
 private:
-#if defined(__unix__) || defined(__APPLE__) || defined(__QNXNTO__) || defined(__Fuchsia__)
+#if RAPID_VULKAN_ENABLE_LOADER
     void * _library {};
-#elif defined(_WIN32)
-    ::HINSTANCE _library {};
-#else
-#error unsupported platform
 #endif
     ConstructParameters        _cp;
     vk::Instance               _instance {};
