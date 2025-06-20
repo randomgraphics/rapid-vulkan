@@ -4194,6 +4194,13 @@ static vk::Bool32 VKAPI_PTR staticDebugCallback(vk::DebugReportFlagsEXT flags, v
     return VK_FALSE;
 }
 
+#if VK_HEADER_VERSION < 313
+static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT objectType, uint64_t object, size_t location,
+                                                int32_t messageCode, const char * prefix, const char * message, void * userData) {
+       return staticDebugCallback(vk::DebugReportFlagsEXT(flags), vk::DebugReportObjectTypeEXT(objectType), object, location, messageCode, prefix, message, userData);
+}
+#endif
+
 // *********************************************************************************************************************
 // Instance
 // *********************************************************************************************************************
