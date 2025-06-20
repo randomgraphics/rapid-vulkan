@@ -57,15 +57,20 @@ void entry(const Options & options) {
         instancePtr = std::make_unique<Instance>(Instance::ConstructParameters {}.setValidation(Instance::BREAK_ON_VK_ERROR));
         instance    = instancePtr->handle();
     }
-    auto w      = uint32_t(1280);
-    auto h      = uint32_t(720);
-    auto glfw   = GLFWInit(options.headless, instance, w, h, "triangle");
-    auto device = Device(Device::ConstructParameters {instance}.setSurface(glfw.surface).setPrintVkInfo(options.verbosity));
+    auto device = Device(Device::ConstructParameters {instance}.setPrintVkInfo(options.verbosity));
     auto gi     = device.gi();
     auto vs     = Shader(Shader::ConstructParameters {{"triangle-vs"}}.setGi(gi).setSpirv(triangle_vert));
     auto fs     = Shader(Shader::ConstructParameters {{"triangle-fs"}, gi}.setSpirv(triangle_frag));
     auto q      = CommandQueue({{"main"}, gi, device.graphics()->family(), device.graphics()->index()});
-    auto sw     = Swapchain(Swapchain::ConstructParameters {{"triangle"}}.setDevice(device).setDimensions(options.headless ? w : 0, options.headless ? h : 0));
+
+    // create the swapchain.
+    auto w    = uint32_t(1280);
+    auto h    = uint32_t(720);
+    auto glfw = GLFWInit(options.headless, instance, w, h, "triangle");
+    auto sw   = Swapchain(Swapchain::ConstructParameters {{"triangle"}}
+                              .setSurface(options.headless ? nullptr : glfw.surface)
+                              .setDevice(device)
+                              .setDimensions(options.headless ? w : 0, options.headless ? h : 0));
 
     // create the graphics pipeline
     auto gcp = GraphicsPipeline::ConstructParameters {{"triangle"}}.setRenderPass(sw.renderPass()).setVS(&vs).setFS(&fs);

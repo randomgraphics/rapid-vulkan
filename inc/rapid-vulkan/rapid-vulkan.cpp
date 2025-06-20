@@ -2948,26 +2948,6 @@ Swapchain::ConstructParameters & Swapchain::ConstructParameters::setDevice(const
     gi                  = d.gi();
     graphicsQueueFamily = d.graphics()->family();
     graphicsQueueIndex  = d.graphics()->index();
-
-    // go through devices queue family to find out the present queue.
-    if (surface) {
-        for (auto q : d.queues()) {
-            if (q->family() == graphicsQueueFamily) {
-                presentQueueFamily = q->family();
-                presentQueueIndex  = q->index();
-                break;
-            }
-        }
-    }
-
-    if (d.present()) {
-        presentQueueFamily = d.present()->family();
-        presentQueueIndex  = d.present()->index();
-    } else {
-        presentQueueFamily = VK_QUEUE_FAMILY_IGNORED;
-        presentQueueIndex  = 0;
-    }
-
     return *this;
 }
 
@@ -2987,7 +2967,7 @@ public:
         clearSwapchain();
         _renderPass.reset();
         _graphicsQueue.reset();
-        _presentQueue = nullptr;
+        _presentQueue = vk::Queue {};
     }
 
     const RenderPass & renderPass() const { return *_renderPass; }
@@ -3212,6 +3192,8 @@ private:
     }
 
     void constructWindowSwapchain() {
+        RVI_ASSERT(_cp.surface);
+
         // Construct a CommandQueue instance for graphics queue.
         RVI_REQUIRE(_cp.graphicsQueueFamily != VK_QUEUE_FAMILY_IGNORED);
         _graphicsQueue.reset(
@@ -3220,11 +3202,28 @@ private:
         // retrieve present queue handle.
         if (_cp.presentQueueFamily != VK_QUEUE_FAMILY_IGNORED) {
             _presentQueue = _cp.gi->device.getQueue(_cp.presentQueueFamily, _cp.presentQueueIndex);
-            RVI_REQUIRE(_presentQueue);
         } else {
-            // use graphics queue as present queue.
-            _presentQueue = _graphicsQueue->handle();
+            // first, check if the graphics queue is also the present queue. If so, we are done.
+            if (_cp.gi->physical.getSurfaceSupportKHR(_cp.graphicsQueueFamily, _cp.surface)) {
+                RVI_LOGD("Use the current active graphics queue as present queue.");
+                _presentQueue          = _graphicsQueue->handle();
+                _cp.presentQueueFamily = _cp.graphicsQueueFamily;
+                _cp.presentQueueIndex  = _cp.graphicsQueueIndex;
+            } else {
+                // if not, we need to go through all families to find out the preslsent queue family.
+                RVI_LOGD("Graphics queue is not the present queue. Searching for a present queue...");
+                auto families = _cp.gi->physical.getQueueFamilyProperties();
+                for (uint32_t i = 0; i < families.size(); ++i) {
+                    if (_cp.gi->physical.getSurfaceSupportKHR(i, _cp.surface)) {
+                        _presentQueue          = _cp.gi->device.getQueue(i, 0);
+                        _cp.presentQueueFamily = i;
+                        _cp.presentQueueIndex  = 0;
+                        break;
+                    }
+                }
+            }
         }
+        RVI_REQUIRE(_presentQueue);
 
         // check if the back buffer format is supported.
         auto supportedFormats = _cp.gi->physical.getSurfaceFormatsKHR(_cp.surface);
@@ -3912,11 +3911,6 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
         if (!_transfer && !(f.queueFlags & vk::QueueFlagBits::eGraphics) && !(f.queueFlags & vk::QueueFlagBits::eCompute) &&
             (f.queueFlags & vk::QueueFlagBits::eTransfer))
             _transfer = q;
-
-        if (cp.surface && !_present) {
-            auto supportPresenting = _gi.physical.getSurfaceSupportKHR(i, cp.surface);
-            if (supportPresenting) _present = q;
-        }
     }
 
     RVI_LOGI("Vulkan device initialized.");
@@ -4124,8 +4118,8 @@ struct PhysicalDeviceInfo {
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
-static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT objectType, uint64_t object, size_t location,
-                                              int32_t messageCode, const char * prefix, const char * message, void * userData) {
+static vk::Bool32 VKAPI_PTR staticDebugCallback(vk::DebugReportFlagsEXT flags, vk::DebugReportObjectTypeEXT objectType, uint64_t object, size_t location,
+                                                int32_t messageCode, const char * prefix, const char * message, void * userData) {
     auto instance   = (Instance *) userData;
     auto validation = instance->cp().validation;
 
@@ -4164,7 +4158,7 @@ static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDeb
         return VK_FALSE;
     };
 
-    if ((flags & VK_DEBUG_REPORT_ERROR_BIT_EXT)) {
+    if ((flags & vk::DebugReportFlagBitsEXT::eError)) {
         if (validation & Instance::BREAK_ON_VK_ERROR)
             reportError(true, false);
         else if (validation & Instance::THROW_ON_VK_ERROR)
@@ -4173,19 +4167,15 @@ static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDeb
             reportError(false, false);
     }
 
-    else if (flags & VK_DEBUG_REPORT_INFORMATION_BIT_EXT) {
+    else if (flags & vk::DebugReportFlagBitsEXT::eWarning) {
         RVI_LOGW("[Vulkan] %s : %s", prefix, message);
     }
 
-    else if (flags & VK_DEBUG_REPORT_WARNING_BIT_EXT) {
-        RVI_LOGW("[Vulkan] %s : %s", prefix, message);
-    }
-
-    else if (flags & VK_DEBUG_REPORT_INFORMATION_BIT_EXT) {
+    else if (flags & vk::DebugReportFlagBitsEXT::eInformation) {
         RVI_LOGI("[Vulkan] %s : %s", prefix, message);
     }
 
-    else if (flags & VK_DEBUG_REPORT_DEBUG_BIT_EXT) {
+    else if (flags & vk::DebugReportFlagBitsEXT::eDebug) {
         RVI_LOGD("[Vulkan] %s : %s", prefix, message);
     }
 

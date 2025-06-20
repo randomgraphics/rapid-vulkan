@@ -2217,8 +2217,13 @@ public:
         /// Set to undefined, if you don't need depth buffer.
         DepthStencilFormat depthStencilFormat = {};
 
+        ConstructParameters & setSurface(vk::SurfaceKHR surface_) {
+            surface = surface_;
+            return *this;
+        }
+
         /// @brief Fill in construction parameters using values retrieved from the given device.
-        /// This method will fill in the following fields: gi, surface and present/graphics queue properties.
+        /// This method will fill in the following fields: gi and graphics queue properties.
         ConstructParameters & setDevice(const Device &);
 
         /// @brief Set dimension in pixels of the swapchain.
@@ -2308,16 +2313,16 @@ public:
 
     CommandQueue & graphics() const;
 
-    /// @brief Get pointer to the presentation queue.
-    /// Could be null if the swapchain is headless. Could be same as the graphics queue, if the device does not support separate
-    /// present queue.
-    CommandQueue * presentQueue() const;
+    // /// @brief Get pointer to the presentation queue.
+    // /// Could be null if the swapchain is headless. Could be same as the graphics queue, if the device does not support separate
+    // /// present queue.
+    // CommandQueue * presentQueue() const;
 
-    /// @brief Check if the swapchain is using a separate present queue.
-    bool separatePresentQueue() const {
-        auto pq = presentQueue();
-        return pq && pq != &graphics();
-    }
+    // /// @brief Check if the swapchain is using a separate present queue.
+    // bool separatePresentQueue() const {
+    //     auto pq = presentQueue();
+    //     return pq && pq != &graphics();
+    // }
 
     /// @brief Begin a new rendering frame. Must be called in pair with present().
     /// Behavior is undefined if calling beginFrame() more than once w/o calling present() in between.
@@ -2466,8 +2471,6 @@ public:
     /// the async transfer queue. could be null if the device does not support async transfer.
     CommandQueue * transfer() const { return _transfer; }
 
-    bool separatePresentQueue() const { return _present != _graphics; }
-
     void waitIdle() const { return threadSafeWaitForDeviceIdle(_gi.device); }
 
     vk::Device handle() const { return _gi.device; }
@@ -2485,7 +2488,6 @@ private:
     CommandQueue *              _graphics = nullptr;
     CommandQueue *              _compute  = nullptr;
     CommandQueue *              _transfer = nullptr;
-    CommandQueue *              _present  = nullptr;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
