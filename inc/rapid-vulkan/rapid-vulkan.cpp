@@ -4231,7 +4231,7 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
 #if defined(__unix__) || defined(__APPLE__) || defined(__QNXNTO__) || defined(__Fuchsia__)
         getProcAddress = (PFN_vkGetInstanceProcAddr) dlsym(_library, "vkGetInstanceProcAddr");
 #elif defined(_WIN32)
-        getProcAddress = (PFN_vkGetInstanceProcAddr)::GetProcAddress((HINSTANCE)_library, "vkGetInstanceProcAddr");
+        getProcAddress = (PFN_vkGetInstanceProcAddr)::GetProcAddress((HINSTANCE) _library, "vkGetInstanceProcAddr");
 #else
 #error unsupported platform
 #endif
