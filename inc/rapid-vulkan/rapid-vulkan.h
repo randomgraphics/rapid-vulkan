@@ -2202,10 +2202,10 @@ public:
         /// If the surface is null, then the width and height must be non-zero.
         size_t height = 0;
 
-        /// @brief Number of frames in flight. Must be at least 1.
+        /// @brief Number of frames in flight. Recommanded value is 2. Must be at least 1.
         /// The more frames in flight, the more latency you'll have. But on the other hand, the GPU will be
         /// less likely to be idle.
-        size_t maxFramesInFlight = 1;
+        size_t maxFramesInFlight = 2;
 
         /// @brief Whether to enable vsync. Ignored when the swapchain is headless.
         bool vsync = true;
@@ -2372,6 +2372,9 @@ struct StructureChain {
 // ---------------------------------------------------------------------------------------------------------------------
 // Misc. classes for future use.
 
+// this is name space for experimental features. It is not part of the public API.
+namespace experimental {
+
 class RenderLoop : public Root {
 public:
     struct ConstructParameters : public Root::ConstructParameters {
@@ -2379,7 +2382,15 @@ public:
     };
 
     RenderLoop(const ConstructParameters &);
+
+    void run();
+
+private:
+    class Impl;
+    Impl * _impl = nullptr;
 };
+
+} // namespace experimental
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// \def Device A wrapper class for VkDevice
