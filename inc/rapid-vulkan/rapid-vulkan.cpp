@@ -3201,7 +3201,13 @@ private:
 
         // retrieve present queue handle.
         if (_cp.presentQueueFamily != VK_QUEUE_FAMILY_IGNORED) {
-            _presentQueue = _cp.gi->device.getQueue(_cp.presentQueueFamily, _cp.presentQueueIndex);
+            if (_cp.presentQueueFamily == _cp.graphicsQueueFamily && _cp.presentQueueIndex == _cp.graphicsQueueIndex) {
+                RVI_LOGD("Use the current active graphics queue as present queue.");
+                _presentQueue = _graphicsQueue->handle();
+            } else {
+                RVI_LOGD("Create dedicated present queue: family %u, index %u", _cp.presentQueueFamily, _cp.presentQueueIndex);
+                _presentQueue = _cp.gi->device.getQueue(_cp.presentQueueFamily, _cp.presentQueueIndex);
+            }
         } else {
             // first, check if the graphics queue is also the present queue. If so, we are done.
             if (_cp.gi->physical.getSurfaceSupportKHR(_cp.graphicsQueueFamily, _cp.surface)) {
@@ -3215,6 +3221,7 @@ private:
                 auto families = _cp.gi->physical.getQueueFamilyProperties();
                 for (uint32_t i = 0; i < families.size(); ++i) {
                     if (_cp.gi->physical.getSurfaceSupportKHR(i, _cp.surface)) {
+                        RVI_LOGD("Create dedicated present queue: family %u, index %u", i, 0);
                         _presentQueue          = _cp.gi->device.getQueue(i, 0);
                         _cp.presentQueueFamily = i;
                         _cp.presentQueueIndex  = 0;
