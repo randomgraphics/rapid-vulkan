@@ -2246,6 +2246,7 @@ public:
         vk::ImageView    view {};
         vk::Framebuffer  framebuffer {};
         BackbufferStatus status {};
+        vk::Semaphore    frameEndSemaphore {}; // the semaphore that present() call is waiting on to ensure
     };
 
     /// @brief Represents a GPU frame.

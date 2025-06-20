@@ -3077,14 +3077,15 @@ public:
 
             // present current frame
             if (_handle) {
-                frame.frameEndSubmission = _graphicsQueue->submit({cb, {}, {frame.renderFinished}, {frame.frameEndSemaphore}});
+                // Submit the frame end command buffer. Wait for current frame's render finished semaphore. Signal the backbuffer's frame end semaphore.
+                frame.frameEndSubmission = _graphicsQueue->submit({cb, {}, {frame.renderFinished}, {bb->frameEndSemaphore}});
 
                 auto presentInfo = vk::PresentInfoKHR()
                                        .setSwapchainCount(1)
                                        .setPSwapchains(&_handle)
                                        .setPImageIndices(&frame.imageIndex)
                                        .setWaitSemaphoreCount(1)
-                                       .setPWaitSemaphores(&frame.frameEndSemaphore);
+                                       .setPWaitSemaphores(&bb->frameEndSemaphore);
                 auto result = _presentQueue.presentKHR(&presentInfo);
                 if (result == vk::Result::eErrorOutOfDateKHR) {
                     recoverSwapchainOnPresentError();
@@ -3124,7 +3125,6 @@ private:
 
     struct FrameImpl : public Frame {
         uint32_t                   imageIndex {};
-        vk::Semaphore              frameEndSemaphore {};
         CommandQueue::SubmissionID frameEndSubmission {};
         Ref<Image>                 headlessImage; ///< the image that is used as the backbuffer for headless swapchain.
     };
@@ -3277,14 +3277,16 @@ private:
     }
 
     void clearSwapchain() {
-        for (auto & bb : _backbuffers) { bb.fb.clear(); }
+        for (auto & bb : _backbuffers) {
+            bb.fb.clear();
+            _cp.gi->safeDestroy(bb.frameEndSemaphore);
+        }
         _backbuffers.clear();
         _depthBuffer.clear();
         _cp.gi->safeDestroy(_handle);
         for (auto & f : _frames) {
             _cp.gi->safeDestroy(f.imageAvailable);
             _cp.gi->safeDestroy(f.renderFinished);
-            _cp.gi->safeDestroy(f.frameEndSemaphore);
         }
         _frames.clear();
     }
@@ -3390,6 +3392,10 @@ private:
             bb.fb.reset(new Framebuffer(fbcp));
             bb.framebuffer = bb.fb->handle();
 
+            // create frame end semaphore
+            bb.frameEndSemaphore = gi->device.createSemaphore({}, gi->allocator);
+            setVkHandleName(gi->device, bb.frameEndSemaphore, format("frame end semaphore for back buffer %zu", i));
+
             // transfer backbuffers to right layout.
             Barrier()
                 .i(bb.image->handle(), vk::AccessFlagBits::eNone, DESIRED_PRESENT_STATUS.access, vk::ImageLayout::eUndefined, DESIRED_PRESENT_STATUS.layout,
@@ -3405,13 +3411,11 @@ private:
         RVI_ASSERT(_backbuffers.size() > surfaceCaps.minImageCount);
         _frames.resize(std::max<size_t>(1u, _backbuffers.size() - surfaceCaps.minImageCount));
         for (size_t i = 0; i < _frames.size(); ++i) {
-            auto & f            = _frames[i];
-            f.imageAvailable    = gi->device.createSemaphore({}, gi->allocator);
-            f.renderFinished    = gi->device.createSemaphore({}, gi->allocator);
-            f.frameEndSemaphore = gi->device.createSemaphore({}, gi->allocator);
+            auto & f         = _frames[i];
+            f.imageAvailable = gi->device.createSemaphore({}, gi->allocator);
+            f.renderFinished = gi->device.createSemaphore({}, gi->allocator);
             setVkHandleName(gi->device, f.imageAvailable, format("image available semaphore %zu", i));
             setVkHandleName(gi->device, f.renderFinished, format("render finished semaphore %zu", i));
-            setVkHandleName(gi->device, f.frameEndSemaphore, format("frame end semaphore %zu", i));
         }
     }
 
@@ -3442,20 +3446,21 @@ private:
         _frames.resize(imageCount);
         for (uint32_t i = 0; i < imageCount; ++i) {
             // setup frame structure
-            auto & bb           = _backbuffers[i];
-            auto & f            = _frames[i];
-            f.backbuffer        = &bb;
-            f.imageIndex        = i;
-            f.imageAvailable    = gi->device.createSemaphore({}, gi->allocator);
-            f.renderFinished    = gi->device.createSemaphore({}, gi->allocator);
-            f.frameEndSemaphore = gi->device.createSemaphore({}, gi->allocator);
+            auto & bb            = _backbuffers[i];
+            bb.frameEndSemaphore = gi->device.createSemaphore({}, gi->allocator);
+            setVkHandleName(gi->device, bb.frameEndSemaphore, format("frame end semaphore %u", i));
+
+            auto & f         = _frames[i];
+            f.backbuffer     = &bb;
+            f.imageIndex     = i;
+            f.imageAvailable = gi->device.createSemaphore({}, gi->allocator);
+            f.renderFinished = gi->device.createSemaphore({}, gi->allocator);
             f.headlessImage.reset(new Image(Image::ConstructParameters {{"swapchain headless image"}, gi}
                                                 .setFormat(_cp.backbufferFormat)
                                                 .set2D(w, h)
                                                 .addUsage(vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst)));
             setVkHandleName(gi->device, f.imageAvailable, format("image available semaphore %u", i));
             setVkHandleName(gi->device, f.renderFinished, format("render finished semaphore %u", i));
-            setVkHandleName(gi->device, f.frameEndSemaphore, format("frame end semaphore %u", i));
 
             // transfer the image into desired layout.
             Barrier()
