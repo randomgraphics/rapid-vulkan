@@ -59,11 +59,11 @@ void entry(const Options & options) {
         instancePtr = std::make_unique<Instance>(Instance::ConstructParameters {}.setValidation(Instance::BREAK_ON_VK_ERROR).setBacktrace(backtrace));
         instance    = instancePtr->handle();
     }
-    auto w      = uint32_t(1280);
-    auto h      = uint32_t(720);
     auto device = Device(Device::ConstructParameters {instance}.setPrintVkInfo(options.verbosity));
     auto gi     = device.gi();
     auto q      = CommandQueue({{"main"}, gi, device.graphics()->family(), device.graphics()->index()});
+    auto w      = uint32_t(1280);
+    auto h      = uint32_t(720);
     auto glfw   = GLFWInit(options.headless, instance, w, h, "pipeline-args");
     auto sw     = Swapchain(Swapchain::ConstructParameters {{"swapchain"}}
                                 .setSurface(options.headless ? nullptr : glfw.surface)
@@ -135,7 +135,7 @@ void entry(const Options & options) {
             // end render pass
             sw.cmdEndBuiltInRenderPass(c);
 
-            // submit the command buffeer
+            // submit the command buffer
             q.submit({c, {}, {frame->imageAvailable}, {frame->renderFinished}});
         }
 
