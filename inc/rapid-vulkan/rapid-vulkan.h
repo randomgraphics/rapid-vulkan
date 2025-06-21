@@ -154,10 +154,31 @@ SOFTWARE.
 #define VULKAN_HPP_NO_DEFAULT_DISPATCHER
 #endif
 
+// Disable warnings for vulkan.hpp
+#ifdef _MSC_VER
+#pragma warning(push, 0)
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wconversion"
+#endif
+
+// Include vulkan.hpp
 #ifdef __ANDROID__
 #include "3rd-party/android/vulkan/vulkan.hpp"
 #else
 #include <vulkan/vulkan.hpp>
+#endif
+
+// Restore warnings
+#ifdef _MSC_VER
+#pragma warning(pop)
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
+#ifdef VOLK_H_
+// Now restore it.
+#define VK_NO_PROTOTYPES
 #endif
 
 // check for minimal required vulkan.hpp version.
@@ -2183,10 +2204,10 @@ public:
         /// If the surface is null, then the width and height must be non-zero.
         size_t height = 0;
 
-        /// @brief Number of frames in flight. Must be at least 1.
+        /// @brief Number of frames in flight. Recommanded value is 2. Must be at least 1.
         /// The more frames in flight, the more latency you'll have. But on the other hand, the GPU will be
         /// less likely to be idle.
-        size_t maxFramesInFlight = 1;
+        size_t maxFramesInFlight = 2;
 
         /// @brief Whether to enable vsync. Ignored when the swapchain is headless.
         bool vsync = true;
@@ -2198,8 +2219,13 @@ public:
         /// Set to undefined, if you don't need depth buffer.
         DepthStencilFormat depthStencilFormat = {};
 
+        ConstructParameters & setSurface(vk::SurfaceKHR surface_) {
+            surface = surface_;
+            return *this;
+        }
+
         /// @brief Fill in construction parameters using values retrieved from the given device.
-        /// This method will fill in the following fields: gi, surface and present/graphics queue properties.
+        /// This method will fill in the following fields: gi and graphics queue properties.
         ConstructParameters & setDevice(const Device &);
 
         /// @brief Set dimension in pixels of the swapchain.
@@ -2222,6 +2248,7 @@ public:
         vk::ImageView    view {};
         vk::Framebuffer  framebuffer {};
         BackbufferStatus status {};
+        vk::Semaphore    frameEndSemaphore {}; // the semaphore that present() call is waiting on to ensure
     };
 
     /// @brief Represents a GPU frame.
@@ -2289,6 +2316,17 @@ public:
 
     CommandQueue & graphics() const;
 
+    // /// @brief Get pointer to the presentation queue.
+    // /// Could be null if the swapchain is headless. Could be same as the graphics queue, if the device does not support separate
+    // /// present queue.
+    // CommandQueue * presentQueue() const;
+
+    // /// @brief Check if the swapchain is using a separate present queue.
+    // bool separatePresentQueue() const {
+    //     auto pq = presentQueue();
+    //     return pq && pq != &graphics();
+    // }
+
     /// @brief Begin a new rendering frame. Must be called in pair with present().
     /// Behavior is undefined if calling beginFrame() more than once w/o calling present() in between.
     /// \returns The pointer to the current frame structure, or null if failed.
@@ -2336,6 +2374,9 @@ struct StructureChain {
 // ---------------------------------------------------------------------------------------------------------------------
 // Misc. classes for future use.
 
+// this is name space for experimental features. It is not part of the public API.
+namespace experimental {
+
 class RenderLoop : public Root {
 public:
     struct ConstructParameters : public Root::ConstructParameters {
@@ -2343,7 +2384,15 @@ public:
     };
 
     RenderLoop(const ConstructParameters &);
+
+    void run();
+
+private:
+    class Impl;
+    Impl * _impl = nullptr;
 };
+
+} // namespace experimental
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// \def Device A wrapper class for VkDevice
@@ -2367,9 +2416,6 @@ public:
 
         /// Required parameter to query Vulkan function pointers. Must be valid.
         PFN_vkGetInstanceProcAddr getInstanceProcAddr = nullptr;
-
-        /// Leave it at zero to create an headless device w/o presentation support.
-        vk::SurfaceKHR surface {};
 
         /// Specify extra extension to initialize VK device. Value indicate if the extension is required or not.
         std::map<std::string, bool> deviceExtensions {};
@@ -2403,11 +2449,6 @@ public:
 
         ConstructParameters & setGetInstanceProcAddr(PFN_vkGetInstanceProcAddr p) {
             getInstanceProcAddr = p;
-            return *this;
-        }
-
-        ConstructParameters & setSurface(vk::SurfaceKHR s) {
-            surface = s;
             return *this;
         }
 
@@ -2458,17 +2499,11 @@ public:
     /// The general purpose graphics queue that is able to do everything: graphics, compute and transfer. Should always be available.
     CommandQueue * graphics() const { return _graphics; }
 
-    /// The presentation queue. Could be null if the device is headless. Could be same as the graphics queue, if the device does not support separate
-    /// present queue.
-    CommandQueue * present() const { return _present; }
-
     /// the async compute queue. could be null if the device does not support async compute.
     CommandQueue * compute() const { return _compute; }
 
     /// the async transfer queue. could be null if the device does not support async transfer.
     CommandQueue * transfer() const { return _transfer; }
-
-    bool separatePresentQueue() const { return _present != _graphics; }
 
     void waitIdle() const { return threadSafeWaitForDeviceIdle(_dispatcher, _gi.device); }
 
@@ -2486,7 +2521,6 @@ private:
     CommandQueue *              _graphics = nullptr;
     CommandQueue *              _compute  = nullptr;
     CommandQueue *              _transfer = nullptr;
-    CommandQueue *              _present  = nullptr;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -2598,15 +2632,13 @@ public:
 
 #ifndef RAPID_VULKAN_UNIT_TEST
 private:
+#if RAPID_VULKAN_ENABLE_LOADER
+    void * _library {};
 #endif
-    ConstructParameters                _cp;
-    std::unique_ptr<vk::DynamicLoader> _loader;
-    RAPID_VULKAN_DISPATCHER_TYPE       _dispatcher;
-    vk::Instance                       _instance {};
-    vk::DebugReportCallbackEXT         _debugReport {};
-
-    static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT objectType, uint64_t object, size_t location,
-                                                  int32_t messageCode, const char * prefix, const char * message, void * userData);
+    ConstructParameters          _cp;
+    RAPID_VULKAN_DISPATCHER_TYPE _dispatcher;
+    vk::Instance                 _instance {};
+    vk::DebugReportCallbackEXT   _debugReport {};
 };
 
 inline Device::ConstructParameters::ConstructParameters(const Instance & i) {
