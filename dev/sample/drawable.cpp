@@ -61,11 +61,14 @@ void entry(const Options & options) {
     }
     auto w      = uint32_t(1280);
     auto h      = uint32_t(720);
-    auto glfw   = GLFWInit(options.headless, instance, w, h, "pipeline-args");
-    auto device = Device(Device::ConstructParameters {instance}.setSurface(glfw.surface).setPrintVkInfo(options.verbosity));
+    auto device = Device(Device::ConstructParameters {instance}.setPrintVkInfo(options.verbosity));
     auto gi     = device.gi();
     auto q      = CommandQueue({{"main"}, gi, device.graphics()->family(), device.graphics()->index()});
-    auto sw     = Swapchain(Swapchain::ConstructParameters {{"swapchain"}}.setDevice(device).setDimensions(options.headless ? w : 0, options.headless ? h : 0));
+    auto glfw   = GLFWInit(options.headless, instance, w, h, "pipeline-args");
+    auto sw     = Swapchain(Swapchain::ConstructParameters {{"swapchain"}}
+                                .setSurface(options.headless ? nullptr : glfw.surface)
+                                .setDevice(device)
+                                .setDimensions(options.headless ? w : 0, options.headless ? h : 0));
     auto vs     = Shader(Shader::ConstructParameters {{"vs"}}.setGi(gi).setSpirv(pipeline_vert));
     auto fs     = Shader(Shader::ConstructParameters {{"fs"}, gi}.setSpirv(pipeline_frag));
     auto p      = Ref<GraphicsPipeline>::make(GraphicsPipeline::ConstructParameters {}

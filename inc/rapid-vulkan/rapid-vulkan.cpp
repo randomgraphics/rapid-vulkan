@@ -2946,16 +2946,8 @@ void CommandQueue::onNameChanged(const std::string &) { _impl->setName(name()); 
 
 Swapchain::ConstructParameters & Swapchain::ConstructParameters::setDevice(const Device & d) {
     gi                  = d.gi();
-    surface             = d.surface();
     graphicsQueueFamily = d.graphics()->family();
     graphicsQueueIndex  = d.graphics()->index();
-    if (d.present()) {
-        presentQueueFamily = d.present()->family();
-        presentQueueIndex  = d.present()->index();
-    } else {
-        presentQueueFamily = VK_QUEUE_FAMILY_IGNORED;
-        presentQueueIndex  = 0;
-    }
     return *this;
 }
 
@@ -2975,7 +2967,7 @@ public:
         clearSwapchain();
         _renderPass.reset();
         _graphicsQueue.reset();
-        _presentQueue = nullptr;
+        _presentQueue = vk::Queue {};
     }
 
     const RenderPass & renderPass() const { return *_renderPass; }
@@ -3085,14 +3077,15 @@ public:
 
             // present current frame
             if (_handle) {
-                frame.frameEndSubmission = _graphicsQueue->submit({cb, {}, {frame.renderFinished}, {frame.frameEndSemaphore}});
+                // Submit the frame end command buffer. Wait for current frame's render finished semaphore. Signal the backbuffer's frame end semaphore.
+                frame.frameEndSubmission = _graphicsQueue->submit({cb, {}, {frame.renderFinished}, {bb->frameEndSemaphore}});
 
                 auto presentInfo = vk::PresentInfoKHR()
                                        .setSwapchainCount(1)
                                        .setPSwapchains(&_handle)
                                        .setPImageIndices(&frame.imageIndex)
                                        .setWaitSemaphoreCount(1)
-                                       .setPWaitSemaphores(&frame.frameEndSemaphore);
+                                       .setPWaitSemaphores(&bb->frameEndSemaphore);
                 auto result = _presentQueue.presentKHR(&presentInfo);
                 if (result == vk::Result::eErrorOutOfDateKHR) {
                     recoverSwapchainOnPresentError();
@@ -3132,7 +3125,6 @@ private:
 
     struct FrameImpl : public Frame {
         uint32_t                   imageIndex {};
-        vk::Semaphore              frameEndSemaphore {};
         CommandQueue::SubmissionID frameEndSubmission {};
         Ref<Image>                 headlessImage; ///< the image that is used as the backbuffer for headless swapchain.
     };
@@ -3200,6 +3192,8 @@ private:
     }
 
     void constructWindowSwapchain() {
+        RVI_ASSERT(_cp.surface);
+
         // Construct a CommandQueue instance for graphics queue.
         RVI_REQUIRE(_cp.graphicsQueueFamily != VK_QUEUE_FAMILY_IGNORED);
         _graphicsQueue.reset(
@@ -3207,12 +3201,36 @@ private:
 
         // retrieve present queue handle.
         if (_cp.presentQueueFamily != VK_QUEUE_FAMILY_IGNORED) {
-            _presentQueue = _cp.gi->device.getQueue(_cp.presentQueueFamily, _cp.presentQueueIndex);
-            RVI_REQUIRE(_presentQueue);
+            if (_cp.presentQueueFamily == _cp.graphicsQueueFamily && _cp.presentQueueIndex == _cp.graphicsQueueIndex) {
+                RVI_LOGD("Use the current active graphics queue as present queue.");
+                _presentQueue = _graphicsQueue->handle();
+            } else {
+                RVI_LOGD("Create dedicated present queue: family %u, index %u", _cp.presentQueueFamily, _cp.presentQueueIndex);
+                _presentQueue = _cp.gi->device.getQueue(_cp.presentQueueFamily, _cp.presentQueueIndex);
+            }
         } else {
-            // use graphics queue as present queue.
-            _presentQueue = _graphicsQueue->handle();
+            // first, check if the graphics queue is also the present queue. If so, we are done.
+            if (_cp.gi->physical.getSurfaceSupportKHR(_cp.graphicsQueueFamily, _cp.surface)) {
+                RVI_LOGD("Use the current active graphics queue as present queue.");
+                _presentQueue          = _graphicsQueue->handle();
+                _cp.presentQueueFamily = _cp.graphicsQueueFamily;
+                _cp.presentQueueIndex  = _cp.graphicsQueueIndex;
+            } else {
+                // if not, we need to go through all families to find out the preslsent queue family.
+                RVI_LOGD("Graphics queue is not the present queue. Searching for a present queue...");
+                auto families = _cp.gi->physical.getQueueFamilyProperties();
+                for (uint32_t i = 0; i < families.size(); ++i) {
+                    if (_cp.gi->physical.getSurfaceSupportKHR(i, _cp.surface)) {
+                        RVI_LOGD("Create dedicated present queue: family %u, index %u", i, 0);
+                        _presentQueue          = _cp.gi->device.getQueue(i, 0);
+                        _cp.presentQueueFamily = i;
+                        _cp.presentQueueIndex  = 0;
+                        break;
+                    }
+                }
+            }
         }
+        RVI_REQUIRE(_presentQueue);
 
         // check if the back buffer format is supported.
         auto supportedFormats = _cp.gi->physical.getSurfaceFormatsKHR(_cp.surface);
@@ -3259,14 +3277,16 @@ private:
     }
 
     void clearSwapchain() {
-        for (auto & bb : _backbuffers) { bb.fb.clear(); }
+        for (auto & bb : _backbuffers) {
+            bb.fb.clear();
+            _cp.gi->safeDestroy(bb.frameEndSemaphore);
+        }
         _backbuffers.clear();
         _depthBuffer.clear();
         _cp.gi->safeDestroy(_handle);
         for (auto & f : _frames) {
             _cp.gi->safeDestroy(f.imageAvailable);
             _cp.gi->safeDestroy(f.renderFinished);
-            _cp.gi->safeDestroy(f.frameEndSemaphore);
         }
         _frames.clear();
     }
@@ -3372,6 +3392,10 @@ private:
             bb.fb.reset(new Framebuffer(fbcp));
             bb.framebuffer = bb.fb->handle();
 
+            // create frame end semaphore
+            bb.frameEndSemaphore = gi->device.createSemaphore({}, gi->allocator);
+            setVkHandleName(gi->device, bb.frameEndSemaphore, format("frame end semaphore for back buffer %zu", i));
+
             // transfer backbuffers to right layout.
             Barrier()
                 .i(bb.image->handle(), vk::AccessFlagBits::eNone, DESIRED_PRESENT_STATUS.access, vk::ImageLayout::eUndefined, DESIRED_PRESENT_STATUS.layout,
@@ -3387,13 +3411,11 @@ private:
         RVI_ASSERT(_backbuffers.size() > surfaceCaps.minImageCount);
         _frames.resize(std::max<size_t>(1u, _backbuffers.size() - surfaceCaps.minImageCount));
         for (size_t i = 0; i < _frames.size(); ++i) {
-            auto & f            = _frames[i];
-            f.imageAvailable    = gi->device.createSemaphore({}, gi->allocator);
-            f.renderFinished    = gi->device.createSemaphore({}, gi->allocator);
-            f.frameEndSemaphore = gi->device.createSemaphore({}, gi->allocator);
+            auto & f         = _frames[i];
+            f.imageAvailable = gi->device.createSemaphore({}, gi->allocator);
+            f.renderFinished = gi->device.createSemaphore({}, gi->allocator);
             setVkHandleName(gi->device, f.imageAvailable, format("image available semaphore %zu", i));
             setVkHandleName(gi->device, f.renderFinished, format("render finished semaphore %zu", i));
-            setVkHandleName(gi->device, f.frameEndSemaphore, format("frame end semaphore %zu", i));
         }
     }
 
@@ -3424,20 +3446,21 @@ private:
         _frames.resize(imageCount);
         for (uint32_t i = 0; i < imageCount; ++i) {
             // setup frame structure
-            auto & bb           = _backbuffers[i];
-            auto & f            = _frames[i];
-            f.backbuffer        = &bb;
-            f.imageIndex        = i;
-            f.imageAvailable    = gi->device.createSemaphore({}, gi->allocator);
-            f.renderFinished    = gi->device.createSemaphore({}, gi->allocator);
-            f.frameEndSemaphore = gi->device.createSemaphore({}, gi->allocator);
+            auto & bb            = _backbuffers[i];
+            bb.frameEndSemaphore = gi->device.createSemaphore({}, gi->allocator);
+            setVkHandleName(gi->device, bb.frameEndSemaphore, format("frame end semaphore %u", i));
+
+            auto & f         = _frames[i];
+            f.backbuffer     = &bb;
+            f.imageIndex     = i;
+            f.imageAvailable = gi->device.createSemaphore({}, gi->allocator);
+            f.renderFinished = gi->device.createSemaphore({}, gi->allocator);
             f.headlessImage.reset(new Image(Image::ConstructParameters {{"swapchain headless image"}, gi}
                                                 .setFormat(_cp.backbufferFormat)
                                                 .set2D(w, h)
                                                 .addUsage(vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst)));
             setVkHandleName(gi->device, f.imageAvailable, format("image available semaphore %u", i));
             setVkHandleName(gi->device, f.renderFinished, format("render finished semaphore %u", i));
-            setVkHandleName(gi->device, f.frameEndSemaphore, format("frame end semaphore %u", i));
 
             // transfer the image into desired layout.
             Barrier()
@@ -3900,11 +3923,6 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
         if (!_transfer && !(f.queueFlags & vk::QueueFlagBits::eGraphics) && !(f.queueFlags & vk::QueueFlagBits::eCompute) &&
             (f.queueFlags & vk::QueueFlagBits::eTransfer))
             _transfer = q;
-
-        if (cp.surface && !_present) {
-            auto supportPresenting = _gi.physical.getSurfaceSupportKHR(i, cp.surface);
-            if (supportPresenting) _present = q;
-        }
     }
 
     RVI_LOGI("Vulkan device initialized.");
@@ -4113,8 +4131,8 @@ struct PhysicalDeviceInfo {
 
 // ---------------------------------------------------------------------------------------------------------------------
 //
-static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT objectType, uint64_t object, size_t location,
-                                              int32_t messageCode, const char * prefix, const char * message, void * userData) {
+static vk::Bool32 VKAPI_PTR staticDebugCallback(vk::DebugReportFlagsEXT flags, vk::DebugReportObjectTypeEXT objectType, uint64_t object, size_t location,
+                                                int32_t messageCode, const char * prefix, const char * message, void * userData) {
     auto instance   = (Instance *) userData;
     auto validation = instance->cp().validation;
 
@@ -4153,7 +4171,7 @@ static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDeb
         return VK_FALSE;
     };
 
-    if ((flags & VK_DEBUG_REPORT_ERROR_BIT_EXT)) {
+    if ((flags & vk::DebugReportFlagBitsEXT::eError)) {
         if (validation & Instance::BREAK_ON_VK_ERROR)
             reportError(true, false);
         else if (validation & Instance::THROW_ON_VK_ERROR)
@@ -4162,24 +4180,28 @@ static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDeb
             reportError(false, false);
     }
 
-    else if (flags & VK_DEBUG_REPORT_INFORMATION_BIT_EXT) {
+    else if (flags & vk::DebugReportFlagBitsEXT::eWarning) {
         RVI_LOGW("[Vulkan] %s : %s", prefix, message);
     }
 
-    else if (flags & VK_DEBUG_REPORT_WARNING_BIT_EXT) {
-        RVI_LOGW("[Vulkan] %s : %s", prefix, message);
-    }
-
-    else if (flags & VK_DEBUG_REPORT_INFORMATION_BIT_EXT) {
+    else if (flags & vk::DebugReportFlagBitsEXT::eInformation) {
         RVI_LOGI("[Vulkan] %s : %s", prefix, message);
     }
 
-    else if (flags & VK_DEBUG_REPORT_DEBUG_BIT_EXT) {
+    else if (flags & vk::DebugReportFlagBitsEXT::eDebug) {
         RVI_LOGD("[Vulkan] %s : %s", prefix, message);
     }
 
     return VK_FALSE;
 }
+
+#if VK_HEADER_VERSION < 313
+static VkBool32 VKAPI_PTR staticDebugCallback(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT objectType, uint64_t object, size_t location,
+                                              int32_t messageCode, const char * prefix, const char * message, void * userData) {
+    return staticDebugCallback(vk::DebugReportFlagsEXT(flags), vk::DebugReportObjectTypeEXT(objectType), object, location, messageCode, prefix, message,
+                               userData);
+}
+#endif
 
 // *********************************************************************************************************************
 // Instance
@@ -4191,7 +4213,31 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
 #if RAPID_VULKAN_ENABLE_LOADER
     RVI_LOGD("Initializing Vulkan loader...");
     auto getProcAddress = _cp.getInstanceProcAddr;
-    if (!getProcAddress) getProcAddress = _loader.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
+    if (!getProcAddress) {
+        // load the vulkan library
+#if defined(__unix__) || defined(__QNXNTO__) || defined(__Fuchsia__)
+        _library = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
+        if (_library == nullptr) { _library = dlopen("libvulkan.so.1", RTLD_NOW | RTLD_LOCAL); }
+#elif defined(__APPLE__)
+        _library       = dlopen("libvulkan.dylib", RTLD_NOW | RTLD_LOCAL);
+#elif defined(_WIN32)
+        _library = (void *) ::LoadLibraryA("vulkan-1.dll");
+#else
+#error unsupported platform
+#endif
+        if (!_library) {
+            // NOTE there should be an InitializationFailedError, but msvc insists on the symbol does not exist within the scope of this function.
+            RVI_THROW("Failed to load vulkan library!");
+        }
+#if defined(__unix__) || defined(__APPLE__) || defined(__QNXNTO__) || defined(__Fuchsia__)
+        getProcAddress = (PFN_vkGetInstanceProcAddr) dlsym(_library, "vkGetInstanceProcAddr");
+#elif defined(_WIN32)
+        getProcAddress = (PFN_vkGetInstanceProcAddr)::GetProcAddress((HINSTANCE) _library, "vkGetInstanceProcAddr");
+#else
+#error unsupported platform
+#endif
+        if (!getProcAddress) { RVI_THROW("Failed to load vulkan library!"); }
+    }
     VULKAN_HPP_DEFAULT_DISPATCHER.init(getProcAddress);
 #endif
 
@@ -4325,6 +4371,19 @@ Instance::~Instance() {
     }
     if (_instance) _instance.destroy(), _instance = VK_NULL_HANDLE;
     RVI_LOGI("Vulkan instance destroyed.");
+
+#if RAPID_VULKAN_ENABLE_LOADER
+    // Free the vulkan library
+    if (_library) {
+#if defined(__unix__) || defined(__APPLE__) || defined(__QNXNTO__) || defined(__Fuchsia__)
+        dlclose(_library);
+#elif defined(_WIN32)
+        ::FreeLibrary((HINSTANCE) _library);
+#else
+#error unsupported platform
+#endif
+    }
+#endif
 }
 
 #ifdef _MSC_VER
