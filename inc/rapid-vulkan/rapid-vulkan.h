@@ -2511,13 +2511,13 @@ public:
     operator VkDevice() const { return _gi.device; }
 
 private:
-    ConstructParameters         _cp;
-    RAPID_VULKAN_DISPATCHER_TYPE   _dispatcher;
-    GlobalInfo                  _gi {};
-    std::vector<CommandQueue *> _queues; // one for each queue family
-    CommandQueue *              _graphics = nullptr;
-    CommandQueue *              _compute  = nullptr;
-    CommandQueue *              _transfer = nullptr;
+    ConstructParameters          _cp;
+    RAPID_VULKAN_DISPATCHER_TYPE _dispatcher;
+    GlobalInfo                   _gi {};
+    std::vector<CommandQueue *>  _queues; // one for each queue family
+    CommandQueue *               _graphics = nullptr;
+    CommandQueue *               _compute  = nullptr;
+    CommandQueue *               _transfer = nullptr;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
