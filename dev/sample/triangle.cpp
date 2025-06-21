@@ -102,6 +102,7 @@ void entry(const Options & options) {
         }
         sw.present({});
     }
+    device.waitIdle();
 }
 
 } // namespace triangle
