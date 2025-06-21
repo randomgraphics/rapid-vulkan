@@ -2493,9 +2493,6 @@ public:
 
     const RAPID_VULKAN_DISPATCHER_TYPE & dispatcher() const { return _dispatcher; }
 
-    /// The surface that this device is created for. Could be null if the device is headless.
-    vk::SurfaceKHR surface() const { return _cp.surface; }
-
     /// The general purpose graphics queue that is able to do everything: graphics, compute and transfer. Should always be available.
     CommandQueue * graphics() const { return _graphics; }
 
