@@ -313,7 +313,7 @@ using namespace std::string_literals;
 
 enum class LogSeverity {
     FATAL   = 0,
-    ERROR   = 10,
+    ERROR_  = 10,
     WARNING = 20,
     INFO    = 30,
     DEBUG   = 40,
