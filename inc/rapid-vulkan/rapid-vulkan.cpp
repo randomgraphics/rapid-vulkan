@@ -4083,6 +4083,7 @@ struct InstanceInfo {
         // retrieve supported API version.
         ss << "========================================" << std::endl
            << "Vulkan API version :" << std::endl
+           << "        SDK: " << printVulkanVersion(VK_HEADER_VERSION_COMPLETE) << std::endl
            << "  supported: " << printVulkanVersion(version) << std::endl
            << "    enabled: " << printVulkanVersion(ici.pApplicationInfo->apiVersion) << std::endl
            << "========================================" << std::endl
