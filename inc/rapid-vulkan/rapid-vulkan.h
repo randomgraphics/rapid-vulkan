@@ -1433,6 +1433,12 @@ public:
         }
 
         template<typename T, size_t C>
+        ConstructParameters & setSpirv(const std::array<T, C> & data) {
+            spirv = vk::ArrayProxy<const uint32_t>(C * sizeof(T) / sizeof(uint32_t), (const uint32_t *) data.data());
+            return *this;
+        }
+
+        template<typename T, size_t C>
         ConstructParameters & setSpirv(const T (&data)[C]) {
             spirv = vk::ArrayProxy<const uint32_t>(C * sizeof(T) / sizeof(uint32_t), (const uint32_t *) data);
             return *this;
