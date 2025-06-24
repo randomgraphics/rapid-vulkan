@@ -29,6 +29,7 @@ add_sample_no_link_to_rv(alternative-namespace)
 add_sample(noop-compute)
 
 if (NOT ANDROID)
+    add_sample(clear-screen)
     add_sample(drawable)
     add_sample(triangle)
 endif()

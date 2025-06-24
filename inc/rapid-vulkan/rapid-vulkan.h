@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identify the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 24
+#define RAPID_VULKAN_HEADER_REVISION 25
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -68,6 +68,13 @@ SOFTWARE.
 #define RAPID_VULKAN_THROW(message) throw std::runtime_error(message)
 #endif
 
+/// \def RAPID_VULKAN_LOG
+/// The macro to log message. The default implementation prints to stdout.
+/// \param message The message to log. The type is const char *.
+#ifndef RAPID_VULKAN_LOG
+#define RAPID_VULKAN_LOG(severity, prefix, message) fprintf((severity) < RAPID_VULKAN_NAMESPACE::LogSeverity::INFO ? stderr : stdout, "%s%s\n", prefix, message)
+#endif
+
 /// \def RAPID_VULKAN_BACKTRACE
 /// Define custom function to retrieve current call stack and store in std::string.
 /// This macro is called when rapid-vulkan encounters critical error, to help
@@ -75,41 +82,6 @@ SOFTWARE.
 /// nothing but return empty string.
 #ifndef RAPID_VULKAN_BACKTRACE
 #define RAPID_VULKAN_BACKTRACE() std::string("You have to define RAPID_VULKAN_BACKTRACE to retrieve current call stack.")
-#endif
-
-/// \def RAPID_VULKAN_LOG_ERROR
-/// The macro to log error message. The default implementation prints to stderr.
-/// \paam message The error message to log. The type is const char *.
-#ifndef RAPID_VULKAN_LOG_ERROR
-#define RAPID_VULKAN_LOG_ERROR(message) fprintf(stderr, "[ ERROR ] %s\n", message)
-#endif
-
-/// \def RVI_LOGW
-/// The macro to log warning message. The default implementation prints to stderr.
-/// \param message The warning message to log. The type is const char *.
-#ifndef RAPID_VULKAN_LOG_WARNING
-#define RAPID_VULKAN_LOG_WARNING(message) fprintf(stderr, "[WARNING] %s\n", message)
-#endif
-
-/// \def RAPID_VULKAN_LOG_INFO
-/// The macro to log informational message. The default implementation prints to stdout.
-/// \param message The message to log. The type is const char *.
-#ifndef RAPID_VULKAN_LOG_INFO
-#define RAPID_VULKAN_LOG_INFO(message) fprintf(stdout, "%s\n", message)
-#endif
-
-/// \def RAPID_VULKAN_LOG_VERBOSE
-/// The macro to log verbose log. The default implementation prints to stdout.
-/// \param message The message to log. The type is const char *.
-#ifndef RAPID_VULKAN_LOG_VERBOSE
-#define RAPID_VULKAN_LOG_VERBOSE(message) fprintf(stdout, "[VERBOSE] %s\n", message)
-#endif
-
-/// \def RAPID_VULKAN_LOG_DEBUG
-/// The macro to log debug message. The macro is ignored when RAPID_VULKAN_ENABLE_DEBUG_BUILD is 0
-/// \param message The message to log. The type is const char *.
-#ifndef RAPID_VULKAN_LOG_DEBUG
-#define RAPID_VULKAN_LOG_DEBUG(message) fprintf(stdout, "[ DEBUG ] %s\n", message)
 #endif
 
 /// \def RAPID_VULKAN_ASSERT
@@ -273,12 +245,16 @@ SOFTWARE.
 
 #define RVI_STR_HELPER(x) #x
 
-#define RVI_LOGE(...) RAPID_VULKAN_LOG_ERROR(RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
-#define RVI_LOGW(...) RAPID_VULKAN_LOG_WARNING(RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
-#define RVI_LOGI(...) RAPID_VULKAN_LOG_INFO(RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
-#define RVI_LOGV(...) RAPID_VULKAN_LOG_VERBOSE(RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
+#define RVI_LOGE(...) \
+    RAPID_VULKAN_LOG(RAPID_VULKAN_NAMESPACE::LogSeverity::ERROR_, "[RAPID-VULKAN] [ERROR] ", RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
+#define RVI_LOGW(...) \
+    RAPID_VULKAN_LOG(RAPID_VULKAN_NAMESPACE::LogSeverity::WARNING, "[RAPID-VULKAN] [WARNING] ", RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
+#define RVI_LOGI(...) RAPID_VULKAN_LOG(RAPID_VULKAN_NAMESPACE::LogSeverity::INFO, "[RAPID-VULKAN] [INFO] ", RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
+#define RVI_LOGV(...) \
+    RAPID_VULKAN_LOG(RAPID_VULKAN_NAMESPACE::LogSeverity::VERBOSE, "[RAPID-VULKAN] [VERBOSE] ", RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
 #if RAPID_VULKAN_ENABLE_DEBUG_BUILD
-#define RVI_LOGD(...) RAPID_VULKAN_LOG_DEBUG(RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
+#define RVI_LOGD(...) \
+    RAPID_VULKAN_LOG(RAPID_VULKAN_NAMESPACE::LogSeverity::DEBUG, "[RAPID-VULKAN] [DEBUG] ", RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
 #else
 #define RVI_LOGD(...) void(0)
 #endif
@@ -342,6 +318,15 @@ namespace RAPID_VULKAN_NAMESPACE {
 #endif
 
 using namespace std::string_literals;
+
+enum class LogSeverity {
+    FATAL   = 0,
+    ERROR_  = 10,
+    WARNING = 20,
+    INFO    = 30,
+    DEBUG   = 40,
+    VERBOSE = 50,
+};
 
 // namespace rv_details {
 //     /// put this into detail namespace to avoid name conflict with other libraries.
@@ -476,7 +461,7 @@ inline void setVkHandleName(const RAPID_VULKAN_DISPATCHER_TYPE & dsp, vk::Device
     };
 
     HandleAlias alias;
-    alias.object = handle;
+    alias.object = *(void **) &handle;
     auto info    = vk::DebugUtilsObjectNameInfoEXT().setObjectType(handle.objectType).setObjectHandle(alias.u64).setPObjectName(name);
     device.setDebugUtilsObjectNameEXT(info, dsp);
 }
@@ -1123,7 +1108,7 @@ public:
 
     operator vk::Buffer() const { return desc().handle; }
 
-    operator VkBuffer() const { return desc().handle; }
+    operator VkBuffer() const { return (VkBuffer) desc().handle; }
 
 protected:
     void onNameChanged(const std::string &) override;
@@ -1383,7 +1368,7 @@ public:
 
     operator vk::Image() const { return desc().handle; }
 
-    operator VkImage() const { return desc().handle; }
+    operator VkImage() const { return (VkImage) desc().handle; }
 
 private:
     class Impl;
@@ -1425,7 +1410,7 @@ public:
 
     operator vk::Sampler() const { return _handle; }
 
-    operator VkSampler() const { return _handle; }
+    operator VkSampler() const { return (VkSampler) _handle; }
 
 protected:
     void onNameChanged(const std::string &) override {

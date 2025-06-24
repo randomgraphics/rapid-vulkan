@@ -258,7 +258,7 @@ public:
 #if RAPID_VULKAN_ENABLE_VMA
         if (_allocation) {
             RVI_ASSERT(!_memory);
-            vmaDestroyBuffer(_gi->vmaAllocator, _handle, _allocation);
+            vmaDestroyBuffer(_gi->vmaAllocator, (VkBuffer) _handle, _allocation);
         } else
 #endif
         {
@@ -794,7 +794,7 @@ public:
         _views.clear();
 #if RAPID_VULKAN_ENABLE_VMA
         if (_allocation) {
-            vmaDestroyImage(_gi->vmaAllocator, _handle, _allocation);
+            vmaDestroyImage(_gi->vmaAllocator, (VkImage) _handle, _allocation);
         } else
 #endif
         {
@@ -1130,7 +1130,7 @@ public:
 
     operator vk::RenderPass() const { return _handle; }
 
-    operator VkRenderPass() const { return _handle; }
+    operator VkRenderPass() const { return (VkRenderPass) _handle; }
 
 protected:
     void onNameChanged(const std::string &) override;
@@ -1262,7 +1262,7 @@ public:
 
     operator vk::Framebuffer() const { return _handle; }
 
-    operator VkFramebuffer() const { return _handle; }
+    operator VkFramebuffer() const { return (VkFramebuffer) _handle; }
 
 protected:
     void onNameChanged(const std::string &) override;
@@ -3371,7 +3371,7 @@ private:
         auto              images = gi->device.getSwapchainImagesKHR(_handle, *gi->dispatcher);
         std::stringstream ss;
         ss << "Swapchain created with " << images.size() << " images: ";
-        for (const auto & i : images) { ss << " " << std::hex << i; }
+        for (const auto & i : images) { ss << " " << std::hex << (VkImage) i; }
         RVI_LOGI("%s", ss.str().c_str());
 
         // create a graphics command buffer to transfer swapchain images to the right layout.
@@ -4390,7 +4390,7 @@ Instance::~Instance() {
         _instance.destroyDebugReportCallbackEXT(_debugReport, {}, _dispatcher);
         _debugReport = VK_NULL_HANDLE;
     }
-    if (_instance) _instance.destroy(nullptr, _dispatcher), _instance = VK_NULL_HANDLE;
+    if (_instance) _instance.destroy(nullptr, _dispatcher), _instance = nullptr;
     RVI_LOGI("Vulkan instance destroyed.");
 
 #if RAPID_VULKAN_ENABLE_LOADER
