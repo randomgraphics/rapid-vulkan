@@ -1924,6 +1924,11 @@ class Drawable : public Root {
 public:
     struct ConstructParameters : public Root::ConstructParameters {
         Ref<const Pipeline> pipeline {};
+
+        ConstructParameters & setPipeline(Ref<const Pipeline> pipeline_) {
+            pipeline = pipeline_;
+            return *this;
+        }
     };
 
     /// @brief Construct a drawable object.
@@ -1975,6 +1980,8 @@ private:
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// A wrapper class for VkCommandBuffer
+/// TODO: Add a resource manager/pool to this class to manage temporary resources (like temp buffers, intermediate
+/// images and etc.) used by draw calls in the command buffer.
 class CommandBuffer {
 public:
     class Impl;
