@@ -84,7 +84,7 @@ void entry(const Options & options) {
     auto u0 = Ref(new Buffer(Buffer::ConstructParameters {{"ub0"}, gi}.setUniform().setSize(sizeof(float) * 2)));
     auto u1 = Ref(new Buffer(Buffer::ConstructParameters {{"ub1"}, gi}.setUniform().setSize(sizeof(float) * 3)));
     auto vb = Ref(new Buffer(Buffer::ConstructParameters {{"vb"}, gi}.setVertex().setSize(sizeof(float) * 2 * 3)));
-    vb->setContent(bc.setData<float>({-0.5f, -0.5f, 0.5f, -0.5f, 0.5f, 0.5f}));
+    vb->setContent(Buffer::SetContentParameters {}.setQueue(*device.graphics()).setData<float>({-0.5f, -0.5f, 0.5f, -0.5f, 0.5f, 0.5f}));
 
     // create a drawable object using the pipeline object.
     auto dr = Ref(new Drawable({{}, p}));
