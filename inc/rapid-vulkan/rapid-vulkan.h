@@ -1868,7 +1868,7 @@ public:
         std::vector<uint8_t> value {};
     };
 
-    Ref<const Pipeline>                              pipeline; ///< Pipeline used by the draw pack.
+    const Ref<const Pipeline>                        pipeline; ///< Pipeline used by the draw pack. It is immutable.
     std::vector<std::vector<vk::WriteDescriptorSet>> descriptors;
     Dependencies                                     dependencies;
     std::vector<ConstantArgument>                    constants;
