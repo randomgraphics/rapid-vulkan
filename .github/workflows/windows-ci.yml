@@ -16,13 +16,15 @@ jobs:
 #     - run: echo "💡 The ${{ github.repository }} repository has been cloned to the runner."
       - name: Install Vulkan SDK
         run: |
-          git clone --depth 1 --branch 1.3.250.0 https://github.com/randomgraphics/vulkan-sdk.git c:\vulkan-sdk
+          Invoke-WebRequest -Uri https://github.com/randomgraphics/vulkan-sdk-for-windows/releases/download/v1.3.275.0/vulkan-sdk-for-windows-1.3.275.0.zip -OutFile vulkan-sdk-for-windows-1.3.275.0.zip
+          Expand-Archive -Path vulkan-sdk-for-windows-1.3.275.0.zip -DestinationPath C:\
+          Remove-Item vulkan-sdk-for-windows-1.3.275.0.zip
       - name: Install Other Dependencies
         run: python.exe -m pip install --upgrade termcolor
       - name: Build
         shell: powershell
         run: |
-          $env:VULKAN_SDK="C:\vulkan-sdk"
+          $env:VULKAN_SDK="C:\vulkan-sdk-for-windows"
           . dev\env\env.ps1
           b d
       - run: echo "🍏 This job's status is ${{ job.status }}."

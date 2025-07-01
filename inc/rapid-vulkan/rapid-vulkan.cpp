@@ -2096,7 +2096,7 @@ public:
             // copy content of the cached pack to the new one.
             copyStates(*_cachedPack, *newPack);
         } else {
-            newPack->pipeline = _pipeline;
+            const_cast<Ref<const Pipeline> &>(newPack->pipeline) = _pipeline;
             _dirty.setAll();
         }
 
@@ -2156,9 +2156,9 @@ private:
     }
 
     void copyStates(const DrawPack & from, DrawPack & to) const {
-        to.pipeline     = from.pipeline;
-        to.descriptors  = from.descriptors;
-        to.dependencies = from.dependencies;
+        const_cast<Ref<const Pipeline> &>(to.pipeline) = from.pipeline;
+        to.descriptors                                 = from.descriptors;
+        to.dependencies                                = from.dependencies;
         to.constants.assign(from.constants.begin(), from.constants.end());
         to.vertexBuffers.assign(from.vertexBuffers.begin(), from.vertexBuffers.end());
         to.vertexOffsets.assign(from.vertexOffsets.begin(), from.vertexOffsets.end());
@@ -4083,6 +4083,7 @@ struct InstanceInfo {
         // retrieve supported API version.
         ss << "========================================" << std::endl
            << "Vulkan API version :" << std::endl
+           << "        SDK: " << printVulkanVersion(VK_HEADER_VERSION_COMPLETE) << std::endl
            << "  supported: " << printVulkanVersion(version) << std::endl
            << "    enabled: " << printVulkanVersion(ici.pApplicationInfo->apiVersion) << std::endl
            << "========================================" << std::endl

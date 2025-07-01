@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identify the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 25
+#define RAPID_VULKAN_HEADER_REVISION 26
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -1433,6 +1433,12 @@ public:
         }
 
         template<typename T, size_t C>
+        ConstructParameters & setSpirv(const std::array<T, C> & data) {
+            spirv = vk::ArrayProxy<const uint32_t>(C * sizeof(T) / sizeof(uint32_t), (const uint32_t *) data.data());
+            return *this;
+        }
+
+        template<typename T, size_t C>
         ConstructParameters & setSpirv(const T (&data)[C]) {
             spirv = vk::ArrayProxy<const uint32_t>(C * sizeof(T) / sizeof(uint32_t), (const uint32_t *) data);
             return *this;
@@ -1862,7 +1868,7 @@ public:
         std::vector<uint8_t> value {};
     };
 
-    Ref<const Pipeline>                              pipeline; ///< Pipeline used by the draw pack.
+    const Ref<const Pipeline>                        pipeline; ///< Pipeline used by the draw pack. It is immutable.
     std::vector<std::vector<vk::WriteDescriptorSet>> descriptors;
     Dependencies                                     dependencies;
     std::vector<ConstantArgument>                    constants;
@@ -1918,6 +1924,11 @@ class Drawable : public Root {
 public:
     struct ConstructParameters : public Root::ConstructParameters {
         Ref<const Pipeline> pipeline {};
+
+        ConstructParameters & setPipeline(Ref<const Pipeline> pipeline_) {
+            pipeline = pipeline_;
+            return *this;
+        }
     };
 
     /// @brief Construct a drawable object.
@@ -1969,6 +1980,8 @@ private:
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// A wrapper class for VkCommandBuffer
+/// TODO: Add a resource manager/pool to this class to manage temporary resources (like temp buffers, intermediate
+/// images and etc.) used by draw calls in the command buffer.
 class CommandBuffer {
 public:
     class Impl;
