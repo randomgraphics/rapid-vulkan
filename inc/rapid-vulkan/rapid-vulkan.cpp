@@ -2514,10 +2514,12 @@ public:
         _handle                 = _queue.desc().gi->device.allocateCommandBuffers(info)[0];
         setVkHandleName(_queue.desc().gi->device, _handle, _name);
         _handle.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+        _finished.init();
     }
 
-    void hibernate() {
+    void hibernate(bool successfullyExecutedOnGPU) {
         _state = FINISHED;
+        _finished.set(successfullyExecutedOnGPU);
         clear();
     }
 
@@ -2536,6 +2538,8 @@ public:
     const std::string & name() const { return _name; }
 
     vk::CommandBuffer handle() const { return _handle; }
+
+    std::shared_future<bool> getFinishedFuture() const { return _finished.get(); }
 
     bool end() {
         if (_state == RECORDING) {
@@ -2556,10 +2560,10 @@ public:
 
 private:
     enum State {
-        RECORDING,
-        ENDED,
-        EXECUTING,
-        FINISHED,
+        RECORDING, // the initial state, after construction or after hibernation. ready to record commands.
+        ENDED,     // end recording, before submission
+        EXECUTING, // submitted to GPU, but not finished
+        FINISHED,  // finished execution on GPU
     };
 
     struct DescriptorPoolKey {
@@ -2588,6 +2592,49 @@ private:
 
     typedef std::map<DescriptorPoolKey, DescriptorPool> DescriptorPoolMap;
 
+    struct FinishedFuture {
+        std::unique_ptr<std::promise<bool>> promise;
+        std::shared_future<bool> future;
+        mutable std::mutex mutex;
+
+        void init() {
+            auto lock = std::lock_guard<std::mutex>(mutex);
+            if (promise) {
+                // ensure whoever is waiting for the finished future will be notified.
+                try {
+                    promise->set_value(false);
+                } catch (const std::future_error &) {
+                    // this is expected. No error.
+                }
+            }
+            promise = std::make_unique<std::promise<bool>>();
+            future = promise->get_future();
+        }
+
+        void clear() {
+            auto lock = std::lock_guard<std::mutex>(mutex);
+            if (promise) {
+                try {
+                    promise->set_value(false);
+                } catch (const std::future_error &) {
+                    // this is expected. No error.
+                }
+            }
+            promise.reset();
+            future = {};
+        }
+
+        void set(bool value) {
+            std::lock_guard<std::mutex> lock(mutex);
+            promise->set_value(value);
+        }
+
+        std::shared_future<bool> get() const {
+            auto lock = std::lock_guard<std::mutex>(mutex);
+            return future;
+        }
+    };
+
     CommandQueue &         _queue;
     std::string            _name;
     vk::CommandBufferLevel _level {};
@@ -2596,6 +2643,7 @@ private:
     State                  _state = RECORDING;
     DescriptorPoolMap      _descriptorPools;
     Ref<const DrawPack>    _last;
+    FinishedFuture         _finished;
 
     std::set<Ref<const Pipeline>> _pipelines;
     std::set<Ref<const Buffer>>   _buffers;
@@ -2606,6 +2654,7 @@ private:
 
 private:
     void clear() {
+        _finished.clear();
         auto gi = _queue.desc().gi;
         gi->safeDestroy(_handle, _pool);
         gi->device.resetCommandPool(_pool);
@@ -2648,7 +2697,7 @@ auto CommandBuffer::name() const -> const std::string & {
 auto CommandBuffer::handle() const -> vk::CommandBuffer { return _impl ? _impl->handle() : vk::CommandBuffer {}; }
 bool CommandBuffer::finished() const { return _impl ? Impl::FINISHED == _impl->_state : false; }
 bool CommandBuffer::pending() const { return _impl ? Impl::EXECUTING == _impl->_state : false; }
-bool CommandBuffer::recording() const { return _impl ? Impl::RECORDING == _impl->_state : false; }
+auto CommandBuffer::getFinishedFuture() const -> std::shared_future<bool> { return _impl ? _impl->getFinishedFuture() : std::shared_future<bool> {}; }
 auto CommandBuffer::render(Ref<const DrawPack> d) const -> const CommandBuffer & {
     if (_impl) _impl->render(d);
     return *this;
@@ -2755,7 +2804,7 @@ public:
         for (auto c : commandBuffers) {
             auto p = promote(c);
             if (!p) continue;
-            p->hibernate();
+            p->hibernate(false);
             _active.erase(p.get());
             _finished[p.get()] = p;
         }
@@ -2884,7 +2933,7 @@ private:
         ++iter;
         for (auto s = _pending.begin(); s != iter; ++s) {
             for (auto cb : (*s)->commandBuffers) {
-                cb->hibernate();
+                cb->hibernate(true);
                 _finished[cb.get()] = cb;
             }
         }

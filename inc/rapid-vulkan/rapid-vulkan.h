@@ -219,6 +219,7 @@ SOFTWARE.
 #include <exception>
 #include <functional>
 #include <memory>
+#include <future>
 
 // ---------------------------------------------------------------------------------------------------------------------
 // RVI stands for Rapid Vulkan Implementation. Macros started with this prefix are reserved for internal use.
@@ -2005,15 +2006,24 @@ public:
 
     vk::CommandBuffer handle() const;
 
-    Impl * impl() const { return _impl; }
-
     bool empty() const { return _impl == nullptr; }
 
+    /// @brief Check if the command buffer is finished executing on GPU.
+    /// @return true if the command buffer is finished executing on GPU.
     bool finished() const;
 
+    /// @brief Check if the command buffer is pending execution on GPU.
+    /// @return true if the command buffer is submitted to GPU, but not finished executing on GPU.
     bool pending() const;
 
+    /// @brief Check if the command buffer is able to record commands.
+    /// For a newly constructed command buffer, it is always in recording state. Once the command buffer is submitted to GPU, it will be in pending state.
+    /// And this method will return false.
     bool recording() const;
+
+    /// @brief Get a future that will be signaled when the command buffer is finished executing on GPU.
+    /// The value is true if the command buffer is finished executing on GPU, or false if the command buffer is dropped or failed to submit to GPU.
+    std::shared_future<bool> getFinishedFuture() const;
 
     /// @brief Enqueue a draw pack to the queue to be rendered later.
     /// The drawable and the associated resources are considered in-use until the command buffer is dropped or finished executing on GPU.
@@ -2039,6 +2049,9 @@ public:
     operator VkCommandBuffer() const { return handle(); }
 
     operator bool() const { return _impl != nullptr; }
+
+    /// @brief This method is reserved for internal use.
+    Impl * impl() const { return _impl; }
 
 private:
     Impl * _impl = nullptr;
