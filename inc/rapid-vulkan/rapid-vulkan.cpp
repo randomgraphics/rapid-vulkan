@@ -2630,6 +2630,8 @@ private:
                     }
                     std::swap(actions, toBeCalled);
                 }
+                promise.reset();
+                future = {};
             }
             for (auto & a : toBeCalled) a(false);
         }

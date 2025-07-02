@@ -68,10 +68,10 @@ int main() {
             staging->cmdCopyTo({c, u1->handle(), u0->desc().size, 0, sizeof(float) * 2, sizeof(float) * 3});
 
             // Make sure the staging buffer is released after the command buffer is finished (meaning copy is done).
-            c->onFinished(
-                [staging, index = frame->index](bool success) {
+            c.onFinished(
+                [staging, index = frame->index](bool) mutable {
                     staging.reset();
-                    RVI_LOGI("staging buffer released for frame %d", index);
+                    RVI_LOGI("staging buffer released for frame %zu", index);
                 },
                 "release staging buffer");
 

@@ -1986,10 +1986,7 @@ private:
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// @brief A wrapper class for VkCommandBuffer
-/// @note The life cycle of the command buffer is completely managed by the CommandQueue class, which is why it is
-/// not inherit from Root.
-/// @todo Add a resource manager/pool to this class to manage temporary resources (like temp buffers, intermediate
-/// images and etc.) used by draw calls in the command buffer.
+/// @note This is a proxy-like class that can be copied freely. It is also why it is not inherit from Root.
 class CommandBuffer {
 public:
     class Impl;
