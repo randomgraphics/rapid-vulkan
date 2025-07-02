@@ -48,3 +48,4 @@ add_library(rapid-vulkan-static STATIC rv.cpp)
 # Build subfolders
 add_subdirectory(sample)
 add_subdirectory(test)
+add_subdirectory(experimental)

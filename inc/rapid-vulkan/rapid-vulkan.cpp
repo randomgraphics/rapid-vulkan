@@ -272,7 +272,7 @@ public:
 
     auto desc() const -> const Desc & { return _desc; }
 
-    void cmdCopy(const CopyParameters & params) {
+    void cmdCopyTo(const CopyToParameters & params) {
         if (!params.cb) {
             RVI_LOGE("Can't copy buffer: command buffer is null.");
             return;
@@ -320,7 +320,7 @@ public:
         // copy to the target buffer.
         auto queue = CommandQueue({{_owner.name()}, _gi, params.queueFamily, params.queueIndex});
         if (auto cb = queue.begin(_owner.name().c_str(), vk::CommandBufferLevel::ePrimary)) {
-            staging.cmdCopy({cb, _owner.handle(), _desc.size, dstOffset, 0, size});
+            staging.cmdCopyTo({cb, _owner.handle(), _desc.size, dstOffset, 0, size});
             queue.wait(queue.submit({{cb}}));
         }
     }
@@ -338,7 +338,7 @@ public:
         auto staging = Buffer(Buffer::ConstructParameters {{_owner.name()}, _gi, size}.setStaging());
         auto queue   = CommandQueue({{_owner.name()}, _gi, params.queueFamily, params.queueIndex});
         if (auto cb = queue.begin(_owner.name().c_str(), vk::CommandBufferLevel::ePrimary)) {
-            cmdCopy({cb, staging.handle(), size, 0, offset});
+            cmdCopyTo({cb, staging.handle(), size, 0, offset});
             queue.wait(queue.submit({cb}));
         } else {
             return {};
@@ -437,7 +437,7 @@ Buffer::~Buffer() {
     _impl = nullptr;
 }
 auto Buffer::desc() const -> const Desc & { return _impl->desc(); }
-void Buffer::cmdCopy(const CopyParameters & p) { return _impl->cmdCopy(p); }
+void Buffer::cmdCopyTo(const CopyToParameters & p) { return _impl->cmdCopyTo(p); }
 auto Buffer::setContent(const SetContentParameters & p) -> Buffer & {
     _impl->setContent(p);
     return *this;
@@ -2519,7 +2519,7 @@ public:
 
     void hibernate(bool successfullyExecutedOnGPU) {
         _state = FINISHED;
-        _finished.set(successfullyExecutedOnGPU);
+        _finished.trigger(successfullyExecutedOnGPU);
         clear();
     }
 
@@ -2540,6 +2540,17 @@ public:
     vk::CommandBuffer handle() const { return _handle; }
 
     std::shared_future<bool> getFinishedFuture() const { return _finished.get(); }
+
+    void onFinished(std::function<void(bool)> action, const char * description) {
+        if (!action) return; // ignore null action
+        _finished.actions.push_back([action, description](bool value) {
+            try {
+                action(value);
+            } catch (const std::exception & e) {
+                RVI_LOGE("Failed to call onFinished action (%s): %s", description ? description : "<unspecified action>", e.what());
+            }
+        });
+    }
 
     bool end() {
         if (_state == RECORDING) {
@@ -2593,40 +2604,44 @@ private:
     typedef std::map<DescriptorPoolKey, DescriptorPool> DescriptorPoolMap;
 
     struct FinishedFuture {
-        std::unique_ptr<std::promise<bool>> promise;
-        std::shared_future<bool> future;
-        mutable std::mutex mutex;
+        std::unique_ptr<std::promise<bool>>    promise;
+        std::shared_future<bool>               future;
+        std::vector<std::function<void(bool)>> actions;
+        mutable std::mutex                     mutex;
 
         void init() {
             auto lock = std::lock_guard<std::mutex>(mutex);
-            if (promise) {
-                // ensure whoever is waiting for the finished future will be notified.
-                try {
-                    promise->set_value(false);
-                } catch (const std::future_error &) {
-                    // this is expected. No error.
-                }
-            }
+            RVI_ASSERT(!promise);
+            RVI_ASSERT(actions.empty());
             promise = std::make_unique<std::promise<bool>>();
-            future = promise->get_future();
+            future  = promise->get_future();
         }
 
         void clear() {
-            auto lock = std::lock_guard<std::mutex>(mutex);
-            if (promise) {
-                try {
-                    promise->set_value(false);
-                } catch (const std::future_error &) {
-                    // this is expected. No error.
+            std::vector<std::function<void(bool)>> toBeCalled;
+            {
+                auto lock = std::lock_guard<std::mutex>(mutex);
+                if (promise) {
+                    // ensure whoever is waiting for the finished future will be notified.
+                    try {
+                        promise->set_value(false);
+                    } catch (const std::future_error &) {
+                        // this is expected. No error.
+                    }
+                    std::swap(actions, toBeCalled);
                 }
             }
-            promise.reset();
-            future = {};
+            for (auto & a : toBeCalled) a(false);
         }
 
-        void set(bool value) {
-            std::lock_guard<std::mutex> lock(mutex);
-            promise->set_value(value);
+        void trigger(bool value) {
+            std::vector<std::function<void(bool)>> toBeCalled;
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                promise->set_value(value);
+                std::swap(actions, toBeCalled);
+            }
+            for (auto & a : toBeCalled) a(value);
         }
 
         std::shared_future<bool> get() const {
@@ -2698,6 +2713,13 @@ auto CommandBuffer::handle() const -> vk::CommandBuffer { return _impl ? _impl->
 bool CommandBuffer::finished() const { return _impl ? Impl::FINISHED == _impl->_state : false; }
 bool CommandBuffer::pending() const { return _impl ? Impl::EXECUTING == _impl->_state : false; }
 auto CommandBuffer::getFinishedFuture() const -> std::shared_future<bool> { return _impl ? _impl->getFinishedFuture() : std::shared_future<bool> {}; }
+void CommandBuffer::onFinished(std::function<void(bool)> action, const char * description) const {
+    if (!action) return; // ignore null action
+    if (_impl)
+        _impl->onFinished(action, description);
+    else
+        action(false); // Command buffer is not created yet. Call the action with false immediately.
+}
 auto CommandBuffer::render(Ref<const DrawPack> d) const -> const CommandBuffer & {
     if (_impl) _impl->render(d);
     return *this;

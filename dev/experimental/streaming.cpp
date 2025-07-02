@@ -10,41 +10,31 @@ int main() {
     using namespace rapid_vulkan;
 
     RenderBase base(false, 1280, 720, "streaming");
-    auto gi = base.device->gi();
-    
-    // Standard boilerplate of creating instance, device, swapchain, etc. It is basically the same as triangle.cpp.
-    auto vs     = Shader(Shader::ConstructParameters {{"vs"}}.setGi(gi).setSpirv(pipeline_vert));
-    auto fs     = Shader(Shader::ConstructParameters {{"fs"}, gi}.setSpirv(pipeline_frag));
-    auto p      = Ref<GraphicsPipeline>::make(GraphicsPipeline::ConstructParameters {}
-                                                  .setRenderPass(base.swapchain->renderPass())
-                                                  .setVS(&vs)
-                                                  .setFS(&fs)
-                                                  .dynamicScissor()
-                                                  .dynamicViewport()
-                                                  .addVertexAttribute(0, 0, vk::Format::eR32G32Sfloat)
-                                                  .addVertexBuffer(2 * sizeof(float)));
+    auto       gi = base.device->gi();
 
-    // This part is what this sample is about. We create some buffers and bind them to the drawable.
-    auto u0 = Ref(new Buffer(Buffer::ConstructParameters {{"ub0"}, gi}.setUniform().setSize(sizeof(float) * 2)));
-    auto u1 = Ref(new Buffer(Buffer::ConstructParameters {{"ub1"}, gi}.setUniform().setSize(sizeof(float) * 3)));
+    // setup vertex buffer with 3 vertices of the triangle.
     auto vb = Ref(new Buffer(Buffer::ConstructParameters {{"vb"}, gi}.setVertex().setSize(sizeof(float) * 2 * 3)));
     auto bc = Buffer::SetContentParameters {}.setQueue(*base.device->graphics());
     vb->setContent(bc.setData<float>({-0.5f, -0.5f, 0.5f, -0.5f, 0.5f, 0.5f}));
 
-    // create a drawable object using the pipeline object.
+    // create a drawable that draws a triangle to screen.
+    auto vs = Shader(Shader::ConstructParameters {{"vs"}}.setGi(gi).setSpirv(pipeline_vert));
+    auto fs = Shader(Shader::ConstructParameters {{"fs"}, gi}.setSpirv(pipeline_frag));
+    auto p  = Ref<GraphicsPipeline>::make(GraphicsPipeline::ConstructParameters {}
+                                              .setRenderPass(base.swapchain->renderPass())
+                                              .setVS(&vs)
+                                              .setFS(&fs)
+                                              .dynamicScissor()
+                                              .dynamicViewport()
+                                              .addVertexAttribute(0, 0, vk::Format::eR32G32Sfloat)
+                                              .addVertexBuffer(2 * sizeof(float)));
+    auto u0 = Ref(new Buffer(Buffer::ConstructParameters {{"ub0"}, gi}.setUniform().setSize(sizeof(float) * 2))); // vertex offset
+    auto u1 = Ref(new Buffer(Buffer::ConstructParameters {{"ub1"}, gi}.setUniform().setSize(sizeof(float) * 3))); // color
     auto dr = Ref(new Drawable({{}, p}));
-
-    // Bind uniform buffer u0 to set 0, index 0
-    dr->b({0, 0}, {{u0}});
-
-    // Bind uniform buffer u1 to set 0, index 1
-    dr->b({0, 1}, {{u1}});
-
-    // Bind vb as the vertex buffer.
-    dr->v({{vb}});
-
-    // setup draw parameters of the drawable to have 3 non-indexed vertices.
-    dr->draw(GraphicsPipeline::DrawParameters {}.setNonIndexed(3));
+    dr->b({0, 0}, {{u0}});                                          // bind vertex offset to set 0, index 0
+    dr->b({0, 1}, {{u1}});                                          // bind color to set 0, index 1
+    dr->v({{vb}});                                                  // bind vertex buffer
+    dr->draw(GraphicsPipeline::DrawParameters {}.setNonIndexed(3)); // draw 3 vertices
 
     // show the window and begin the rendering loop.
     base.show();
@@ -52,14 +42,36 @@ int main() {
         if (!base.processEvents()) break;
         auto frame = base.swapchain->beginFrame();
         if (frame) {
-            // Animate the triangle. Note that this is not the most efficient way to animate things, since it serializes
-            // CPU and GPU. But it's simple and it is not the focus of this sample.
+            // animate the scene
             auto elapsed = (float) frame->index / 60.0f;
-            u0->setContent(bc.setData<float>({(float) std::sin(elapsed) * .25f, (float) std::cos(elapsed) * .25f}));
-            u1->setContent(bc.setData<float>({(float) std::sin(elapsed) * .5f + .5f, (float) std::cos(elapsed) * .5f + .5f, 1.f}));
+            auto offsetX = (float) std::sin(elapsed) * .25f;
+            auto offsetY = (float) std::cos(elapsed) * .25f;
+            auto colorR  = (float) std::sin(elapsed) * .5f + .5f;
+            auto colorG  = (float) std::cos(elapsed) * .5f + .5f;
+
+            // allocate a one time staging buffer to update the uniform buffer.
+            auto staging = Ref<Buffer>::make(Buffer::ConstructParameters {{"staging"}, gi}.setStaging().setSize(sizeof(float) * 2 + sizeof(float) * 3));
+            {
+                auto m    = Buffer::Map<float>(*staging, 0, sizeof(float) * 2 + sizeof(float) * 3);
+                m.data[0] = offsetX;
+                m.data[1] = offsetY;
+                m.data[2] = colorR;
+                m.data[3] = colorG;
+                m.data[4] = 1.0f;
+            }
 
             // acquire a command buffer
             auto c = base.commandQueue->begin("pipeline");
+
+            // copy the staging buffer to the uniform buffer.
+            staging->cmdCopyTo({c, u0->handle(), u0->desc().size, 0, 0, sizeof(float) * 2});
+            staging->cmdCopyTo({c, u1->handle(), u0->desc().size, 0, sizeof(float) * 2, sizeof(float) * 3});
+            c->onFinished(
+                [staging, index = frame->index](bool success) {
+                    staging.reset();
+                    RVI_LOGI("staging buffer released for frame %d", index);
+                },
+                "release staging buffer");
 
             // begin the render pass
             base.swapchain->cmdBeginBuiltInRenderPass(c, Swapchain::BeginRenderPassParameters {}.setClearColorF({0.0f, 1.0f, 0.0f, 1.0f})); // clear to green

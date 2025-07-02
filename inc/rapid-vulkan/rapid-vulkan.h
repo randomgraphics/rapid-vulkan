@@ -546,7 +546,9 @@ inline vk::UniqueSurfaceKHR createGLFWSurface(vk::Instance instance, GLFWwindow 
 #endif
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// The root class of most of the other public classes in this library.
+/// @brief The root class with reference counting.
+/// Any classes that needs reference counting should inherit from this class, which includes most of the resource-like
+/// classes in this library.
 class Root {
 public:
     RVI_NO_COPY_NO_MOVE(Root);
@@ -966,13 +968,15 @@ public:
     };
 
     /// @brief Parameters to copy data from one buffer to another.
-    struct CopyParameters {
-        vk::CommandBuffer cb          = {};                 ///< command buffer to record the copy command.
-        vk::Buffer        dst         = {};                 ///< the destination buffer
-        vk::DeviceSize    dstCapacity = 0;                  ///< size of the destination buffer, in bytes. Must be positive number.
-        vk::DeviceSize    dstOffset   = 0;                  ///< offset to the beginning of the destination buffer, in bytes.
-        vk::DeviceSize    srcOffset   = 0;                  ///< offset to the beginning of the source buffer, in bytes.
-        vk::DeviceSize    size        = vk::DeviceSize(-1); ///< size of the data to be copied, in bytes.
+    struct CopyToParameters {
+        vk::CommandBuffer cb          = {}; ///< command buffer to record the copy command. Must be non-null.
+        vk::Buffer        dst         = {}; ///< the destination buffer. Must be non-null.
+        vk::DeviceSize    dstCapacity = 0;  ///< size of the destination buffer, in bytes. Must be positive number.
+                                            ///< Note that this parameter is not directly referenced by Vulkan. It is used to clamp the copy size to ensure that
+                                            ///< the copy is always within the source and the destination buffer.
+        vk::DeviceSize dstOffset = 0;       ///< offset to the beginning of the destination buffer, in bytes. Must be positive number.
+        vk::DeviceSize srcOffset = 0;       ///< offset to the beginning of the source buffer, in bytes. Must be positive number.
+        vk::DeviceSize size      = vk::DeviceSize(-1); ///< size of the data to be copied, in bytes. Must be positive number.
     };
 
     /// @brief Parameters to synchronously update buffer content.
@@ -1044,6 +1048,7 @@ public:
     };
 
     /// @brief A helper class that maps the buffer and and automatically unmap the buffer when destroyed.
+    /// You can only use this class on a mapable (host visible) buffer.
     template<typename T = uint8_t>
     struct Map {
         Buffer *       buffer = nullptr;
@@ -1093,7 +1098,7 @@ public:
     ~Buffer() override;
 
     auto desc() const -> const Desc &;
-    void cmdCopy(const CopyParameters &);
+    void cmdCopyTo(const CopyToParameters &);
     auto setContent(const SetContentParameters &) -> Buffer &;
     auto readContent(const ReadParameters &) -> std::vector<uint8_t>;
     auto map(const MapParameters &) -> MappedResult;
@@ -1980,8 +1985,10 @@ private:
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// A wrapper class for VkCommandBuffer
-/// TODO: Add a resource manager/pool to this class to manage temporary resources (like temp buffers, intermediate
+/// @brief A wrapper class for VkCommandBuffer
+/// @note The life cycle of the command buffer is completely managed by the CommandQueue class, which is why it is
+/// not inherit from Root.
+/// @todo Add a resource manager/pool to this class to manage temporary resources (like temp buffers, intermediate
 /// images and etc.) used by draw calls in the command buffer.
 class CommandBuffer {
 public:
@@ -2025,6 +2032,14 @@ public:
     /// The value is true if the command buffer is finished executing on GPU, or false if the command buffer is dropped or failed to submit to GPU.
     std::shared_future<bool> getFinishedFuture() const;
 
+    /// @brief Register a callable function to be called when the command buffer is finished executing on GPU.
+    /// @param action The callable function to be called.
+    /// @param description The optional description of the action. It is used for debugging and logging.
+    /// The parameter of the callable indicates if the command buffer is finished executing on GPU or not (abandoned).
+    /// Note that the action will be called in the future from another thread. Make sure any object that is referenced by the action
+    /// are thread safe and not deleted before the action is called.
+    void onFinished(std::function<void(bool)> action, const char * description = nullptr) const;
+
     /// @brief Enqueue a draw pack to the queue to be rendered later.
     /// The drawable and the associated resources are considered in-use until the command buffer is dropped or finished executing on GPU.
     /// Deleting the drawable object before the command buffer is dropped or finished executing on GPU will result in undefined behavior.
@@ -2058,7 +2073,8 @@ private:
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// A wrapper class for VkQueue
+/// @brief A wrapper class for VkQueue
+/// @todo Consider make it not inherit from Root, since we usually not need to reference count the command queue.
 class CommandQueue : public Root {
 public:
     struct ConstructParameters : public Root::ConstructParameters {
@@ -2156,7 +2172,8 @@ private:
 class Device;
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// Wrapper class of swapchain object
+/// Wrapper class of swapchain object.
+/// \todo Consider make it not inherit from Root, since we usually not
 class Swapchain : public Root {
 public:
     struct DepthStencilFormat {

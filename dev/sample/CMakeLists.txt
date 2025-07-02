@@ -1,4 +1,4 @@
-Include(CheckIncludeFileCXX)
+Include(CheckIncludeFileCXX) # for check_include_file_cxx
 
 function(add_sample name)
     add_executable(${name} ${name}.cpp)
