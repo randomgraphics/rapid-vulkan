@@ -64,6 +64,7 @@ int main() {
             auto c = base.commandQueue->begin("pipeline");
 
             // copy the staging buffer to the uniform buffer.
+            RVI_LOGI("enqueue buffer copy for frame %zu", frame->index);
             staging->cmdCopyTo({c, u0->handle(), u0->desc().size, 0, 0, sizeof(float) * 2});
             staging->cmdCopyTo({c, u1->handle(), u0->desc().size, 0, sizeof(float) * 2, sizeof(float) * 3});
 
