@@ -2062,7 +2062,13 @@ public:
     /// @brief Enqueue a draw pack to the queue to be rendered later.
     CommandBuffer & render(Ref<const DrawPack>);
 
-    /// @brief Allocate a temporary staging buffer that will be released along with the command buffer.
+    /// @brief Allocate a temporary CPU accessible staging buffer that will be automatically released along with the command buffer.
+    /// The returned buffer is an ideal container of data that you would like to copy/stream to GPU. The general workflow is:
+    ///   1. map the buffer.
+    ///   2. fill the buffer with data.
+    ///   3. unmap the buffer.
+    ///   4. copy the buffer to another GPU-only buffer via cmdCopyTo() method..
+    /// The buffer is automatically released when the command buffer is dropped or finished executing on GPU.
     /// @param size The size in bytes of the buffer to allocate.
     /// @param purpose The purpose of the buffer. It is used for debugging and logging.
     /// @return A pointer to the allocated buffer.
