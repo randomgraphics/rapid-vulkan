@@ -2552,6 +2552,16 @@ public:
         });
     }
 
+    Ref<Buffer> allocateTransientBuffer(Buffer::ConstructParameters & cp) {
+        cp.gi  = _queue.desc().gi;
+        auto b = Ref<Buffer>::make(cp);
+        if (!b.empty()) {
+            // automatically release the buffer when the command buffer is finished.
+            onFinished([b](bool) mutable { b.reset(); }, "release transient buffer");
+        }
+        return b;
+    }
+
     bool end() {
         if (_state == RECORDING) {
             // end the command buffer
@@ -2729,6 +2739,12 @@ auto CommandBuffer::render(Ref<const DrawPack> d) const -> const CommandBuffer &
 auto CommandBuffer::render(Ref<const DrawPack> d) -> CommandBuffer & {
     if (_impl) _impl->render(d);
     return *this;
+}
+auto CommandBuffer::allocateStagingBuffer(size_t size, const char * purpose) const -> Ref<Buffer> {
+    if (!_impl) return {};
+    if (!purpose || !*purpose) purpose = "<unnamed transient buffer>";
+    auto cp = Buffer::ConstructParameters {{purpose}, nullptr}.setStaging().setSize(size);
+    return _impl->allocateTransientBuffer(cp);
 }
 
 class CommandQueue::Impl {

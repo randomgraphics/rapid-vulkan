@@ -557,7 +557,17 @@ public:
         std::string name = "<no-name>"s;
     };
 
-    virtual ~Root() { RVI_ASSERT(_ref == 0); }
+    virtual ~Root() {
+        RVI_ASSERT(_ref == 0);
+        for (auto & action : _destructionActions) {
+            try {
+                action(this);
+            } catch (const std::exception & e) { RVI_LOGE("Failed to call onDestruction action on object %s: %s", _name.c_str(), e.what()); } catch (...) {
+                RVI_LOGE("Failed to call onDestruction action on object %s: unknown exception", _name.c_str());
+            }
+        }
+        _destructionActions.clear();
+    }
 
     /// Name of the object. For debug and log only. Can be any value.
     const std::string & name() const { return _name; }
@@ -582,6 +592,12 @@ public:
     /// @brief Get the reference count of the object.
     uint64_t refCount() const { return _ref; }
 
+    /// @brief Register an action to be called when the object is destroyed.
+    /// The action is called in the destructor of the object with the object as the argument.
+    /// @note Pay extra caution to not capture this object itself in the action when passing a lambda as the action.
+    /// Or else, the object will never be destroyed due to reference cycle.
+    void onDestruction(std::function<void(Root *)> action) { _destructionActions.push_back(action); }
+
 protected:
     Root(const ConstructParameters & params): _name("<no-name>"s) { setName(params.name); }
 
@@ -589,9 +605,10 @@ protected:
 
 private:
     friend class RefBase;
-    std::string                   _name;
-    mutable std::atomic<uint64_t> _ref               = 0;
-    bool                          _noDeleteOnZeroRef = false;
+    std::string                              _name;
+    mutable std::atomic<uint64_t>            _ref               = 0;
+    bool                                     _noDeleteOnZeroRef = false;
+    std::vector<std::function<void(Root *)>> _destructionActions;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -2044,6 +2061,12 @@ public:
 
     /// @brief Enqueue a draw pack to the queue to be rendered later.
     CommandBuffer & render(Ref<const DrawPack>);
+
+    /// @brief Allocate a temporary staging buffer that will be released along with the command buffer.
+    /// @param size The size in bytes of the buffer to allocate.
+    /// @param purpose The purpose of the buffer. It is used for debugging and logging.
+    /// @return A pointer to the allocated buffer.
+    Ref<Buffer> allocateStagingBuffer(size_t size, const char * purpose = nullptr) const;
 
     CommandBuffer & operator=(const CommandBuffer & o) {
         _impl = o._impl;

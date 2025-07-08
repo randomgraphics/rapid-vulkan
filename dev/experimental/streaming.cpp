@@ -49,8 +49,11 @@ int main() {
             auto colorR  = (float) std::sin(elapsed) * .5f + .5f;
             auto colorG  = (float) std::cos(elapsed) * .5f + .5f;
 
+            // acquire a command buffer
+            auto c = base.commandQueue->begin("pipeline");
+
             // allocate a one time staging buffer to update the uniform buffer.
-            auto staging = Ref<Buffer>::make(Buffer::ConstructParameters {{"staging"}, gi}.setStaging().setSize(sizeof(float) * 2 + sizeof(float) * 3));
+            auto staging = c.allocateStagingBuffer(sizeof(float) * 2 + sizeof(float) * 3, std::to_string(frame->index).c_str());
             {
                 auto m    = Buffer::Map<float>(*staging, 0, sizeof(float) * 2 + sizeof(float) * 3);
                 m.data[0] = offsetX;
@@ -59,22 +62,12 @@ int main() {
                 m.data[3] = colorG;
                 m.data[4] = 1.0f;
             }
-
-            // acquire a command buffer
-            auto c = base.commandQueue->begin("pipeline");
+            staging->onDestruction([](Root * buffer) { RVI_LOGD("release staging buffer %s", buffer->name().c_str()); });
 
             // copy the staging buffer to the uniform buffer.
             RVI_LOGI("enqueue buffer copy for frame %zu", frame->index);
             staging->cmdCopyTo({c, u0->handle(), u0->desc().size, 0, 0, sizeof(float) * 2});
             staging->cmdCopyTo({c, u1->handle(), u0->desc().size, 0, sizeof(float) * 2, sizeof(float) * 3});
-
-            // Make sure the staging buffer is released after the command buffer is finished (meaning copy is done).
-            c.onFinished(
-                [staging, index = frame->index](bool) mutable {
-                    staging.reset();
-                    RVI_LOGI("staging buffer released for frame %zu", index);
-                },
-                "release staging buffer");
 
             // begin the render pass
             base.swapchain->cmdBeginBuiltInRenderPass(c, Swapchain::BeginRenderPassParameters {}.setClearColorF({0.0f, 1.0f, 0.0f, 1.0f})); // clear to green
