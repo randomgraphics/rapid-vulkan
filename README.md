@@ -1,13 +1,13 @@
 [![circleci](https://circleci.com/gh/randomgraphics/rapid-vulkan.svg?style=shield)](https://circleci.com/gh/randomgraphics/rapid-vulkan)
 
 # rapid-vulkan
-rapid-vulkan is a lightweight wrappers and utilities for rapid creation of Vulkan app. It is designed in a header-only manner that can be easiy integrated into any Vulkan based applications.
+rapid-vulkan is a set of lightweight wrappers and utilities for rapid creation of Vulkan apps. It is designed in a header-only manner that can be easily integrated into any Vulkan-based applications.
 
-The library is compiled against C++17 standard. It depends on the C++ version of the Vulkan header (vulkan.hpp) coming with Vulkan SDK, and one additional 3rd-party library: **spirv-reflect**, which is already included in the repository.
+The library is compiled against the C++17 standard. It depends on the C++ version of the Vulkan header (vulkan.hpp) provided by the official Vulkan SDK, and one additional 3rd-party library: **spirv-reflect**, which is already included in the repository.
 
 It is currently developed and tested on both Windows 11 and Ubuntu 22.04.
 
-The library is aiming for decreasing the code you have to write yourself to use Vulkan. The following is an example that loads and executes a Vulkan compute shader using rapid-vulkan:
+The library aims to simplify the code you have to write yourself to use Vulkan. The following is a quick example that loads and executes a Vulkan compute shader using rapid-vulkan:
 
 ```c++
 #define RAPID_VULKAN_IMPLEMENTATION
@@ -18,7 +18,7 @@ int main() {
   auto device   = Device({instance.handle()});
   auto spv      = loadSPRIV(...); // load spirv shader binary into std::vector container.
   auto cs       = Shader(Shader::ConstructParameters{{"my shader"}, device->gi}.setSpriv(spv));
-  auto pipeline = ComputePipeline({{"my pipline"}, &cs});
+  auto pipeline = ComputePipeline({{"my pipeline"}, &cs});
   auto queue    = device->compute();
   auto commands = queue.begin("my command buffer");
   pipeline.cmdDispatch(commands, {1, 1, 1});
@@ -29,13 +29,13 @@ int main() {
 ```
 
 # Integration
-The library aims for easy integration with any Vulkan project. Everything you need is included in [inc](inc) folder.
+The library aims for easy integration with any Vulkan project. Everything you need is included in the [inc](inc) folder.
 
-Here are how you integrate it with your project:
+Here's how you integrate it with your project:
 
-1. Copy everything in [inc](inc) folder into your project's source folder.
+1. Copy everything in the [inc](inc) folder into your project's source folder.
 2. Include [rapid-vulkan.h](inc/rapid-vulkan/rapid-vulkan.h) anywhere you like.
-3. In **one and only one** of your source files, include [rapid-vulkan.h](inc/rapid-vulkan/rapid-vulkan.h) with RAPID_VULKAN_IMPLEMENTATION macro defined in front of it. Then you are good to go:
+3. In **one and only one** of your source files, include [rapid-vulkan.h](inc/rapid-vulkan/rapid-vulkan.h) with the RAPID_VULKAN_IMPLEMENTATION macro defined in front of it. Then you are good to go:
 
 ```c
 // in your header:
@@ -45,22 +45,22 @@ Here are how you integrate it with your project:
 #define RAPID_VULKAN_IMPLEMENTATION
 #include <rapid-vulkan/rapid-vulkan.h>
 ```
-Please checkout apps in [sample](dev/sample) folder for how to use rapid-vulkan to quickly create Vulkan applications.
+Please check out the apps in the [sample](dev/sample) folder for how to use rapid-vulkan to quickly create Vulkan applications.
 
 # Compile Time Configurations
 
-All macros started with RAPID_VULKAN_ (like RAPID_VULKAN_ASSERT) are compile time configurations that you can set to customize rapid-vulkan's behavior. Usage of those macros are explained in the header at where they are defined.
+All macros starting with RAPID_VULKAN_ (like RAPID_VULKAN_ASSERT) are compile-time configurations that you can set to customize rapid-vulkan's behavior. Usage of those macros is explained in the header where they are defined.
 
 # Build Sample & Test Apps
-Again, rapid-vulkan is a header-only library. No build is required use it. The following build steps are only to build test and sample apps.
+Again, rapid-vulkan is a header-only library. No build is required to use it. The following build steps are only to build test and sample apps.
 
 On Linux, just run [bootstrap.sh](dev/env/bootstrap.sh) to install all dependencies. Or you can use the docker container coming with the library. Just run `dev/docker/desktop/run.sh` to launch the docker environment.
 
-On Windows, you'll need to manually install Vulkan SDK, as well as cmake, git and python 3.8+. Of course, you'll also need to have latest version of Visual Studio.
+On Windows, you'll need to manually install the Vulkan SDK (or directly download it from https://github.com/randomgraphics/vulkan-sdk-for-windows), as well as cmake, git and python 3.8+. Of course, you'll also need to have a version of Visual Studio installed.
 
-After that, run [env.sh](env.sh)/[env.cmd](env.cmd) to launch the dev console. Then type `b d` to build debug variant, `b p` to build profile variant or `b r` to build release variant. Type `b --help` for detail help.
+After that, run [env.sh](env.sh)/[env.cmd](env.cmd) to launch the dev console. Then type `b d` to build the debug variant, `b p` to build the profile variant or `b r` to build the release variant. Type `b --help` for detailed help.
 
-After everything is built. You can use `cit` command to launch the check-in-test suite to verify the library.
+After everything is built, you can use the `cit` command to launch the check-in-test suite to verify the library.
 
 # Hello World
 ```c++
@@ -72,24 +72,24 @@ int main() {
     return 0;
 }
 ```
-This is the simplest form of an app created out of the rapid-vulkan library. It creates a Vulkan instance using default options. Then creates a Vulkan device out of that instance.
+This is the simplest form of an app created with the rapid-vulkan library. It creates a Vulkan instance using default options. Then creates a Vulkan device out of that instance.
 
 # Pipeline, Drawable, CommandBuffer and CommandQueue
-VkPipeline sits at the center of Vulkan architecture that defines how GPU pipeline should be configured to render the scene. It is powerful but tedious to use. You'll have to create and manage an whole series of supporting objects, such as pipeline layout, descriptor set layout, descriptor set, descriptor pool to use it. On top of that, you'll also need to carefully manage the async execution of the pipeline maximize CPU & GPU parallelism while not deleting anything that is still being used by GPU. The rapid-vulkan library tries to simplify all these by wrapping the most common use cases into 4 core classes: **Pipeline**, **Drawable**, **CommandBuffer** and **CommandQueue**
+VkPipeline sits at the center of Vulkan architecture and defines how the GPU pipeline should be configured to render the scene. It is powerful but tedious to use. You'll have to create and manage a whole series of supporting objects, such as pipeline layout, descriptor set layout, descriptor set, descriptor pool to use it. On top of that, you'll also need to carefully manage the async execution of the pipeline to maximize CPU & GPU parallelism while not deleting anything that is still being used by the GPU. The rapid-vulkan library tries to simplify all these by wrapping the most commonly used cases into 4 core classes: **Pipeline**, **Drawable**, **CommandBuffer** and **CommandQueue**
 
-- **`Pipeline`** class is basically a wrapper of VkPipeline object. It has 2 sub classes for compute and graphics pipeline. It comes with utility methods that makes constructing a pipeline object more intuitive. Similar as the raw VkPipeline handle, the pipeline object is **immutable** once constructed.
+- **`Pipeline`** class is basically a wrapper of the VkPipeline object. It has 2 subclasses for compute and graphics pipeline. It comes with utility methods that make constructing a pipeline object more intuitive. Similar to the raw VkPipeline handle, the pipeline object is **immutable** once constructed.
 
-- **`Drawable`** class stores reference to a pipeline along with data and parameters used by the pipeline for rendering, such as buffers, images and constants. It can not be used directly for rendering but can generate `DrawPack` structure via the `Drawable::compile()` method. The `DrawPack` is a compact and self-contained struct that can be enqueued into command buffer for rendering.
-  - Once you are satisfied with the state of the drawable, you can call `compile()` method to generate a `DrawPack` instance, which is basically a snapshot of the current state of the `Drawable` object. After the `DrawPack` instance is generated, you can change the state of the `Drawable` object freely w/o affecting the state of already generated/compiled `DrawPack` instances.
-  - For similicity, `DrawPack` class is defined as a simple C++ structure with all fields declared public. But it should be treated as **immutable** and **opaque**. Once it is created, do nothing to it but enqueue it to a `CommandBuffer` object.
+- **`Drawable`** class stores a reference to one pipeline object, along with data and parameters used by that pipeline object for rendering, such as buffers, images and constants. The `Drawable` class cannot be used directly for rendering but can generate `DrawPack` structure via the `Drawable::compile()` method. The `DrawPack` is a compact and self-contained struct that can be enqueued into command buffer for rendering:
+  - Once you are satisfied with the state of the drawable, call the `compile()` method to generate a `DrawPack` instance, which is basically a snapshot of the current state of the `Drawable` object. After the `DrawPack` instance is generated, you can change the state of the `Drawable` object freely without affecting the state of already generated/compiled `DrawPack` instances.
+  - For simplicity, `DrawPack` class is defined as a simple C++ structure with all fields declared public. But it should be treated as **immutable** and **opaque**. Once it is created, it needs to be enqueued to at least one `CommandBuffer` object to participate in the rendering process.
   - One `DrawPack` instance can be safely enqueued into command buffer multiple times, or enqueued into multiple command buffers.
-  - In the very rare case, you may tweak member values of a `DrawPack` instance to suite your special needs. But only doing so **before** it is enqueued into any command buffers. Modifying an already enqueued `DrawPack` instance will lead to undefined behavior.
+  - In the very rare case, you may tweak member values of a `DrawPack` instance to suit your special needs. But only do so **BEFORE** it is enqueued into any command buffers. Modifying an already enqueued `DrawPack` instance will lead to undefined behavior.
 
-- **`CommandBuffer`** is a wrapper of VkCommandBuffer. It consumes the `DrawPack` instances and enqueues render commands to command buffer. It is an one-time use object, after you submit it to command queue, simply drop your own reference to it and never touch it again. It's life time will be managed by the `CommandQueue` automatically.
+- **`CommandBuffer`** is a wrapper of VkCommandBuffer. It records rendering sequence by consuming the `DrawPack` instances. It is a one-time use object. Once it is submitted to command queue, it becomes unusable. Simply drop your own reference to it and never touch it again. Its lifetime will be managed by the `CommandQueue` automatically.
 
-- **`CommandQueue`** is a wrapper of VkCommandQueue. It is responsible for creating/deleting/executing `CommandBuffer` instances. This is also the main object that manages the life time of other objects required for rendering. It'll keep references of all dependencies, such as buffers, images and pipelines, until rendering completes on GPU, preventing them from being released too early.
+- **`CommandQueue`** is a wrapper of the VkCommandQueue. It is responsible for creating/deleting/executing `CommandBuffer` instances. This is also the main object that manages the lifetime of other objects required for rendering. It'll keep references of all dependency objects, such as buffers, images and pipelines, until rendering completes on GPU, preventing them from being released too early. After rendering is done on GPU, those resources, if not referenced by user code, will be either released or recycled for future use.
 
-Here is an simplified example of using these classes to issue a draw command. See [drawable](dev/sample/drawable.cpp) sample for full source code.
+Here is a simplified example of using these classes to issue a draw command. See [drawable](dev/sample/drawable.cpp) sample for full source code.
 
 ```c++
     GlobalInfo     gi = getVulkanGlobalInfo(...); // get vulkan global information, usually from a Device object.
@@ -124,4 +124,4 @@ Here is an simplified example of using these classes to issue a draw command. Se
 ```
 
 # License
-The library is released under MIT license. See [LICENSE](LICENSE) file for details.
+The library is released under the MIT license. See [LICENSE](LICENSE) file for details.
