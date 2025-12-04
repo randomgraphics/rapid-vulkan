@@ -1,6 +1,6 @@
 #/bin/bash
 dir="$(cd $(dirname "${BASH_SOURCE[0]}");pwd)"
-base=`cat $dir/../desktop/tag.txt`
+base=`cat $dir/../linux/tag.txt`
 image=`cat $dir/tag.txt`
 
 echo
