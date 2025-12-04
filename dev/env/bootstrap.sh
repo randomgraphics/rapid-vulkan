@@ -12,36 +12,35 @@ read
 # sudo apt-get update
 # sudo apt-get install -y wget gnupg2
 
-# check OS distribution
-release=$(lsb_release -rs)
-if [ $(echo "$release >= 22" | bc) -eq 1 ]; then
-    dist="ubuntu_22_04"
-elif [ $(echo "$release >= 20" | bc) -eq 1 ]; then
-    dist="ubuntu_20_04"
-else
-    echo "[ERROR] Unrecognized OS version ..."
+# check OS distribution by reading /etc/os-release file
+if [ ! -f /etc/os-release ]; then
+    echo "[ERROR] /etc/os-release file not found. Cannot determine OS distribution."
     exit -1
 fi
-echo dist=$dist
+
+# Source the os-release file to get distribution information
+. /etc/os-release
+
+# Check UBUNTU_CODENAME
 
 # setup vulkan-sdk source
-if [ "ubuntu_22_04" == $dist ]; then
+if [ "jammy" == $UBUNTU_CODENAME ] || [ "noble" == $UBUNTU_CODENAME ]; then
     # For Ubuntu 22.04+
-    echo "Add LunarG SDK source to apt registry for Ubuntu 22.04 ..."
+    echo "Add LunarG SDK source to apt registry for Ubuntu 22.04+ ..."
     wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo tee /etc/apt/trusted.gpg.d/lunarg.asc
-    sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-1.3.239-jammy.list https://packages.lunarg.com/vulkan/1.3.239/lunarg-vulkan-1.3.239-jammy.list
-elif [ "ubuntu_20_04" == $dist ]; then
+    sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-1.4.313-jammy.list https://packages.lunarg.com/vulkan/1.4.313/lunarg-vulkan-1.4.313-jammy.list
+elif [ "focal" == $UBUNTU_CODENAME ]; then
     # For Ubuntu 20.04
     echo "Add LunarG SDK source to apt registry for Ubuntu 20.04 ..."
     wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo apt-key add -
-    sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-1.3.239-focal.list https://packages.lunarg.com/vulkan/1.3.239/lunarg-vulkan-1.3.239-focal.list
+    sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-1.4.313-focal.list https://packages.lunarg.com/vulkan/1.4.313/lunarg-vulkan-1.4.313-focal.list
 else
     echo "[ERROR] Unrecognized OS version ..."
     exit -1
 fi
 
 # Add clang-14 to apt repository for Ubuntu 20.04.
-if [ "ubuntu_20_04" == $dist ]; then
+if [ "focal" == $UBUNTU_CODENAME ]; then
     echo "Add clang 14 suite to apt registry for Ubuntu 20.04 ..."
     wget -P /tmp https://apt.llvm.org/llvm.sh
     chmod +x /tmp/llvm.sh
