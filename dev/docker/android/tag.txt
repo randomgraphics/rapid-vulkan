@@ -1,1 +1,1 @@
-randomgraphics/rapid-vulkan:android-latest
+randomgraphics/vulkan:android-2025.2.2.7

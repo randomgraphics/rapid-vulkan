@@ -4,7 +4,8 @@ base=`cat $dir/../linux/tag.txt`
 image=`cat $dir/tag.txt`
 
 echo
-echo Build rapid-vulkan:android docker image...
+echo Build $image ...
+echo  BASE        = ${base}
 echo  HTTP_PROXY  = ${HTTP_PROXY}
 echo  HTTPS_PROXY = ${HTTPS_PROXY}
 echo  http_proxy  = ${http_proxy}
@@ -18,7 +19,7 @@ effective_https_proxy=${https_proxy}
 if [ -z "${effective_https_proxy}" ]; then effective_https_proxy=${HTTPS_PROXY}; fi
 
 # build the final docker image
-DOCKER_BUILDKIT=1 docker build \
+DOCKER_BUILDKIT=1 docker -D build \
     --build-arg http_proxy=${effective_http_proxy} \
     --build-arg https_proxy=${effective_https_proxy} \
     --build-arg base=${base} \

@@ -1,4 +1,4 @@
-ARG base
+ARG base=randomgraphics/vulkan:linux-latest
 FROM ${base}
 LABEL description="rapid-vulkan"
 ARG DEBIAN_FRONTEND=noninteractive
