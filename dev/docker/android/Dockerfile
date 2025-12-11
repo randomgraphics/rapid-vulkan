@@ -24,6 +24,7 @@ RUN /android/sdk/cmdline-tools/latest/bin/sdkmanager --install "cmake;4.1.2"
 # Setup environment variables
 ENV JAVA_HOME=/android/studio/jbr
 ENV ANDROID_SDK_ROOT=/android/sdk
+ENV ANDROID_NDK_ROOT=/android/sdk/ndk/29.0.14206865
 ENV ANDROID_NDK_HOME=/android/sdk/ndk/29.0.14206865
 ENV PATH=${PATH}:/android/sdk/platform-tools:/android/sdk/cmdline-tools/latest/bin
 
