@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identify the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 26
+#define RAPID_VULKAN_HEADER_REVISION 27
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -2140,6 +2140,55 @@ private:
     Impl * _impl = nullptr;
 };
 
+// ---------------------------------------------------------------------------------------------------------------------
+/// Wrapper class of render pass object
+class RenderPass : public Root {
+public:
+    struct SubpassParameters {
+        std::vector<vk::AttachmentReference>   colors;
+        std::optional<vk::AttachmentReference> depth;
+        std::vector<vk::AttachmentReference>   inputs;
+        vk::SubpassDescriptionFlags            flags = {};
+    };
+
+    struct ConstructParameters : public Root::ConstructParameters {
+        const GlobalInfo *                     gi    = nullptr;
+        vk::RenderPassCreateFlags              flags = {};
+        std::vector<vk::AttachmentDescription> attachments {};
+        std::vector<SubpassParameters>         subpasses {};
+        std::vector<vk::SubpassDependency>     dependencies {};
+
+        /// @brief Setup a simple single pass render pass.
+        ConstructParameters & simple(vk::ArrayProxy<const vk::Format> colors, vk::Format depth = vk::Format::eUndefined, bool clear = true, bool store = true);
+    };
+
+    RenderPass(const ConstructParameters &);
+
+    ~RenderPass();
+
+    void cmdBegin(vk::CommandBuffer, vk::RenderPassBeginInfo) const;
+
+    void cmdNext(vk::CommandBuffer) const;
+
+    void cmdEnd(vk::CommandBuffer) const;
+
+    vk::RenderPass handle() const { return _handle; }
+
+    operator vk::RenderPass() const { return _handle; }
+
+    operator VkRenderPass() const { return (VkRenderPass) _handle; }
+
+protected:
+    void onNameChanged(const std::string &) override;
+
+private:
+    const GlobalInfo * _gi     = nullptr;
+    vk::RenderPass     _handle = {};
+#if RAPID_VULKAN_ENABLE_DEBUG_BUILD
+    ConstructParameters _cp; // keep construct parameters around for debug purpose only.
+#endif
+};
+
 class Device;
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -2194,7 +2243,7 @@ public:
         /// If the surface is null, then the width and height must be non-zero.
         size_t height = 0;
 
-        /// @brief Number of frames in flight. Recommanded value is 2. Must be at least 1.
+        /// @brief Number of frames in flight. Recommended value is 2. Must be at least 1.
         /// The more frames in flight, the more latency you'll have. But on the other hand, the GPU will be
         /// less likely to be idle.
         size_t maxFramesInFlight = 2;

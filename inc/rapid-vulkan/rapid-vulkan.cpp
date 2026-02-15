@@ -1097,53 +1097,6 @@ Shader::~Shader() { _gi->safeDestroy(_handle); }
 // Render Pass
 // *********************************************************************************************************************
 
-class RenderPass : public Root {
-public:
-    struct SubpassParameters {
-        std::vector<vk::AttachmentReference>   colors;
-        std::optional<vk::AttachmentReference> depth;
-        std::vector<vk::AttachmentReference>   inputs;
-        vk::SubpassDescriptionFlags            flags = {};
-    };
-
-    struct ConstructParameters : public Root::ConstructParameters {
-        const GlobalInfo *                     gi    = nullptr;
-        vk::RenderPassCreateFlags              flags = {};
-        std::vector<vk::AttachmentDescription> attachments {};
-        std::vector<SubpassParameters>         subpasses {};
-        std::vector<vk::SubpassDependency>     dependencies {};
-
-        /// @brief Setup a simple single pass render pass.
-        ConstructParameters & simple(vk::ArrayProxy<const vk::Format> colors, vk::Format depth = vk::Format::eUndefined, bool clear = true, bool store = true);
-    };
-
-    RenderPass(const ConstructParameters &);
-
-    ~RenderPass();
-
-    void cmdBegin(vk::CommandBuffer, vk::RenderPassBeginInfo) const;
-
-    void cmdNext(vk::CommandBuffer) const;
-
-    void cmdEnd(vk::CommandBuffer) const;
-
-    vk::RenderPass handle() const { return _handle; }
-
-    operator vk::RenderPass() const { return _handle; }
-
-    operator VkRenderPass() const { return (VkRenderPass) _handle; }
-
-protected:
-    void onNameChanged(const std::string &) override;
-
-private:
-    const GlobalInfo * _gi     = nullptr;
-    vk::RenderPass     _handle = {};
-#if RAPID_VULKAN_ENABLE_DEBUG_BUILD
-    ConstructParameters _cp; // keep construct parameters around for debug purpose only.
-#endif
-};
-
 RenderPass::ConstructParameters & RenderPass::ConstructParameters::simple(vk::ArrayProxy<const vk::Format> colors, vk::Format depth, bool clear, bool store) {
     // initialize attachment array
     for (auto c : colors) {
