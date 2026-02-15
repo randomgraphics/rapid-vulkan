@@ -2443,7 +2443,7 @@ private:
 // Command Buffer/Pool/Queue
 // *********************************************************************************************************************
 
-class CommandBuffer::Impl : public CommandBuffer {
+class CommandBuffer::Impl {
 public:
     Impl(CommandQueue & queue, const std::string & name_, vk::CommandBufferLevel level): _queue(queue), _name(name_), _level(level) {
         const auto & d = queue.desc();
