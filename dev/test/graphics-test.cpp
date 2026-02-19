@@ -64,8 +64,10 @@ TEST_CASE("empty-frame") {
     auto w      = uint32_t(128);
     auto h      = uint32_t(72);
     auto sw     = Swapchain(Swapchain::ConstructParameters {{"empty-frame"}}.setDevice(*device).setDimensions(w, h));
-    auto frame  = sw.beginFrame();
-    sw.present(Swapchain::PresentParameters(vk::ImageLayout::eUndefined, vk::AccessFlagBits::eNone).setRenderFinished({frame->imageAvailable}));
+    for (int i = 0; i < 10; ++i) {
+        auto frame = sw.beginFrame();
+        sw.present(Swapchain::PresentParameters(vk::ImageLayout::eUndefined, vk::AccessFlagBits::eNone).setRenderFinished({frame->imageAvailable}));
+    }
 }
 
 TEST_CASE("vertex-buffer") {

@@ -2190,10 +2190,13 @@ public:
         /// If the surface is null, then the width and height must be non-zero.
         size_t height = 0;
 
-        /// @brief Number of frames in flight. Recommanded value is 2. Must be at least 1.
-        /// The more frames in flight, the more latency you'll have. But on the other hand, the GPU will be
-        /// less likely to be idle.
-        size_t maxFramesInFlight = 2;
+        /// @brief Number of frames in flight. Must be at least 1.
+        /// The more frames in flight, the more latency you'll have. But on the other hand, CPU and GPU
+        /// will be less likely to stall.
+        /// It determines the number of backbuffer images to be created by the swapchain. Note that this
+        /// is just a hint to the swapchain. The actual number of frames in flight might be limited
+        /// by the surface capabilities.
+        size_t maxFramesInFlight = 1;
 
         /// @brief Whether to enable vsync. Ignored when the swapchain is headless.
         bool vsync = true;

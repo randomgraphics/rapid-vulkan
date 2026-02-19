@@ -3044,6 +3044,8 @@ public:
 
             RAPID_VULKAN_ASSERT(frame.imageIndex < _backbuffers.size());
             frame.backbuffer = &_backbuffers[frame.imageIndex];
+        } else {
+            // TODO: wait on image available semaphore.
         }
 
         _frameStatus = READY;
@@ -3315,8 +3317,8 @@ private:
         }
 
         // Determine image count. Added 1 to minimal account to allow at least one GPU frame in flight.
-        uint32_t backbufferCount = std::max(surfaceCaps.minImageCount + 1,
-                                            std::min<uint32_t>((uint32_t) _cp.maxFramesInFlight + surfaceCaps.minImageCount, surfaceCaps.maxImageCount));
+        auto desiredImageCount = (uint32_t) std::max<size_t>(_cp.maxFramesInFlight, 1) + 1;
+        desiredImageCount      = std::min(std::max(desiredImageCount, surfaceCaps.minImageCount), surfaceCaps.maxImageCount);
 
         // Select an supported alpha composite flag
         vk::CompositeAlphaFlagBitsKHR compositeAlpha;
@@ -3335,7 +3337,7 @@ private:
         auto swapchainCreateInfo =
             vk::SwapchainCreateInfoKHR()
                 .setSurface(_cp.surface)
-                .setMinImageCount(backbufferCount)
+                .setMinImageCount(desiredImageCount)
                 .setImageFormat(_cp.backbufferFormat)
                 .setImageExtent({w, h})
                 .setImageArrayLayers(1)
