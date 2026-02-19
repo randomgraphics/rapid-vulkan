@@ -57,24 +57,25 @@ void entry(const Options & options) {
         instancePtr = std::make_unique<Instance>(Instance::ConstructParameters {}.setValidation(Instance::BREAK_ON_VK_ERROR).setBacktrace(backtrace));
         instance    = instancePtr->handle();
     }
-    auto device = Device(Device::ConstructParameters {instance}.setPrintVkInfo(options.verbosity));
-    auto gi     = device.gi();
-    auto q      = CommandQueue({{"main"}, gi, device.graphics()->family(), device.graphics()->index()});
-    auto w      = uint32_t(1280);
-    auto h      = uint32_t(720);
-    auto glfw   = GLFWInit(options.headless, instance, w, h, "pipeline-args");
-    auto sw     = Swapchain(Swapchain::ConstructParameters {{"swapchain"}}
-                                .setSurface(options.headless ? nullptr : glfw.surface)
-                                .setDevice(device)
-                                .setDimensions(options.headless ? w : 0, options.headless ? h : 0));
-    // This part is what this sample is about. We create some buffers and bind them to the drawable.
+    auto device         = Device(Device::ConstructParameters {instance}.setPrintVkInfo(options.verbosity));
+    auto gi             = device.gi();
+    auto q              = CommandQueue({{"main"}, gi, device.graphics()->family(), device.graphics()->index()});
+    auto w              = uint32_t(1280);
+    auto h              = uint32_t(720);
+    auto glfw           = GLFWInit(options.headless, instance, w, h, "pipeline-args");
+    auto sw             = Swapchain(Swapchain::ConstructParameters {{"swapchain"}}
+                                        .setSurface(options.headless ? nullptr : glfw.surface)
+                                        .setDevice(device)
+                                        .setDimensions(options.headless ? w : 0, options.headless ? h : 0));
+    auto renderFinished = gi->device.createSemaphoreUnique({}, gi->allocator);
 
     // show the window and begin the rendering loop.
     glfw.show();
     for (;;) {
         if (!options.headless && !glfw.processEvents()) break;
-        auto  frame        = sw.beginFrame();
-        float clearColor[] = {0.0f, 1.0f, 0.0f, 1.0f};
+        auto                                      frame        = sw.beginFrame();
+        float                                     clearColor[] = {0.0f, 1.0f, 0.0f, 1.0f};
+        rapid_vulkan::Swapchain::BackbufferStatus backbufferStatus;
         if (frame) {
             // Standard boilerplate of rendering a frame. It is basically the same as triangle.cpp.
             if (options.headless) {
@@ -94,14 +95,14 @@ void entry(const Options & options) {
             sw.cmdBeginBuiltInRenderPass(c, Swapchain::BeginRenderPassParameters {}.setClearColorF(clearColor)); // clear the screen.
 
             // end render pass
-            sw.cmdEndBuiltInRenderPass(c);
+            backbufferStatus = sw.cmdEndBuiltInRenderPass(c);
 
-            // submit the command buffer
-            q.submit({c, {}, {frame->imageAvailable}, {frame->renderFinished}});
+            // submit the command buffer. also signal the render finished semaphore.
+            q.submit({c, {}, {frame->imageAvailable}, {renderFinished.get()}});
         }
 
         // end of the frame.
-        sw.present({});
+        sw.present(Swapchain::PresentParameters(backbufferStatus).setRenderFinished({renderFinished.get()}));
     }
     device.waitIdle();
 }

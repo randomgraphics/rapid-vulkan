@@ -275,12 +275,12 @@ SOFTWARE.
         }                                                                              \
     } while (false)
 
-#define RVI_VK_REQUIRE(condition, ...)                                                     \
-    do {                                                                                   \
-        if (VK_SUCCESS != (VkResult) (condition)) {                                        \
-            auto errorMessage__ = RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__);             \
+#define RVI_VK_REQUIRE(condition, ...)                                                      \
+    do {                                                                                    \
+        if (VK_SUCCESS != (VkResult) (condition)) {                                         \
+            auto errorMessage__ = RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__);              \
             RVI_THROW("Vulkan function " #condition " failed. %s", errorMessage__.c_str()); \
-        }                                                                                  \
+        }                                                                                   \
     } while (false)
 
 // Check C++ standard
@@ -2225,8 +2225,7 @@ public:
             return *this;
         }
     };
-
-    /// @brief Specify the desired status of the back buffer image.
+    /// @brief Specify the current status of the back buffer image.
     struct BackbufferStatus {
         vk::ImageLayout        layout {};
         vk::AccessFlags        access {};
@@ -2234,11 +2233,11 @@ public:
     };
 
     struct Backbuffer {
-        Ref<Image>       image {};
-        vk::ImageView    view {};
-        vk::Framebuffer  framebuffer {};
-        BackbufferStatus status {};
-        vk::Semaphore    frameEndSemaphore {}; // the semaphore that present() call is waiting on to ensure
+        Ref<Image>      image {};
+        vk::ImageView   view {};
+        vk::Framebuffer framebuffer {};
+        // BackbufferStatus status {};
+        vk::Semaphore frameEndSemaphore {}; // the semaphore that present() call is waiting on to ensure
     };
 
     /// @brief Represents a GPU frame.
@@ -2256,12 +2255,6 @@ public:
         /// @brief The semaphore that is signaled when the last present of the current backbuffer image is done.
         /// The first rendering submission for current frame should wait for this semaphore.
         vk::Semaphore imageAvailable;
-
-        /// @brief The semaphore that present() call uses to ensure presenting happens after all rendering is done.
-        /// !!! IMPORTANT !!! : It is caller's responsibility to ensure that this semaphore is signaled and only signaled by the last rendering
-        /// submission of the frame. Failing to signal this semaphore will cause present() to wait forever. On the other hand, signaling this
-        /// semaphore too early could cause present() showing partially rendered frame.
-        vk::Semaphore renderFinished;
     };
 
     /// @brief Parameters to begin the built-in render pass of the swapchain.
@@ -2276,7 +2269,7 @@ public:
         /// This is for the cmdBeginRenderPass() method insert proper barriers to transition the image to the desired layout for the render pass.
         /// If the back buffer is already in vk::ImageLayout::eColorAttachmentOptimal layout, then no barrier will be inserted.
         /// When built-in render pass ends, the back buffer image will be automatically transitioned into status suitable for present().
-        BackbufferStatus backbufferStatus = {vk::ImageLayout::ePresentSrcKHR, vk::AccessFlagBits::eMemoryRead, vk::PipelineStageFlagBits::eBottomOfPipe};
+        // BackbufferStatus backbufferStatus = {vk::ImageLayout::ePresentSrcKHR, vk::AccessFlagBits::eMemoryRead, vk::PipelineStageFlagBits::eBottomOfPipe};
 
         BeginRenderPassParameters & setClearColorF(vk::ArrayProxy<const float> color) {
             clearColor.setFloat32({color.size() > 0 ? color.data()[0] : 0.f, color.size() > 1 ? color.data()[1] : 0.f, color.size() > 2 ? color.data()[2] : 0.f,
@@ -2292,10 +2285,28 @@ public:
 
     /// @brief Specify parameters to call present().
     struct PresentParameters {
+
+        PresentParameters(vk::ImageLayout backbufferLayuout, vk::AccessFlags backbufferAccessFlags) {
+            backbufferStatus = {backbufferLayuout, backbufferAccessFlags, vk::PipelineStageFlagBits::eBottomOfPipe};
+        }
+
+        PresentParameters(const BackbufferStatus & backbufferStatus_): backbufferStatus(backbufferStatus_) {}
+
         /// @brief Specify the current status of the back buffer image when calling present().
         /// The present() function will insert proper barrier to transit the current back buffer image into VK_IMAGE_LAYOUT_PRESENT_SRC_KHR layouy.
         /// If the back buffer image is already in VK_IMAGE_LAYOUT_PRESENT_SRC_KHR layout, then no barrier will be inserted.
-        BackbufferStatus backbufferStatus = {vk::ImageLayout::ePresentSrcKHR, vk::AccessFlagBits::eMemoryRead, vk::PipelineStageFlagBits::eBottomOfPipe};
+        BackbufferStatus backbufferStatus;
+
+        /// @brief Optional list of semaphores that present() call uses to ensure presenting happens after all rendering of the frame is done.
+        /// !!! IMPORTANT !!! : If not empty, caller MUST ensure that all semaphores in the list are signaled by th end of the frame rendering.
+        /// Failing to do so will cause present() to wait forever. On the other hand, signaling these
+        /// semaphores too early could cause present() showing partially rendered frame.
+        vk::ArrayProxy<const vk::Semaphore> renderFinished = {};
+
+        PresentParameters & setRenderFinished(vk::ArrayProxy<const vk::Semaphore> renderFinished_) {
+            renderFinished = renderFinished_;
+            return *this;
+        }
     };
 
     Swapchain(const ConstructParameters &);
@@ -2331,10 +2342,10 @@ public:
     /// @brief Begin a new built-in render pass. Can only be called between beginFrame() and present().
     void cmdBeginBuiltInRenderPass(vk::CommandBuffer, const BeginRenderPassParameters &);
 
-    /// @brief End the built-in render pass.
+    /// @brief End the built-in render pass. Returns the
     /// After built-in render pass ends, the back buffer image will be automatically transitioned into status suitable for present(). You can check the
     /// actual value of the status via currentFrame().backbuffer->status.
-    void cmdEndBuiltInRenderPass(vk::CommandBuffer);
+    BackbufferStatus cmdEndBuiltInRenderPass(vk::CommandBuffer);
 
 private:
     class Impl;

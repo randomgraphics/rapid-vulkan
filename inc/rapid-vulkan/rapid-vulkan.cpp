@@ -2227,8 +2227,8 @@ private:
 
                 // verify that there're enough descriptors in the argument.
                 if (a->count() < b.descriptorCount) {
-                    RVI_LOGE("Drawable (%s) validation error: set %u binding %u requires %u descriptors, but the argument has only %zu.",
-                             _owner.name().c_str(), si, i, b.descriptorCount, a->count());
+                    RVI_LOGE("Drawable (%s) validation error: set %u binding %u requires %u descriptors, but the argument has only %zu.", _owner.name().c_str(),
+                             si, i, b.descriptorCount, a->count());
                     return false;
                 }
 
@@ -2253,8 +2253,8 @@ private:
                         for (size_t j = 0; j < img->images.size(); ++j) {
                             const auto & v = img->images[j];
                             if (!v.sampler) {
-                                RVI_LOGE("Drawable (%s) validation error: set %u binding %u contains empty sampler at index %zu", _owner.name().c_str(), si,
-                                         i, j);
+                                RVI_LOGE("Drawable (%s) validation error: set %u binding %u contains empty sampler at index %zu", _owner.name().c_str(), si, i,
+                                         j);
                                 return false;
                             }
                             dep.samplers.insert(v.sampler);
@@ -2264,8 +2264,8 @@ private:
                         for (size_t j = 0; j < img->images.size(); ++j) {
                             const auto & v = img->images[j];
                             if (!v.view) {
-                                RVI_LOGE("Drawable (%s) validation error: set %u binding %u contains empty image view at index %zu", _owner.name().c_str(),
-                                         si, i, j);
+                                RVI_LOGE("Drawable (%s) validation error: set %u binding %u contains empty image view at index %zu", _owner.name().c_str(), si,
+                                         i, j);
                                 return false;
                             }
                             if (v.image) dep.images.insert(v.image);
@@ -2982,15 +2982,6 @@ public:
 
         auto bb = currentFrame().backbuffer;
 
-        // transition back buffer layout if necessary.
-        if (params.backbufferStatus.layout != DESIRED_PRESENT_STATUS.layout) {
-            Barrier()
-                .i(bb->image->handle(), params.backbufferStatus.access, DESIRED_PRESENT_STATUS.access, params.backbufferStatus.layout,
-                   DESIRED_PRESENT_STATUS.layout, vk::ImageAspectFlagBits::eColor)
-                .s(params.backbufferStatus.stages, DESIRED_PRESENT_STATUS.stages)
-                .cmdWrite(cb);
-        }
-
         // set dynamic viewport and scissor
         const auto & extent = bb->image->desc().extent;
         vk::Viewport vp(0, 0, (float) extent.width, (float) extent.height, 0, 1);
@@ -3003,15 +2994,15 @@ public:
         _renderPass->cmdBegin(cb, vk::RenderPassBeginInfo {{}, bb->framebuffer, vk::Rect2D({0, 0}, {extent.width, extent.height})}.setClearValues(cv));
     }
 
-    void cmdEndBuiltInRenderPass(vk::CommandBuffer cb) {
+    BackbufferStatus cmdEndBuiltInRenderPass(vk::CommandBuffer cb) {
         // can't begin render pass if the frame is not begun.
         RVI_REQUIRE(READY == _frameStatus);
 
         // TODO: check if the render pass is actually begun.
 
         _renderPass->cmdEnd(cb);
-        auto bb    = (Backbuffer *) currentFrame().backbuffer;
-        bb->status = {vk::ImageLayout::ePresentSrcKHR, vk::AccessFlagBits::eMemoryRead, vk::PipelineStageFlagBits::eBottomOfPipe};
+
+        return DESIRED_PRESENT_STATUS;
     }
 
     const Frame * beginFrame() {
@@ -3062,7 +3053,7 @@ public:
             auto & frame = (FrameImpl &) currentFrame();
             auto   bb    = (Backbuffer *) frame.backbuffer;
 
-            // end the frame, optionally transition the backbuffer image to present layout.
+            // Transition the backbuffer image to present source layout.
             auto cb = _graphicsQueue->begin("frame end");
             if (pp.backbufferStatus.layout != DESIRED_PRESENT_STATUS.layout) {
                 Barrier()
@@ -3070,16 +3061,12 @@ public:
                        DESIRED_PRESENT_STATUS.layout, vk::ImageAspectFlagBits::eColor)
                     .s(pp.backbufferStatus.stages, DESIRED_PRESENT_STATUS.stages)
                     .cmdWrite(cb);
-                bb->status = DESIRED_PRESENT_STATUS;
-            } else {
-                bb->status = pp.backbufferStatus;
             }
+            frame.frameEndSubmission = _graphicsQueue->submit({cb, {}, pp.renderFinished, {bb->frameEndSemaphore}});
 
             // present current frame
             if (_handle) {
-                // Submit the frame end command buffer. Wait for current frame's render finished semaphore. Signal the backbuffer's frame end semaphore.
-                frame.frameEndSubmission = _graphicsQueue->submit({cb, {}, {frame.renderFinished}, {bb->frameEndSemaphore}});
-
+                // Call present queue to do the actual present, waiting for the rame end semaphore.
                 auto presentInfo = vk::PresentInfoKHR()
                                        .setSwapchainCount(1)
                                        .setPSwapchains(&_handle)
@@ -3101,9 +3088,13 @@ public:
                 } else if (vk::Result::eSuccess != result) {
                     RVI_LOGE("Failed to present swapchain image. result = %s", vk::to_string((vk::Result) result).c_str());
                 }
+
+                // // After a true present, the back buffer image will be in vk::ImageLayout::ePresentSrcKHR layout.
+                // bb->status = DESIRED_PRESENT_STATUS;
             } else {
-                // headless swapchain.
-                frame.frameEndSubmission = _graphicsQueue->submit({cb, {}, {frame.renderFinished}, {frame.imageAvailable}});
+                // For headless swapchain, we do a dummy submit to signal the image available semaphore.
+                auto dummySwap           = _graphicsQueue->begin("headless dummy swap");
+                frame.frameEndSubmission = _graphicsQueue->submit({dummySwap, {}, {bb->frameEndSemaphore}, {frame.imageAvailable}});
             }
 
             // Move to the next frame, if and only if beginFrame() succeeded.
@@ -3147,7 +3138,8 @@ private:
     std::vector<BackbufferImpl> _backbuffers;
     Ref<Image>                  _depthBuffer;
 
-    inline static constexpr BackbufferStatus DESIRED_PRESENT_STATUS = PresentParameters().backbufferStatus;
+    inline static constexpr BackbufferStatus DESIRED_PRESENT_STATUS = {vk::ImageLayout::ePresentSrcKHR, vk::AccessFlagBits::eMemoryRead,
+                                                                       vk::PipelineStageFlagBits::eBottomOfPipe};
 
 private:
     const FrameImpl & currentFrame() const { return _frames[_frameIndex % std::size(_frames)]; }
@@ -3252,8 +3244,9 @@ private:
 
         // create the built-in render pass (after the back buffer format is determined)
         auto params = RenderPass::ConstructParameters {{"swapchain built-in render pass"}, _cp.gi}.simple({_cp.backbufferFormat}, _cp.depthStencilFormat);
-        // We want the color buffer be in presentable layout before and after the render pass. So it can seamlessly connected with the present() call.
-        params.attachments[0].setInitialLayout(DESIRED_PRESENT_STATUS.layout).setFinalLayout(DESIRED_PRESENT_STATUS.layout);
+        // Set initial layout to undefined, to discard the content of the render target.
+        // Set final layout to presentable layout, to be able to seamlessly connected with the present() call.
+        params.attachments[0].setInitialLayout(vk::ImageLayout::eUndefined).setFinalLayout(DESIRED_PRESENT_STATUS.layout);
         _renderPass.reset(new RenderPass(params));
 
         recreateWindowSwapchain();
@@ -3277,6 +3270,13 @@ private:
     }
 
     void clearSwapchain() {
+        // wait for the frame to be available again.
+        for (auto & frame : _frames) {
+            if (frame.frameEndSubmission) {
+                _graphicsQueue->wait({frame.frameEndSubmission});
+                frame.frameEndSubmission = {}; // Clear the command buffer. So we only wait it once.
+            }
+        }
         for (auto & bb : _backbuffers) {
             bb.fb.clear();
             _cp.gi->safeDestroy(bb.frameEndSemaphore);
@@ -3284,10 +3284,7 @@ private:
         _backbuffers.clear();
         _depthBuffer.clear();
         _cp.gi->safeDestroy(_handle);
-        for (auto & f : _frames) {
-            _cp.gi->safeDestroy(f.imageAvailable);
-            _cp.gi->safeDestroy(f.renderFinished);
-        }
+        for (auto & f : _frames) { _cp.gi->safeDestroy(f.imageAvailable); }
         _frames.clear();
     }
 
@@ -3413,9 +3410,7 @@ private:
         for (size_t i = 0; i < _frames.size(); ++i) {
             auto & f         = _frames[i];
             f.imageAvailable = gi->device.createSemaphore({}, gi->allocator);
-            f.renderFinished = gi->device.createSemaphore({}, gi->allocator);
             setVkHandleName(gi->device, f.imageAvailable, format("image available semaphore %zu", i));
-            setVkHandleName(gi->device, f.renderFinished, format("render finished semaphore %zu", i));
         }
     }
 
@@ -3454,13 +3449,11 @@ private:
             f.backbuffer     = &bb;
             f.imageIndex     = i;
             f.imageAvailable = gi->device.createSemaphore({}, gi->allocator);
-            f.renderFinished = gi->device.createSemaphore({}, gi->allocator);
             f.headlessImage.reset(new Image(Image::ConstructParameters {{"swapchain headless image"}, gi}
                                                 .setFormat(_cp.backbufferFormat)
                                                 .set2D(w, h)
                                                 .addUsage(vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst)));
             setVkHandleName(gi->device, f.imageAvailable, format("image available semaphore %u", i));
-            setVkHandleName(gi->device, f.renderFinished, format("render finished semaphore %u", i));
 
             // transfer the image into desired layout.
             Barrier()
@@ -3507,7 +3500,7 @@ Swapchain::~Swapchain() {
 auto Swapchain::renderPass() const -> vk::RenderPass { return _impl->renderPass().handle(); }
 auto Swapchain::graphics() const -> CommandQueue & { return _impl->graphics(); }
 void Swapchain::cmdBeginBuiltInRenderPass(vk::CommandBuffer cb, const BeginRenderPassParameters & bp) { return _impl->cmdBeginBuiltInRenderPass(cb, bp); }
-void Swapchain::cmdEndBuiltInRenderPass(vk::CommandBuffer cb) { return _impl->cmdEndBuiltInRenderPass(cb); }
+auto Swapchain::cmdEndBuiltInRenderPass(vk::CommandBuffer cb) -> BackbufferStatus { return _impl->cmdEndBuiltInRenderPass(cb); }
 auto Swapchain::beginFrame() -> const Frame * { return _impl->beginFrame(); }
 void Swapchain::present(const PresentParameters & pp) { return _impl->present(pp); }
 
