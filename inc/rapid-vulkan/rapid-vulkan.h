@@ -25,8 +25,8 @@ SOFTWARE.
 #ifndef RAPID_VULKAN_H_
 #define RAPID_VULKAN_H_
 
-/// A monotonically increasing number that uniquely identify the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 26
+/// A monotonically increasing number that uniquely identifies the revision of the header.
+#define RAPID_VULKAN_HEADER_REVISION 27
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -42,7 +42,7 @@ SOFTWARE.
 
 /// \def RAPID_VULKAN_ENABLE_LOADER
 /// Set to 0 to disable built-in Vulkan API loader. Enabled by default.
-/// \todo explain in what cases and why you might wnat to disable the built-in loader.
+/// \todo explain in what cases and why you might want to disable the built-in loader.
 #ifndef RAPID_VULKAN_ENABLE_LOADER
 #define RAPID_VULKAN_ENABLE_LOADER 1
 #endif
@@ -54,7 +54,7 @@ SOFTWARE.
 #endif
 
 /// \def RAPID_VULKAN_ENABLE_GLFW3
-/// Set to 1 to enable GLFW3 interation helpers. Disabled by default.
+/// Set to 1 to enable GLFW3 integration helpers. Disabled by default.
 #ifndef RAPID_VULKAN_ENABLE_GLFW3
 #define RAPID_VULKAN_ENABLE_GLFW3 0
 #endif
@@ -279,7 +279,7 @@ SOFTWARE.
     do {                                                                                   \
         if (VK_SUCCESS != (VkResult) (condition)) {                                        \
             auto errorMessage__ = RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__);             \
-            RVI_THROW("Vulkan fuction " #condition " failed. %s", errorMessage__.c_str()); \
+            RVI_THROW("Vulkan function " #condition " failed. %s", errorMessage__.c_str()); \
         }                                                                                  \
     } while (false)
 
@@ -294,7 +294,7 @@ SOFTWARE.
 #endif
 #else
 #if __cplusplus < 201703L
-#error "c++17 or higher is required"
+#error "C++17 or higher is required"
 #elif __cplusplus < 202002L
 #define RVI_CXX_STANDARD 17
 #else
@@ -488,7 +488,7 @@ inline std::vector<T> completeEnumerate(Q query) {
     // between the initial query for the count and the
     // request for VkLayerProperties. The loader indicates that
     // by returning a VK_INCOMPLETE status and will update the
-    // the count parameter.
+    // count parameter.
     // The count parameter will be updated with the number of
     // entries loaded into the data pointer - in case the number
     // of layers went down or is smaller than the size given.
@@ -524,7 +524,7 @@ vk::PhysicalDevice selectTheMostPowerfulPhysicalDevice(vk::ArrayProxy<const vk::
 std::vector<vk::ExtensionProperties> enumerateDeviceExtensions(vk::PhysicalDevice dev);
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// Query an usable/default depth format of the device.
+/// Query a usable/default depth format of the device.
 /// \param dev The physical device in question
 /// \param stencil If we need stencil format. <0: don't care. 0: no. >0: required. Default value is -1.
 /// \return An format that is suitble to create depth/stencil buffer. Or vk::eUndefined if failed.
@@ -568,7 +568,7 @@ public:
     }
 
     /// @brief Mark the object as "not being automatically deleted when reference count reaches zero".
-    /// This is a ver hacky way to keep the object allocated on stack alive even after all references are gone.
+    /// This is a very hacky way to keep the object allocated on stack alive even after all references are gone.
     /// The intended scenario is passing a stack allocated object to a function that takes a Ref<T> parameter.
     /// By calling this method, the object will not be deleted even when all references are gone. Instead, it will be
     /// destroyed automatically along with the stack frame, regardless if there are still references to it.
@@ -1042,7 +1042,7 @@ public:
         vk::DeviceSize size   = 0;       ///< the size of the mapped area, in bytes.
     };
 
-    /// @brief A helper class that maps the buffer and and automatically unmap the buffer when destroyed.
+    /// @brief A helper class that maps the buffer and automatically unmap the buffer when destroyed.
     template<typename T = uint8_t>
     struct Map {
         Buffer *       buffer = nullptr;
@@ -1331,7 +1331,7 @@ public:
 
     /// @brief A utility function to determine image aspect flags from a format.
     /// @param format The pixel format of the image.
-    /// @param hint   The hint of the aspect flags. The function will try to use this hinted aspect flag, as long as it is compatible the format.
+    /// @param hint   The hint of the aspect flags. The function will try to use this hinted aspect flag, as long as it is compatible with the format.
     ///               Set to vk::ImageAspectFlagBits::eNone to let the function determine the aspect flags.
     static vk::ImageAspectFlags determineImageAspect(vk::Format format, vk::ImageAspectFlags hint = vk::ImageAspectFlagBits::eNoneKHR);
 
@@ -1703,7 +1703,7 @@ public:
             return *this;
         }
 
-        /// @brief Enable dyanmic viewport. Also specify the number of viewports.
+        /// @brief Enable dynamic viewport. Also specify the number of viewports.
         /// @param count Specify how many viewports will be used. Minimal count is 1.
         ConstructParameters & dynamicViewport(size_t count = 1) {
             if (count < 1) count = 1;

@@ -58,6 +58,19 @@ TEST_CASE("clear-screen") {
     }
 }
 
+TEST_CASE("empty-frame") {
+    using namespace rapid_vulkan;
+    auto device = TestVulkanInstance::device.get();
+    auto gi     = device->gi();
+    auto w      = uint32_t(128);
+    auto h      = uint32_t(72);
+    auto sw     = Swapchain(Swapchain::ConstructParameters {{"empty-frame"}}.setDevice(*device).setDimensions(w, h));
+    auto q      = CommandQueue({{"main"}, gi, device->graphics()->family(), device->graphics()->index()});
+    sw.beginFrame();
+    sw.present({});
+    q.submit({{}}).wait();
+}
+
 TEST_CASE("vertex-buffer") {
     using namespace rapid_vulkan;
     auto   device = TestVulkanInstance::device.get();

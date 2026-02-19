@@ -358,7 +358,7 @@ public:
             return {};
         }
         if (imported()) {
-            RVI_LOGE("Can't map imported buffer %s, since we don't have it memory handle.", _owner.name().c_str());
+            RVI_LOGE("Can't map imported buffer %s, since we don't have its memory handle.", _owner.name().c_str());
             return {};
         }
         if (!_desc.mappable()) {
@@ -1060,7 +1060,7 @@ vk::ImageAspectFlags Image::determineImageAspect(vk::Format format, vk::ImageAsp
         else
             return vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil;
 
-    // TODO: multi-planer formats
+    // TODO: multi-planar formats
 
     // default format
     default:
@@ -2220,14 +2220,14 @@ private:
 
                 // verify that the argument type is compatible with the descriptor type
                 if (!a->typeCompatibleWith(b.descriptorType)) {
-                    RVI_LOGE("Drawable (%s) validation error: : set %u binding %u is of type %s, but the argument is of type %s.", _owner.name().c_str(), si, i,
+                    RVI_LOGE("Drawable (%s) validation error: set %u binding %u is of type %s, but the argument is of type %s.", _owner.name().c_str(), si, i,
                              vk::to_string(b.descriptorType).c_str(), a->type());
                     return false;
                 }
 
                 // verify that there're enough descriptors in the argument.
                 if (a->count() < b.descriptorCount) {
-                    RVI_LOGE("Drawable (%s) validation error: : set %u binding %u requires %u descriptors, but the argument has only %zu.",
+                    RVI_LOGE("Drawable (%s) validation error: set %u binding %u requires %u descriptors, but the argument has only %zu.",
                              _owner.name().c_str(), si, i, b.descriptorCount, a->count());
                     return false;
                 }
@@ -2237,7 +2237,7 @@ private:
                     for (size_t j = 0; j < buf->buffers.size(); ++j) {
                         const auto & v = buf->buffers[j];
                         if (!v.buffer) {
-                            RVI_LOGE("Drawable (%s) validation error: : set %u binding %u contains empty buffer descriptor at index %zu", _owner.name().c_str(),
+                            RVI_LOGE("Drawable (%s) validation error: set %u binding %u contains empty buffer descriptor at index %zu", _owner.name().c_str(),
                                      si, i, j);
                             return false;
                         }
@@ -2253,7 +2253,7 @@ private:
                         for (size_t j = 0; j < img->images.size(); ++j) {
                             const auto & v = img->images[j];
                             if (!v.sampler) {
-                                RVI_LOGE("Drawable (%s) validation error: : set %u binding %u contains empty sampler at index %zu", _owner.name().c_str(), si,
+                                RVI_LOGE("Drawable (%s) validation error: set %u binding %u contains empty sampler at index %zu", _owner.name().c_str(), si,
                                          i, j);
                                 return false;
                             }
@@ -2264,7 +2264,7 @@ private:
                         for (size_t j = 0; j < img->images.size(); ++j) {
                             const auto & v = img->images[j];
                             if (!v.view) {
-                                RVI_LOGE("Drawable (%s) validation error: : set %u binding %u contains empty image view at index %zu", _owner.name().c_str(),
+                                RVI_LOGE("Drawable (%s) validation error: set %u binding %u contains empty image view at index %zu", _owner.name().c_str(),
                                          si, i, j);
                                 return false;
                             }
@@ -2300,7 +2300,7 @@ private:
             if (kv.second.empty()) continue;
             auto v = getConstant(kv.first, kv.second.begin, kv.second.end);
             if (v.empty()) {
-                RVI_LOGW("Drawable (%s) validate error: push constant range %s is not set.", _owner.name().c_str(), vk::to_string(kv.first).c_str());
+                RVI_LOGW("Drawable (%s) validation error: push constant range %s is not set.", _owner.name().c_str(), vk::to_string(kv.first).c_str());
                 return false;
             }
             for (const auto & [pcr, data] : v) pack.constants.push_back({pcr.stageFlags, pcr.offset, {data, data + pcr.size}});
@@ -3188,7 +3188,7 @@ private:
         }
 
         recreateWindowSwapchain();
-        RVI_LOGI("Swapchainn recovered.");
+        RVI_LOGI("Swapchain recovered.");
     }
 
     void constructWindowSwapchain() {
