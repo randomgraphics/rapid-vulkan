@@ -2761,6 +2761,10 @@ public:
         }
     }
 
+    /// Check if a is newer than b. Can only compare submissions from the same queue.
+    static inline bool isNewer(const SubmissionID & a, int64_t b) { return a.index > b; }
+    static inline bool isOlder(const SubmissionID & a, int64_t b) { return a.index < b; }
+
     CommandQueue & wait(const vk::ArrayProxy<const SubmissionID> & submissions) {
         if (submissions.empty()) return _owner;
 
@@ -2777,12 +2781,12 @@ public:
                 continue;
             }
             auto oldest = _pending.front()->index;
-            if (sid.olderThan(oldest)) {
+            if (isOlder(sid, oldest)) {
                 // the workload has finished already.
                 continue;
             }
             auto newest = _pending.back()->index;
-            if (sid.newerThan(newest)) {
+            if (isNewer(sid, newest)) {
                 RVI_LOGE("Submission %" PRIi64 " is invalid since it is newer than the newest submission %" PRIi64 "!", sid.index, newest);
                 continue;
             }
@@ -2790,7 +2794,7 @@ public:
             // this is an valid pending submission.
             if (!candidate.has_value()) {
                 candidate = sid.index;
-            } else if (sid.newerThan(candidate.value())) {
+            } else if (isNewer(sid, candidate.value())) {
                 // we only need to save the newest one.
                 candidate = sid.index;
             }
@@ -3046,7 +3050,7 @@ public:
         return &_frames[_frameIndex % std::size(_frames)];
     }
 
-    void present(const PresentParameters & pp) {
+    BackbufferStatus present(const PresentParameters & pp) {
         // TODO: check if built-in render pass is ended.
 
         if (READY == _frameStatus) {
@@ -3088,9 +3092,6 @@ public:
                 } else if (vk::Result::eSuccess != result) {
                     RVI_LOGE("Failed to present swapchain image. result = %s", vk::to_string((vk::Result) result).c_str());
                 }
-
-                // // After a true present, the back buffer image will be in vk::ImageLayout::ePresentSrcKHR layout.
-                // bb->status = DESIRED_PRESENT_STATUS;
             } else {
                 // For headless swapchain, we do a dummy submit to signal the image available semaphore.
                 auto dummySwap           = _graphicsQueue->begin("headless dummy swap");
@@ -3103,8 +3104,9 @@ public:
             recoverSwapchainOnPresentError();
         }
 
-        // end the frame.
+        // Done. End the frame.
         _frameStatus = ENDED;
+        return DESIRED_PRESENT_STATUS;
     }
 
 private:
@@ -3502,7 +3504,7 @@ auto Swapchain::graphics() const -> CommandQueue & { return _impl->graphics(); }
 void Swapchain::cmdBeginBuiltInRenderPass(vk::CommandBuffer cb, const BeginRenderPassParameters & bp) { return _impl->cmdBeginBuiltInRenderPass(cb, bp); }
 auto Swapchain::cmdEndBuiltInRenderPass(vk::CommandBuffer cb) -> BackbufferStatus { return _impl->cmdEndBuiltInRenderPass(cb); }
 auto Swapchain::beginFrame() -> const Frame * { return _impl->beginFrame(); }
-void Swapchain::present(const PresentParameters & pp) { return _impl->present(pp); }
+auto Swapchain::present(const PresentParameters & pp) -> BackbufferStatus { return _impl->present(pp); }
 
 // *********************************************************************************************************************
 // Device

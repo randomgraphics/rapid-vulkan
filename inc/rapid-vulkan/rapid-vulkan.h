@@ -2082,10 +2082,6 @@ public:
 
         bool empty() const { return !queue || 0 == index; }
 
-        bool newerThan(int64_t other) const { return index - other > 0; }
-
-        bool olderThan(int64_t other) const { return index - other < 0; }
-
         void wait() const {
             if (empty()) return;
             auto q = (CommandQueue *) (intptr_t) queue;
@@ -2337,7 +2333,7 @@ public:
     /// w/o calling beginFrame() in between.
     /// This method also invalidated the frame pointer returned by beginFrame(). Accessing the frame structure outside of scope of beginFrame() and
     /// present() is prohibited and could cause undefined behavior.
-    void present(const PresentParameters &);
+    BackbufferStatus present(const PresentParameters &);
 
     /// @brief Begin a new built-in render pass. Can only be called between beginFrame() and present().
     void cmdBeginBuiltInRenderPass(vk::CommandBuffer, const BeginRenderPassParameters &);
