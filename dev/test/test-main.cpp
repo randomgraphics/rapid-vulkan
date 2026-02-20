@@ -39,7 +39,7 @@ CATCH_REGISTER_LISTENER(EventListener)
 struct TestVulkanInstanceImpl : public TestVulkanInstance {
     TestVulkanInstanceImpl() {
         using namespace rapid_vulkan;
-        auto icp = Instance::ConstructParameters {.validation = Instance::BREAK_ON_VK_ERROR};
+        auto icp = Instance::ConstructParameters {.validation = Instance::BREAK_ON_VK_ERROR, .backtrace = backtrace};
         instance = std::make_unique<Instance>(icp);
         device   = std::make_unique<Device>(Device::ConstructParameters {*instance});
     }

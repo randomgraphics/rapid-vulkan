@@ -63,6 +63,7 @@ SOFTWARE.
 #include <variant>
 #include <list>
 #include <deque>
+#include <queue>
 #include <chrono>
 #include <functional>
 #include <signal.h>
@@ -358,7 +359,7 @@ public:
             return {};
         }
         if (imported()) {
-            RVI_LOGE("Can't map imported buffer %s, since we don't have it memory handle.", _owner.name().c_str());
+            RVI_LOGE("Can't map imported buffer %s, since we don't have its memory handle.", _owner.name().c_str());
             return {};
         }
         if (!_desc.mappable()) {
@@ -1060,7 +1061,7 @@ vk::ImageAspectFlags Image::determineImageAspect(vk::Format format, vk::ImageAsp
         else
             return vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil;
 
-    // TODO: multi-planer formats
+    // TODO: multi-planar formats
 
     // default format
     default:
@@ -2173,15 +2174,15 @@ private:
 
                 // verify that the argument type is compatible with the descriptor type
                 if (!a->typeCompatibleWith(b.descriptorType)) {
-                    RVI_LOGE("Drawable (%s) validation error: : set %u binding %u is of type %s, but the argument is of type %s.", _owner.name().c_str(), si, i,
+                    RVI_LOGE("Drawable (%s) validation error: set %u binding %u is of type %s, but the argument is of type %s.", _owner.name().c_str(), si, i,
                              vk::to_string(b.descriptorType).c_str(), a->type());
                     return false;
                 }
 
                 // verify that there're enough descriptors in the argument.
                 if (a->count() < b.descriptorCount) {
-                    RVI_LOGE("Drawable (%s) validation error: : set %u binding %u requires %u descriptors, but the argument has only %zu.",
-                             _owner.name().c_str(), si, i, b.descriptorCount, a->count());
+                    RVI_LOGE("Drawable (%s) validation error: set %u binding %u requires %u descriptors, but the argument has only %zu.", _owner.name().c_str(),
+                             si, i, b.descriptorCount, a->count());
                     return false;
                 }
 
@@ -2190,7 +2191,7 @@ private:
                     for (size_t j = 0; j < buf->buffers.size(); ++j) {
                         const auto & v = buf->buffers[j];
                         if (!v.buffer) {
-                            RVI_LOGE("Drawable (%s) validation error: : set %u binding %u contains empty buffer descriptor at index %zu", _owner.name().c_str(),
+                            RVI_LOGE("Drawable (%s) validation error: set %u binding %u contains empty buffer descriptor at index %zu", _owner.name().c_str(),
                                      si, i, j);
                             return false;
                         }
@@ -2206,8 +2207,8 @@ private:
                         for (size_t j = 0; j < img->images.size(); ++j) {
                             const auto & v = img->images[j];
                             if (!v.sampler) {
-                                RVI_LOGE("Drawable (%s) validation error: : set %u binding %u contains empty sampler at index %zu", _owner.name().c_str(), si,
-                                         i, j);
+                                RVI_LOGE("Drawable (%s) validation error: set %u binding %u contains empty sampler at index %zu", _owner.name().c_str(), si, i,
+                                         j);
                                 return false;
                             }
                             dep.samplers.insert(v.sampler);
@@ -2217,8 +2218,8 @@ private:
                         for (size_t j = 0; j < img->images.size(); ++j) {
                             const auto & v = img->images[j];
                             if (!v.view) {
-                                RVI_LOGE("Drawable (%s) validation error: : set %u binding %u contains empty image view at index %zu", _owner.name().c_str(),
-                                         si, i, j);
+                                RVI_LOGE("Drawable (%s) validation error: set %u binding %u contains empty image view at index %zu", _owner.name().c_str(), si,
+                                         i, j);
                                 return false;
                             }
                             if (v.image) dep.images.insert(v.image);
@@ -2253,7 +2254,7 @@ private:
             if (kv.second.empty()) continue;
             auto v = getConstant(kv.first, kv.second.begin, kv.second.end);
             if (v.empty()) {
-                RVI_LOGW("Drawable (%s) validate error: push constant range %s is not set.", _owner.name().c_str(), vk::to_string(kv.first).c_str());
+                RVI_LOGW("Drawable (%s) validation error: push constant range %s is not set.", _owner.name().c_str(), vk::to_string(kv.first).c_str());
                 return false;
             }
             for (const auto & [pcr, data] : v) pack.constants.push_back({pcr.stageFlags, pcr.offset, {data, data + pcr.size}});
@@ -2714,6 +2715,10 @@ public:
         }
     }
 
+    /// Check if a is newer than b. Can only compare submissions from the same queue.
+    static inline bool isNewer(const SubmissionID & a, int64_t b) { return a.index > b; }
+    static inline bool isOlder(const SubmissionID & a, int64_t b) { return a.index < b; }
+
     CommandQueue & wait(const vk::ArrayProxy<const SubmissionID> & submissions) {
         if (submissions.empty()) return _owner;
 
@@ -2730,12 +2735,12 @@ public:
                 continue;
             }
             auto oldest = _pending.front()->index;
-            if (sid.olderThan(oldest)) {
+            if (isOlder(sid, oldest)) {
                 // the workload has finished already.
                 continue;
             }
             auto newest = _pending.back()->index;
-            if (sid.newerThan(newest)) {
+            if (isNewer(sid, newest)) {
                 RVI_LOGE("Submission %" PRIi64 " is invalid since it is newer than the newest submission %" PRIi64 "!", sid.index, newest);
                 continue;
             }
@@ -2743,7 +2748,7 @@ public:
             // this is an valid pending submission.
             if (!candidate.has_value()) {
                 candidate = sid.index;
-            } else if (sid.newerThan(candidate.value())) {
+            } else if (isNewer(sid, candidate.value())) {
                 // we only need to save the newest one.
                 candidate = sid.index;
             }
@@ -2918,6 +2923,11 @@ public:
 
     ~Impl() {
         clearSwapchain();
+        for (auto & f : _frames) {
+            auto s = f.imageAvailable();
+            _cp.gi->safeDestroy(s);
+        }
+        _frames.clear();
         _renderPass.reset();
         _graphicsQueue.reset();
         _presentQueue = vk::Queue {};
@@ -2933,19 +2943,10 @@ public:
 
         // TODO: check if the render pass is already begun;
 
-        auto bb = currentFrame().backbuffer;
-
-        // transition back buffer layout if necessary.
-        if (params.backbufferStatus.layout != DESIRED_PRESENT_STATUS.layout) {
-            Barrier()
-                .i(bb->image->handle(), params.backbufferStatus.access, DESIRED_PRESENT_STATUS.access, params.backbufferStatus.layout,
-                   DESIRED_PRESENT_STATUS.layout, vk::ImageAspectFlagBits::eColor)
-                .s(params.backbufferStatus.stages, DESIRED_PRESENT_STATUS.stages)
-                .cmdWrite(cb);
-        }
+        auto & bb = currentFrame().backbuffer();
 
         // set dynamic viewport and scissor
-        const auto & extent = bb->image->desc().extent;
+        const auto & extent = bb.image->desc().extent;
         vk::Viewport vp(0, 0, (float) extent.width, (float) extent.height, 0, 1);
         cb.setViewport(0, 1, &vp);
 
@@ -2953,18 +2954,18 @@ public:
         cb.setScissor(0, 1, &scissor);
 
         std::array cv = {vk::ClearValue().setColor(params.clearColor), vk::ClearValue().setDepthStencil(params.clearDepth)};
-        _renderPass->cmdBegin(cb, vk::RenderPassBeginInfo {{}, bb->framebuffer, vk::Rect2D({0, 0}, {extent.width, extent.height})}.setClearValues(cv));
+        _renderPass->cmdBegin(cb, vk::RenderPassBeginInfo {{}, bb.framebuffer, vk::Rect2D({0, 0}, {extent.width, extent.height})}.setClearValues(cv));
     }
 
-    void cmdEndBuiltInRenderPass(vk::CommandBuffer cb) {
+    BackbufferStatus cmdEndBuiltInRenderPass(vk::CommandBuffer cb) {
         // can't begin render pass if the frame is not begun.
         RVI_REQUIRE(READY == _frameStatus);
 
         // TODO: check if the render pass is actually begun.
 
         _renderPass->cmdEnd(cb);
-        auto bb    = (Backbuffer *) currentFrame().backbuffer;
-        bb->status = {vk::ImageLayout::ePresentSrcKHR, vk::AccessFlagBits::eMemoryRead, vk::PipelineStageFlagBits::eBottomOfPipe};
+
+        return DESIRED_PRESENT_STATUS;
     }
 
     const Frame * beginFrame() {
@@ -2972,18 +2973,18 @@ public:
         RVI_REQUIRE(ENDED == _frameStatus);
 
         auto & frame = currentFrame();
-        frame.index  = _frameIndex;
 
-        // wait for the frame to be available again.
-        if (frame.frameEndSubmission) {
-            _graphicsQueue->wait({frame.frameEndSubmission});
-            frame.frameEndSubmission = {}; // Clear the command buffer. So we only wait it once.
-        }
+        // Wait for GPU rendering to the frame to complete. Since frame array size is maxFramesInFlight + 1,
+        // we can guarantee that there are no more than maxFramesInFlight frames in flight.
+        frame.waitForFrameEnd();
 
-        // Acquire the next available swapchain image. Only do this if we are not in headless mode.
+        // update the frame index.
+        frame.setFrameCounter(_frameCounter);
+
         if (_handle) {
+            // For a real swapchain, we need to ask Vulkan for the next available swapchain image.
             try {
-                auto result = _cp.gi->device.acquireNextImageKHR(_handle, uint64_t(-1), frame.imageAvailable);
+                auto result = _cp.gi->device.acquireNextImageKHR(_handle, uint64_t(-1), frame.imageAvailable());
                 if (vk::Result::eSuccess == result.result || vk::Result::eSuboptimalKHR == result.result) {
                     // we acquired the frame (might be suboptimal, but stil usable) and is ready for rendering.
                     frame.imageIndex = result.value;
@@ -2999,46 +3000,44 @@ public:
                 _frameStatus = FAILED;
                 return nullptr;
             }
-
-            RAPID_VULKAN_ASSERT(frame.imageIndex < _backbuffers.size());
-            frame.backbuffer = &_backbuffers[frame.imageIndex];
+        } else {
+            // For headless mode, we don't need to acquire the next image.
+            frame.imageIndex = (uint32_t) (frame.frameCounter() % _backbuffers.size());
         }
 
+        // update the backbuffer pointer.
+        RAPID_VULKAN_ASSERT(frame.imageIndex < _backbuffers.size());
+        frame.setBackbuffer(&_backbuffers[frame.imageIndex]);
+
         _frameStatus = READY;
-        return &_frames[_frameIndex % std::size(_frames)];
+        return &frame;
     }
 
-    void present(const PresentParameters & pp) {
-        // TODO: check if built-in render pass is ended.
-
+    BackbufferStatus present(const PresentParameters & pp) {
         if (READY == _frameStatus) {
             auto & frame = (FrameImpl &) currentFrame();
-            auto   bb    = (Backbuffer *) frame.backbuffer;
+            auto & bb    = (BackbufferImpl &) frame.backbuffer();
 
-            // end the frame, optionally transition the backbuffer image to present layout.
+            // Transition the backbuffer image to present source layout.
             auto cb = _graphicsQueue->begin("frame end");
             if (pp.backbufferStatus.layout != DESIRED_PRESENT_STATUS.layout) {
                 Barrier()
-                    .i(bb->image->handle(), pp.backbufferStatus.access, DESIRED_PRESENT_STATUS.access, pp.backbufferStatus.layout,
-                       DESIRED_PRESENT_STATUS.layout, vk::ImageAspectFlagBits::eColor)
+                    .i(bb.image->handle(), pp.backbufferStatus.access, DESIRED_PRESENT_STATUS.access, pp.backbufferStatus.layout, DESIRED_PRESENT_STATUS.layout,
+                       vk::ImageAspectFlagBits::eColor)
                     .s(pp.backbufferStatus.stages, DESIRED_PRESENT_STATUS.stages)
                     .cmdWrite(cb);
-                bb->status = DESIRED_PRESENT_STATUS;
-            } else {
-                bb->status = pp.backbufferStatus;
             }
+            frame.frameEndSubmission = _graphicsQueue->submit({cb, {}, pp.renderFinished, {bb.frameEndSemaphore}});
 
             // present current frame
             if (_handle) {
-                // Submit the frame end command buffer. Wait for current frame's render finished semaphore. Signal the backbuffer's frame end semaphore.
-                frame.frameEndSubmission = _graphicsQueue->submit({cb, {}, {frame.renderFinished}, {bb->frameEndSemaphore}});
-
+                // Call present queue to do the actual present, waiting for the rame end semaphore.
                 auto presentInfo = vk::PresentInfoKHR()
                                        .setSwapchainCount(1)
                                        .setPSwapchains(&_handle)
                                        .setPImageIndices(&frame.imageIndex)
                                        .setWaitSemaphoreCount(1)
-                                       .setPWaitSemaphores(&bb->frameEndSemaphore);
+                                       .setPWaitSemaphores(&bb.frameEndSemaphore);
                 auto result = _presentQueue.presentKHR(&presentInfo);
                 if (result == vk::Result::eErrorOutOfDateKHR) {
                     recoverSwapchainOnPresentError();
@@ -3055,18 +3054,22 @@ public:
                     RVI_LOGE("Failed to present swapchain image. result = %s", vk::to_string((vk::Result) result).c_str());
                 }
             } else {
-                // headless swapchain.
-                frame.frameEndSubmission = _graphicsQueue->submit({cb, {}, {frame.renderFinished}, {frame.imageAvailable}});
+                // For headless swapchain, we do a dummy submit to signal the image available semaphore.
+                auto dummySwap           = _graphicsQueue->begin("headless dummy swap");
+                frame.frameEndSubmission = _graphicsQueue->submit({dummySwap, {}, {bb.frameEndSemaphore}, {frame.imageAvailable()}});
             }
 
-            // Move to the next frame, if and only if beginFrame() succeeded.
-            ++_frameIndex;
+            // Move to the next frame.
+            ++_frameCounter;
         } else if (FAILED == _frameStatus) {
+            // This means beginFrame() failed. Tru recover the swapchain.
+            // TODO: headless mode?
             recoverSwapchainOnPresentError();
         }
 
-        // end the frame.
+        // Done. End the frame.
         _frameStatus = ENDED;
+        return DESIRED_PRESENT_STATUS;
     }
 
 private:
@@ -3079,18 +3082,28 @@ private:
     struct FrameImpl : public Frame {
         uint32_t                   imageIndex {};
         CommandQueue::SubmissionID frameEndSubmission {};
-        Ref<Image>                 headlessImage; ///< the image that is used as the backbuffer for headless swapchain.
+
+        void setFrameCounter(uint64_t i) { _index = i; }
+        void setImageAvailable(vk::Semaphore s) { _imageAvailable = s; }
+        void setBackbuffer(Backbuffer * b) { _backbuffer = b; }
+        void waitForFrameEnd() {
+            if (frameEndSubmission) {
+                frameEndSubmission.wait();
+                frameEndSubmission = {}; // Clear the submission. We only wait it once.
+            }
+        }
     };
 
     struct BackbufferImpl : public Backbuffer {
         Ref<Framebuffer> fb {};
+        vk::Semaphore    frameEndSemaphore; // the semaphore that present() call is waiting on to ensure
     };
 
 private:
     ConstructParameters _cp;
     Ref<RenderPass>     _renderPass;
-    FrameStatus         _frameStatus = ENDED;
-    uint64_t            _frameIndex  = 0;
+    FrameStatus         _frameStatus  = ENDED;
+    uint64_t            _frameCounter = 0;
     vk::Queue           _presentQueue;
     Ref<CommandQueue>   _graphicsQueue;
 
@@ -3100,11 +3113,12 @@ private:
     std::vector<BackbufferImpl> _backbuffers;
     Ref<Image>                  _depthBuffer;
 
-    inline static constexpr BackbufferStatus DESIRED_PRESENT_STATUS = PresentParameters().backbufferStatus;
+    inline static constexpr BackbufferStatus DESIRED_PRESENT_STATUS = {vk::ImageLayout::ePresentSrcKHR, vk::AccessFlagBits::eMemoryRead,
+                                                                       vk::PipelineStageFlagBits::eBottomOfPipe};
 
 private:
-    const FrameImpl & currentFrame() const { return _frames[_frameIndex % std::size(_frames)]; }
-    FrameImpl &       currentFrame() { return _frames[_frameIndex % std::size(_frames)]; }
+    const FrameImpl & currentFrame() const { return _frames[_frameCounter % std::size(_frames)]; }
+    FrameImpl &       currentFrame() { return _frames[_frameCounter % std::size(_frames)]; }
 
     void updateDepthFormat() {
         switch (_cp.depthStencilFormat.mode) {
@@ -3141,7 +3155,7 @@ private:
         }
 
         recreateWindowSwapchain();
-        RVI_LOGI("Swapchainn recovered.");
+        RVI_LOGI("Swapchain recovered.");
     }
 
     void constructWindowSwapchain() {
@@ -3205,9 +3219,22 @@ private:
 
         // create the built-in render pass (after the back buffer format is determined)
         auto params = RenderPass::ConstructParameters {{"swapchain built-in render pass"}, _cp.gi}.simple({_cp.backbufferFormat}, _cp.depthStencilFormat);
-        // We want the color buffer be in presentable layout before and after the render pass. So it can seamlessly connected with the present() call.
-        params.attachments[0].setInitialLayout(DESIRED_PRESENT_STATUS.layout).setFinalLayout(DESIRED_PRESENT_STATUS.layout);
+        // Set initial layout to undefined, to discard the content of the render target.
+        // Set final layout to presentable layout, to be able to seamlessly connected with the present() call.
+        params.attachments[0].setInitialLayout(vk::ImageLayout::eUndefined).setFinalLayout(DESIRED_PRESENT_STATUS.layout);
         _renderPass.reset(new RenderPass(params));
+
+        // initialize frame array.
+        _frames.resize(_cp.maxFramesInFlight + 1);
+        for (size_t i = 0; i < _frames.size(); ++i) {
+            auto & frame = _frames[i];
+
+            // create image available semaphore
+            frame.setImageAvailable(_cp.gi->device.createSemaphore({}, _cp.gi->allocator));
+            setVkHandleName(_cp.gi->device, frame.imageAvailable(), format("image available semaphore for frame %zu", i));
+
+            // do not signal them like in headless mode. Vulkan present queue will signal them automatically.
+        }
 
         recreateWindowSwapchain();
     }
@@ -3226,22 +3253,42 @@ private:
         params.attachments[0].setInitialLayout(DESIRED_PRESENT_STATUS.layout).setFinalLayout(DESIRED_PRESENT_STATUS.layout);
         _renderPass.reset(new RenderPass(params));
 
+        // initialize frame array.
+        _frames.resize(_cp.maxFramesInFlight + 1);
+        for (size_t i = 0; i < _frames.size(); ++i) {
+            auto & frame = _frames[i];
+
+            // create image available semaphore
+            frame.setImageAvailable(_cp.gi->device.createSemaphore({}, _cp.gi->allocator));
+            setVkHandleName(_cp.gi->device, frame.imageAvailable(), format("image available semaphore for headless frame %zu", i));
+
+            // then signal it.
+            auto cb = _graphicsQueue->begin(format("dummy submit to signal image available semaphore for headless frame %zu", i).c_str());
+            _graphicsQueue->submit({cb, {}, {}, {frame.imageAvailable()}});
+        }
+
         recreateHeadlessSwapchain();
     }
 
     void clearSwapchain() {
+        // wait for all GPU rendering to be done for all frames.
+        for (auto & frame : _frames) {
+            frame.waitForFrameEnd();
+            frame.setBackbuffer(nullptr); // clear old backbuffer pointer
+        }
+
+        // destroy swapchain resources
         for (auto & bb : _backbuffers) {
-            bb.fb.clear();
+            bb.fb.reset();
             _cp.gi->safeDestroy(bb.frameEndSemaphore);
+            if (bb.image) {
+                delete bb.image;
+                bb.image = nullptr;
+            }
         }
         _backbuffers.clear();
         _depthBuffer.clear();
         _cp.gi->safeDestroy(_handle);
-        for (auto & f : _frames) {
-            _cp.gi->safeDestroy(f.imageAvailable);
-            _cp.gi->safeDestroy(f.renderFinished);
-        }
-        _frames.clear();
     }
 
     void recreateWindowSwapchain() {
@@ -3269,8 +3316,9 @@ private:
         }
 
         // Determine image count. Added 1 to minimal account to allow at least one GPU frame in flight.
-        uint32_t backbufferCount = std::max(surfaceCaps.minImageCount + 1,
-                                            std::min<uint32_t>((uint32_t) _cp.maxFramesInFlight + surfaceCaps.minImageCount, surfaceCaps.maxImageCount));
+        if (0 == _cp.maxFramesInFlight) _cp.maxFramesInFlight = 1;
+        auto desiredImageCount = (uint32_t) (_cp.maxFramesInFlight + 1);
+        desiredImageCount      = std::min(std::max(desiredImageCount, surfaceCaps.minImageCount), surfaceCaps.maxImageCount);
 
         // Select an supported alpha composite flag
         vk::CompositeAlphaFlagBitsKHR compositeAlpha;
@@ -3289,7 +3337,7 @@ private:
         auto swapchainCreateInfo =
             vk::SwapchainCreateInfoKHR()
                 .setSurface(_cp.surface)
-                .setMinImageCount(backbufferCount)
+                .setMinImageCount(desiredImageCount)
                 .setImageFormat(_cp.backbufferFormat)
                 .setImageExtent({w, h})
                 .setImageArrayLayers(1)
@@ -3326,15 +3374,15 @@ private:
         _backbuffers.resize(images.size());
         for (size_t i = 0; i < images.size(); ++i) {
             auto & bb = _backbuffers[i];
-            bb.image.reset(new Image(Image::ImportParameters {{format("back buffer image %zu", i)},
-                                                              gi,
-                                                              {
-                                                                  images[i],
-                                                                  vk::ImageType::e2D,
-                                                                  swapchainCreateInfo.imageFormat,
-                                                                  {w, h, 1},
-                                                              }}));
-            bb.view = bb.image->getView({vk::ImageViewType::e2D, swapchainCreateInfo.imageFormat});
+            bb.image  = new Image(Image::ImportParameters {{format("back buffer image %zu", i)},
+                                                          gi,
+                                                          {
+                                                               images[i],
+                                                               vk::ImageType::e2D,
+                                                               swapchainCreateInfo.imageFormat,
+                                                               {w, h, 1},
+                                                          }});
+            bb.view   = bb.image->getView({vk::ImageViewType::e2D, swapchainCreateInfo.imageFormat});
             setVkHandleName(gi->device, images[i], format("back buffer image %zu", i));
             setVkHandleName(gi->device, bb.view, format("back buffer view %zu", i));
 
@@ -3359,17 +3407,6 @@ private:
 
         // execute the command buffer to update image layout
         _graphicsQueue->submit({c}).wait();
-
-        // initialize frame array.
-        RVI_ASSERT(_backbuffers.size() > surfaceCaps.minImageCount);
-        _frames.resize(std::max<size_t>(1u, _backbuffers.size() - surfaceCaps.minImageCount));
-        for (size_t i = 0; i < _frames.size(); ++i) {
-            auto & f         = _frames[i];
-            f.imageAvailable = gi->device.createSemaphore({}, gi->allocator);
-            f.renderFinished = gi->device.createSemaphore({}, gi->allocator);
-            setVkHandleName(gi->device, f.imageAvailable, format("image available semaphore %zu", i));
-            setVkHandleName(gi->device, f.renderFinished, format("render finished semaphore %zu", i));
-        }
     }
 
     void recreateHeadlessSwapchain() {
@@ -3394,36 +3431,27 @@ private:
         }
 
         // create back buffer and frame array.
+        if (0 == _cp.maxFramesInFlight) _cp.maxFramesInFlight = 1;
         auto imageCount = _cp.maxFramesInFlight + 1;
         _backbuffers.resize(imageCount);
-        _frames.resize(imageCount);
         for (uint32_t i = 0; i < imageCount; ++i) {
-            // setup frame structure
+            // setup backbuffer structure
             auto & bb            = _backbuffers[i];
             bb.frameEndSemaphore = gi->device.createSemaphore({}, gi->allocator);
             setVkHandleName(gi->device, bb.frameEndSemaphore, format("frame end semaphore %u", i));
 
-            auto & f         = _frames[i];
-            f.backbuffer     = &bb;
-            f.imageIndex     = i;
-            f.imageAvailable = gi->device.createSemaphore({}, gi->allocator);
-            f.renderFinished = gi->device.createSemaphore({}, gi->allocator);
-            f.headlessImage.reset(new Image(Image::ConstructParameters {{"swapchain headless image"}, gi}
-                                                .setFormat(_cp.backbufferFormat)
-                                                .set2D(w, h)
-                                                .addUsage(vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst)));
-            setVkHandleName(gi->device, f.imageAvailable, format("image available semaphore %u", i));
-            setVkHandleName(gi->device, f.renderFinished, format("render finished semaphore %u", i));
+            // create the backbuffer image.
+            bb.image = new Image(Image::ConstructParameters {{format("swapchain headless image %u", i)}, gi}
+                                     .setFormat(_cp.backbufferFormat)
+                                     .set2D(w, h)
+                                     .addUsage(vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst));
 
             // transfer the image into desired layout.
             Barrier()
-                .i(f.headlessImage->handle(), vk::AccessFlagBits::eNone, DESIRED_PRESENT_STATUS.access, vk::ImageLayout::eUndefined,
-                   DESIRED_PRESENT_STATUS.layout, vk::ImageAspectFlagBits::eColor)
+                .i(bb.image->handle(), vk::AccessFlagBits::eNone, DESIRED_PRESENT_STATUS.access, vk::ImageLayout::eUndefined, DESIRED_PRESENT_STATUS.layout,
+                   vk::ImageAspectFlagBits::eColor)
                 .s(vk::PipelineStageFlagBits::eAllCommands, DESIRED_PRESENT_STATUS.stages)
                 .cmdWrite(c);
-
-            // Store the image to back buffer structure
-            bb.image = f.headlessImage;
 
             // create back buffer view
             bb.view = bb.image->getView({vk::ImageViewType::e2D, _cp.backbufferFormat});
@@ -3439,13 +3467,6 @@ private:
 
         // execute the command buffer to update image layout
         _graphicsQueue->submit({c});
-
-        // do dummy submits to signal image available signals for all frames.
-        for (auto & f : _frames) {
-            auto cb = _graphicsQueue->begin("dummy submit to signal image available semaphore");
-            _graphicsQueue->submit({cb, {}, {}, {f.imageAvailable}});
-        }
-
         _graphicsQueue->waitIdle();
     }
 };
@@ -3460,9 +3481,9 @@ Swapchain::~Swapchain() {
 auto Swapchain::renderPass() const -> vk::RenderPass { return _impl->renderPass().handle(); }
 auto Swapchain::graphics() const -> CommandQueue & { return _impl->graphics(); }
 void Swapchain::cmdBeginBuiltInRenderPass(vk::CommandBuffer cb, const BeginRenderPassParameters & bp) { return _impl->cmdBeginBuiltInRenderPass(cb, bp); }
-void Swapchain::cmdEndBuiltInRenderPass(vk::CommandBuffer cb) { return _impl->cmdEndBuiltInRenderPass(cb); }
+auto Swapchain::cmdEndBuiltInRenderPass(vk::CommandBuffer cb) -> BackbufferStatus { return _impl->cmdEndBuiltInRenderPass(cb); }
 auto Swapchain::beginFrame() -> const Frame * { return _impl->beginFrame(); }
-void Swapchain::present(const PresentParameters & pp) { return _impl->present(pp); }
+auto Swapchain::present(const PresentParameters & pp) -> BackbufferStatus { return _impl->present(pp); }
 
 // *********************************************************************************************************************
 // Device
