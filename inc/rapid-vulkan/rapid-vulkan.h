@@ -2232,24 +2232,22 @@ public:
     };
 
     struct Backbuffer {
-        Ref<Image>      image {};
+        Image *         image {};
         vk::ImageView   view {};
         vk::Framebuffer framebuffer {};
-        // BackbufferStatus status {};
-        vk::Semaphore frameEndSemaphore {}; // the semaphore that present() call is waiting on to ensure
     };
 
     /// @brief Represents a GPU frame.
     struct Frame {
-        /// @brief Index of the frame. The value will be incremented after each present.
-        uint64_t index() const { return _index; }
-
-        // /// @brief Index of the frame that GPU has done all the rendering. All resources used to render this frame could be safely recycled or destroyed.
-        // int64_t safeFrameIndex = -1;
+        /// @brief Incremental counter of the frames presented. The value is increased by 1 after each present.
+        uint64_t frameCounter() const { return _index; }
 
         /// @brief Pointer to the backbuffer of the frame.
         /// The pointer value will be invalidated after each present.
-        const Backbuffer * backbuffer() const { return _backbuffer; }
+        const Backbuffer & backbuffer() const {
+            RVI_REQUIRE(_backbuffer != nullptr);
+            return *_backbuffer;
+        }
 
         /// @brief The semaphore that is signaled when the last present of the current backbuffer image is done.
         /// The first rendering submission for current frame should wait for this semaphore.
@@ -2344,15 +2342,8 @@ public:
 
     /// @brief Begin a new rendering frame. Must be called in pair with present().
     /// Behavior is undefined if calling beginFrame() more than once w/o calling present() in between.
-    /// @param waitForGPU If true, wait for GPU to finish rendering to the frame before returning the frame pointer.
-    ///   - This flag, when set to true, only guarantees that GPU is done rendering to the frame before returning the frame pointer.
-    //      It DOES NOT ensure that the frame is done presenting. So caller always need to wait for the frame.imageAvailable() semaphore
-    //      to be signaled before the contents of the frame can be safely modified.
-    //    - In most cases, you can safely keep this flag as false for max CPU & GPU parallelism. beginFrame() will internally check for
-    //      maximum number of frames in flight to ensure CPU is not too far ahead of GPU.
-    //    - A good time that you might want to set this flag to true is when you want to reuse or recycle GPU resources associated with the frame,
     /// \returns The pointer to the next frame for rendering. Or nullptr if failed.
-    const Frame * beginFrame(bool waitForGPU = false);
+    const Frame * beginFrame();
 
     /// @brief Present the current frame. Must be called in pair with beginFrame(). Behavior is undefined, if calling present() more than once
     /// w/o calling beginFrame() in between.

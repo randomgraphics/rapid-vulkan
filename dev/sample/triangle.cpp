@@ -93,8 +93,8 @@ void entry(const Options & options) {
         rapid_vulkan::Swapchain::BackbufferStatus backbufferStatus;
         if (frame) {
             if (options.headless) {
-                if (frame->index() > options.headless) break; // only render number of required frames in headless mode, then quite.
-                std::cout << "Frame " << frame->index() << std::endl;
+                if (frame->frameCounter() > options.headless) break; // only render number of required frames in headless mode, then quite.
+                std::cout << "Frame " << frame->frameCounter() << std::endl;
             }
             auto c = q.begin("triangle");
             sw.cmdBeginBuiltInRenderPass(c, Swapchain::BeginRenderPassParameters {}.setClearColorF({0.0f, 1.0f, 0.0f, 1.0f})); // clear to green
