@@ -79,11 +79,11 @@ void entry(const Options & options) {
         if (frame) {
             // Standard boilerplate of rendering a frame. It is basically the same as triangle.cpp.
             if (options.headless) {
-                if (frame->index > options.headless) break; // render required number of frames in headless mode, then quit.
-                std::cout << "Frame " << frame->index << std::endl;
+                if (frame->index() > options.headless) break; // render required number of frames in headless mode, then quit.
+                std::cout << "Frame " << frame->index() << std::endl;
             }
             // Animate the clear color.
-            auto elapsed  = (float) frame->index / 60.0f;
+            auto elapsed  = (float) frame->index() / 60.0f;
             clearColor[0] = (float) std::sin(elapsed) * 0.5f + 0.5f;
             clearColor[1] = (float) std::cos(elapsed * 1.5f) * 0.5f + 0.5f;
             clearColor[2] = (float) std::sin(elapsed * 2.0f) * 0.5f + 0.5f;
@@ -98,7 +98,7 @@ void entry(const Options & options) {
             backbufferStatus = sw.cmdEndBuiltInRenderPass(c);
 
             // submit the command buffer. also signal the render finished semaphore.
-            q.submit({c, {}, {frame->imageAvailable}, {renderFinished.get()}});
+            q.submit({c, {}, {frame->imageAvailable()}, {renderFinished.get()}});
         }
 
         // end of the frame.

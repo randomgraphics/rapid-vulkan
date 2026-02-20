@@ -63,6 +63,7 @@ SOFTWARE.
 #include <variant>
 #include <list>
 #include <deque>
+#include <queue>
 #include <chrono>
 #include <functional>
 #include <signal.h>
@@ -2984,7 +2985,7 @@ public:
 
         // TODO: check if the render pass is already begun;
 
-        auto bb = currentFrame().backbuffer;
+        auto bb = currentFrame().backbuffer();
 
         // set dynamic viewport and scissor
         const auto & extent = bb->image->desc().extent;
@@ -3013,19 +3014,21 @@ public:
         // make sure frame is ended.
         RVI_REQUIRE(ENDED == _frameStatus);
 
-        auto & frame = currentFrame();
-        frame.index  = _frameIndex;
-
-        // wait for the frame to be available again.
-        if (frame.frameEndSubmission) {
-            _graphicsQueue->wait({frame.frameEndSubmission});
-            frame.frameEndSubmission = {}; // Clear the command buffer. So we only wait it once.
+        // Check if there are too many frames in flight. If so, wait a bit to let GPU to catch up.
+        while (_framesInFlight.size() > _cp.maxFramesInFlight) {
+            auto frame = _framesInFlight.front();
+            frame->waitForFrameEnd();
+            _framesInFlight.pop();
         }
+
+        // update the frame index.
+        auto & frame = currentFrame();
+        frame.setIndex(_frameIndex);
 
         // Acquire the next available swapchain image. Only do this if we are not in headless mode.
         if (_handle) {
             try {
-                auto result = _cp.gi->device.acquireNextImageKHR(_handle, uint64_t(-1), frame.imageAvailable);
+                auto result = _cp.gi->device.acquireNextImageKHR(_handle, uint64_t(-1), frame.imageAvailable());
                 if (vk::Result::eSuccess == result.result || vk::Result::eSuboptimalKHR == result.result) {
                     // we acquired the frame (might be suboptimal, but stil usable) and is ready for rendering.
                     frame.imageIndex = result.value;
@@ -3043,9 +3046,9 @@ public:
             }
 
             RAPID_VULKAN_ASSERT(frame.imageIndex < _backbuffers.size());
-            frame.backbuffer = &_backbuffers[frame.imageIndex];
+            frame.setBackbuffer(&_backbuffers[frame.imageIndex]);
         } else {
-            // TODO: wait on image available semaphore.
+            // do nothing for headless swapchain.
         }
 
         _frameStatus = READY;
@@ -3053,11 +3056,9 @@ public:
     }
 
     BackbufferStatus present(const PresentParameters & pp) {
-        // TODO: check if built-in render pass is ended.
-
         if (READY == _frameStatus) {
             auto & frame = (FrameImpl &) currentFrame();
-            auto   bb    = (Backbuffer *) frame.backbuffer;
+            auto   bb    = (Backbuffer *) frame.backbuffer();
 
             // Transition the backbuffer image to present source layout.
             auto cb = _graphicsQueue->begin("frame end");
@@ -3097,12 +3098,17 @@ public:
             } else {
                 // For headless swapchain, we do a dummy submit to signal the image available semaphore.
                 auto dummySwap           = _graphicsQueue->begin("headless dummy swap");
-                frame.frameEndSubmission = _graphicsQueue->submit({dummySwap, {}, {bb->frameEndSemaphore}, {frame.imageAvailable}});
+                frame.frameEndSubmission = _graphicsQueue->submit({dummySwap, {}, {bb->frameEndSemaphore}, {frame.imageAvailable()}});
             }
 
-            // Move to the next frame, if and only if beginFrame() succeeded.
+            // Frame are successfully submitted for presenting. Add it to the in flight queue.
+            _framesInFlight.push(&frame);
+
+            // Move to the next frame.
             ++_frameIndex;
         } else if (FAILED == _frameStatus) {
+            // This means beginFrame() failed. Tru recover the swapchain.
+            // TODO: headless mode?
             recoverSwapchainOnPresentError();
         }
 
@@ -3122,6 +3128,16 @@ private:
         uint32_t                   imageIndex {};
         CommandQueue::SubmissionID frameEndSubmission {};
         Ref<Image>                 headlessImage; ///< the image that is used as the backbuffer for headless swapchain.
+
+        void setIndex(uint64_t i) { _index = i; }
+        void setImageAvailable(vk::Semaphore s) { _imageAvailable = s; }
+        void setBackbuffer(Backbuffer * b) { _backbuffer = b; }
+        void waitForFrameEnd() {
+            if (frameEndSubmission) {
+                frameEndSubmission.wait();
+                frameEndSubmission = {}; // Clear the submission. We only wait it once.
+            }
+        }
     };
 
     struct BackbufferImpl : public Backbuffer {
@@ -3138,6 +3154,7 @@ private:
 
     // the following are data members that will be cleared and recreated when swapchain is recreated.
     std::vector<FrameImpl>      _frames;
+    std::queue<FrameImpl *>     _framesInFlight;
     vk::SwapchainKHR            _handle;
     std::vector<BackbufferImpl> _backbuffers;
     Ref<Image>                  _depthBuffer;
@@ -3274,13 +3291,8 @@ private:
     }
 
     void clearSwapchain() {
-        // wait for the frame to be available again.
-        for (auto & frame : _frames) {
-            if (frame.frameEndSubmission) {
-                _graphicsQueue->wait({frame.frameEndSubmission});
-                frame.frameEndSubmission = {}; // Clear the command buffer. So we only wait it once.
-            }
-        }
+        // wait for all GPU rendering to be done for all frames.
+        for (auto & frame : _frames) { frame.waitForFrameEnd(); }
         for (auto & bb : _backbuffers) {
             bb.fb.clear();
             _cp.gi->safeDestroy(bb.frameEndSemaphore);
@@ -3288,7 +3300,10 @@ private:
         _backbuffers.clear();
         _depthBuffer.clear();
         _cp.gi->safeDestroy(_handle);
-        for (auto & f : _frames) { _cp.gi->safeDestroy(f.imageAvailable); }
+        for (auto & f : _frames) {
+            auto s = f.imageAvailable();
+            _cp.gi->safeDestroy(s);
+        }
         _frames.clear();
     }
 
@@ -3317,7 +3332,8 @@ private:
         }
 
         // Determine image count. Added 1 to minimal account to allow at least one GPU frame in flight.
-        auto desiredImageCount = (uint32_t) std::max<size_t>(_cp.maxFramesInFlight, 1) + 1;
+        if (0 == _cp.maxFramesInFlight) _cp.maxFramesInFlight = 1;
+        auto desiredImageCount = (uint32_t) (_cp.maxFramesInFlight + 1);
         desiredImageCount      = std::min(std::max(desiredImageCount, surfaceCaps.minImageCount), surfaceCaps.maxImageCount);
 
         // Select an supported alpha composite flag
@@ -3408,13 +3424,12 @@ private:
         // execute the command buffer to update image layout
         _graphicsQueue->submit({c}).wait();
 
-        // initialize frame array.
-        RVI_ASSERT(_backbuffers.size() > surfaceCaps.minImageCount);
-        _frames.resize(std::max<size_t>(1u, _backbuffers.size() - surfaceCaps.minImageCount));
+        // initialize frame array. One for each backbuffer image.
+        _frames.resize(_backbuffers.size());
         for (size_t i = 0; i < _frames.size(); ++i) {
-            auto & f         = _frames[i];
-            f.imageAvailable = gi->device.createSemaphore({}, gi->allocator);
-            setVkHandleName(gi->device, f.imageAvailable, format("image available semaphore %zu", i));
+            auto & f = _frames[i];
+            f.setImageAvailable(gi->device.createSemaphore({}, gi->allocator));
+            setVkHandleName(gi->device, f.imageAvailable(), format("image available semaphore %zu", i));
         }
     }
 
@@ -3440,6 +3455,7 @@ private:
         }
 
         // create back buffer and frame array.
+        if (0 == _cp.maxFramesInFlight) _cp.maxFramesInFlight = 1;
         auto imageCount = _cp.maxFramesInFlight + 1;
         _backbuffers.resize(imageCount);
         _frames.resize(imageCount);
@@ -3449,15 +3465,15 @@ private:
             bb.frameEndSemaphore = gi->device.createSemaphore({}, gi->allocator);
             setVkHandleName(gi->device, bb.frameEndSemaphore, format("frame end semaphore %u", i));
 
-            auto & f         = _frames[i];
-            f.backbuffer     = &bb;
-            f.imageIndex     = i;
-            f.imageAvailable = gi->device.createSemaphore({}, gi->allocator);
+            auto & f     = _frames[i];
+            f.imageIndex = i;
+            f.setBackbuffer(&bb);
+            f.setImageAvailable(gi->device.createSemaphore({}, gi->allocator));
             f.headlessImage.reset(new Image(Image::ConstructParameters {{"swapchain headless image"}, gi}
                                                 .setFormat(_cp.backbufferFormat)
                                                 .set2D(w, h)
                                                 .addUsage(vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst)));
-            setVkHandleName(gi->device, f.imageAvailable, format("image available semaphore %u", i));
+            setVkHandleName(gi->device, f.imageAvailable(), format("image available semaphore %u", i));
 
             // transfer the image into desired layout.
             Barrier()
@@ -3487,7 +3503,7 @@ private:
         // do dummy submits to signal image available signals for all frames.
         for (auto & f : _frames) {
             auto cb = _graphicsQueue->begin("dummy submit to signal image available semaphore");
-            _graphicsQueue->submit({cb, {}, {}, {f.imageAvailable}});
+            _graphicsQueue->submit({cb, {}, {}, {f.imageAvailable()}});
         }
 
         _graphicsQueue->waitIdle();

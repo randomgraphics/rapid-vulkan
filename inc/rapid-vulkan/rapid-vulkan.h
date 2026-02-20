@@ -2242,18 +2242,33 @@ public:
     /// @brief Represents a GPU frame.
     struct Frame {
         /// @brief Index of the frame. The value will be incremented after each present.
-        uint64_t index = 0;
+        uint64_t index() const { return _index; }
 
         // /// @brief Index of the frame that GPU has done all the rendering. All resources used to render this frame could be safely recycled or destroyed.
         // int64_t safeFrameIndex = -1;
 
         /// @brief Pointer to the backbuffer of the frame.
         /// The pointer value will be invalidated after each present.
-        const Backbuffer * backbuffer;
+        const Backbuffer * backbuffer() const { return _backbuffer; }
 
         /// @brief The semaphore that is signaled when the last present of the current backbuffer image is done.
         /// The first rendering submission for current frame should wait for this semaphore.
-        vk::Semaphore imageAvailable;
+        vk::Semaphore imageAvailable() const { return _imageAvailable; }
+
+    protected:
+        /// @brief Index of the frame. The value will be incremented after each present.
+        uint64_t _index = 0;
+
+        // /// @brief Index of the frame that GPU has done all the rendering. All resources used to render this frame could be safely recycled or destroyed.
+        // int64_t safeFrameIndex = -1;
+
+        /// @brief Pointer to the backbuffer of the frame.
+        /// The pointer value will be invalidated after each present.
+        const Backbuffer * _backbuffer = nullptr;
+
+        /// @brief The semaphore that is signaled when the last present of the current backbuffer image is done.
+        /// The first rendering submission for current frame should wait for this semaphore.
+        vk::Semaphore _imageAvailable;
     };
 
     /// @brief Parameters to begin the built-in render pass of the swapchain.

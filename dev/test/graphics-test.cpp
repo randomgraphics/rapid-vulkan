@@ -41,7 +41,7 @@ TEST_CASE("clear-screen") {
     // case 1. clear only.
     SECTION("clear-only") {
         render(std::array<float, 4> {0.f, 1.f, 0.f, 1.f}, false); // clear to green
-        auto pixels = frame->backbuffer->image->readContent({});
+        auto pixels = frame->backbuffer()->image->readContent({});
         REQUIRE(pixels.storage.size() >= 4);
         CHECK(0xFF00FF00 == *(const uint32_t *) pixels.storage.data()); // verify that the screen is green.
     }
@@ -51,7 +51,7 @@ TEST_CASE("clear-screen") {
         RenderDocCapture rdc;
         rdc.begin("clear-screen-section-2");
         render(std::array<float, 4> {1.f, 0.f, 0.f, 1.f}, true); // clear to red, then draw a full screen blue triangle.
-        auto pixels = frame->backbuffer->image->readContent({});
+        auto pixels = frame->backbuffer()->image->readContent({});
         REQUIRE(pixels.storage.size() >= 4);
         CHECK(0xFFFF0000 == *(const uint32_t *) pixels.storage.data());
         rdc.end();
@@ -66,7 +66,8 @@ TEST_CASE("empty-frame") {
     auto sw     = Swapchain(Swapchain::ConstructParameters {{"empty-frame"}}.setDevice(*device).setDimensions(w, h));
     for (int i = 0; i < 10; ++i) {
         auto frame = sw.beginFrame();
-        sw.present(Swapchain::PresentParameters(vk::ImageLayout::eUndefined, vk::AccessFlagBits::eNone).setRenderFinished({frame->imageAvailable}));
+        auto pp    = Swapchain::PresentParameters(vk::ImageLayout::eUndefined, vk::AccessFlagBits::eNone).setRenderFinished({frame->imageAvailable()});
+        sw.present(pp);
     }
 }
 
@@ -101,11 +102,11 @@ TEST_CASE("vertex-buffer") {
     c.handle().bindVertexBuffers(0, {vb.handle()}, {0});                                                               // bind the vertex buffer
     p.cmdDraw(c, GraphicsPipeline::DrawParameters {}.setNonIndexed(3));                                                // then draw a blue triangle.
     sw.cmdEndBuiltInRenderPass(c);
-    q.submit({c, {}, {f->imageAvailable}, {}}).wait();
+    q.submit({c, {}, {f->imageAvailable()}, {}}).wait();
     rdc.end();
 
     // read content of back buffer.
-    auto pixels = f->backbuffer->image->readContent({});
+    auto pixels = f->backbuffer()->image->readContent({});
 
     // Since we clear the whole screen to green, then draw a blue triangle to cover the lower left half of the screen,
     // then pixel (1, 0) should be green, and pixel (0, 1) should be blue.
