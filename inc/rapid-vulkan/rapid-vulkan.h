@@ -2434,29 +2434,6 @@ struct StructureChain {
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Misc. classes for future use.
-
-// this is name space for experimental features. It is not part of the public API.
-namespace experimental {
-
-class RenderLoop : public Root {
-public:
-    struct ConstructParameters : public Root::ConstructParameters {
-        uint32_t maxPendingGPUFrames = 1;
-    };
-
-    RenderLoop(const ConstructParameters &);
-
-    void run();
-
-private:
-    class Impl;
-    Impl * _impl = nullptr;
-};
-
-} // namespace experimental
-
-// ---------------------------------------------------------------------------------------------------------------------
 /// \def Device A wrapper class for VkDevice
 
 class Instance;
@@ -2485,10 +2462,10 @@ public:
         /// Basic device feature list defined by Vulkan 1.0
         vk::PhysicalDeviceFeatures features1 {};
 
-        /// Extensible device feature list defined Vulkan 1.1
+        /// Extensible device feature list defined by Vulkan 1.1 and above
         std::vector<StructureChain> features2 {};
 
-        /// Pointer of an already-built feature chain. If not empty, this will be attached after feature1 and feature2.
+        /// Pointer of an already-built feature chain. If not empty, this will be attached after features1 and features2.
         void * features3 = nullptr;
 
         /// Set to true to create VMA allocator and store in the GlobalInfo::vmaAllocator field.
@@ -2678,6 +2655,28 @@ private:
     vk::Instance               _instance {};
     vk::DebugReportCallbackEXT _debugReport {};
 };
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Experimental classes for prototyping & unstable features. It is not part of the public API. Use at your own risk.
+
+namespace experimental {
+
+class RenderLoop : public Root {
+public:
+    struct ConstructParameters : public Root::ConstructParameters {
+        uint32_t maxPendingGPUFrames = 1;
+    };
+
+    RenderLoop(const ConstructParameters &);
+
+    void run();
+
+private:
+    class Impl;
+    Impl * _impl = nullptr;
+};
+
+} // namespace experimental
 
 #ifdef _MSC_VER
 #pragma warning(pop)
