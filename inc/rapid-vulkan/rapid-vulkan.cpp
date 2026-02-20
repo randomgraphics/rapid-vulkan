@@ -738,7 +738,7 @@ public:
         cp.info.usage |= vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst;
 
         // update mipmap level count
-        uint32_t maxLevels = (uint32_t) std::floor(std::log2((double) std::max(cp.info.extent.width, cp.info.extent.height))) + 1;
+        uint32_t maxLevels = calculateMaxMips(cp.info.extent);
         if (cp.info.mipLevels > maxLevels) {
             RVI_LOGW("mipmap level count %u is too large, clamped to %u", cp.info.mipLevels, maxLevels);
             cp.info.mipLevels = maxLevels;

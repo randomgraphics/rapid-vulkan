@@ -454,6 +454,40 @@ inline void setVkHandleName(vk::Device device, T handle, const char * name) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
+/// Helper function to calculate the maximum number of mips for a given width, height and depth.
+inline constexpr const uint32_t calculateMaxMips(const uint32_t & width, const uint32_t & height, const uint32_t & depth) {
+    auto maxDimension = width;
+    if (height > maxDimension) maxDimension = height;
+    if (depth > maxDimension) maxDimension = depth;
+    uint32_t numMips = 0;
+    while (maxDimension > 0) {
+        maxDimension >>= 1;
+        numMips++;
+    }
+    return numMips;
+}
+static_assert(calculateMaxMips(1, 1, 1) == 1, "calculateMaxMips(1, 1, 1) should return 1");
+static_assert(calculateMaxMips(2, 4, 8) == 4, "calculateMaxMips(2, 4, 8) should return 4");
+
+inline constexpr const uint32_t calculateMaxMips(const vk::Extent3D & extent) { return calculateMaxMips(extent.width, extent.height, extent.depth); }
+inline constexpr const uint32_t calculateMaxMips(const vk::Extent2D & extent) { return calculateMaxMips(extent.width, extent.height, 1); }
+inline constexpr const uint32_t calculateMaxMips(uint32_t extent) { return calculateMaxMips(extent, 1, 1); }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Helper function to get the extent of a given mip level.
+inline constexpr vk::Extent3D getMipLevelExtent(const vk::Extent3D & baseExtent, uint32_t level) {
+    auto extent    = baseExtent;
+    auto maxLevels = calculateMaxMips(baseExtent);
+    if (level >= maxLevels) level = maxLevels - 1;
+    for (uint32_t i = 0; i < level; ++i) {
+        extent.width  = std::max(extent.width / 2, 1u);
+        extent.height = std::max(extent.height / 2, 1u);
+        extent.depth  = std::max(extent.depth / 2, 1u);
+    }
+    return extent;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
 /// Helper function to set Vulkan opaque handle's name (VK_EXT_debug_utils).
 template<typename T>
 inline void setVkHandleName(vk::Device device, T handle, std::string name) {
