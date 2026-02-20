@@ -2344,8 +2344,15 @@ public:
 
     /// @brief Begin a new rendering frame. Must be called in pair with present().
     /// Behavior is undefined if calling beginFrame() more than once w/o calling present() in between.
-    /// \returns The pointer to the current frame structure, or null if failed.
-    const Frame * beginFrame();
+    /// @param waitForGPU If true, wait for GPU to finish rendering to the frame before returning the frame pointer.
+    ///   - This flag, when set to true, only guarantees that GPU is done rendering to the frame before returning the frame pointer.
+    //      It DOES NOT ensure that the frame is done presenting. So caller always need to wait for the frame.imageAvailable() semaphore
+    //      to be signaled before the contents of the frame can be safely modified.
+    //    - In most cases, you can safely keep this flag as false for max CPU & GPU parallelism. beginFrame() will internally check for
+    //      maximum number of frames in flight to ensure CPU is not too far ahead of GPU.
+    //    - A good time that you might want to set this flag to true is when you want to reuse or recycle GPU resources associated with the frame,
+    /// \returns The pointer to the next frame for rendering. Or nullptr if failed.
+    const Frame * beginFrame(bool waitForGPU = false);
 
     /// @brief Present the current frame. Must be called in pair with beginFrame(). Behavior is undefined, if calling present() more than once
     /// w/o calling beginFrame() in between.

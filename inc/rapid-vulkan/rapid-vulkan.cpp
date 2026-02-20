@@ -3010,7 +3010,7 @@ public:
         return DESIRED_PRESENT_STATUS;
     }
 
-    const Frame * beginFrame() {
+    const Frame * beginFrame(bool waitForGPU) {
         // make sure frame is ended.
         RVI_REQUIRE(ENDED == _frameStatus);
 
@@ -3023,6 +3023,7 @@ public:
 
         // update the frame index.
         auto & frame = currentFrame();
+        if (waitForGPU) frame.waitForFrameEnd();
         frame.setIndex(_frameIndex);
 
         // Acquire the next available swapchain image. Only do this if we are not in headless mode.
@@ -3521,7 +3522,7 @@ auto Swapchain::renderPass() const -> vk::RenderPass { return _impl->renderPass(
 auto Swapchain::graphics() const -> CommandQueue & { return _impl->graphics(); }
 void Swapchain::cmdBeginBuiltInRenderPass(vk::CommandBuffer cb, const BeginRenderPassParameters & bp) { return _impl->cmdBeginBuiltInRenderPass(cb, bp); }
 auto Swapchain::cmdEndBuiltInRenderPass(vk::CommandBuffer cb) -> BackbufferStatus { return _impl->cmdEndBuiltInRenderPass(cb); }
-auto Swapchain::beginFrame() -> const Frame * { return _impl->beginFrame(); }
+auto Swapchain::beginFrame(bool waitForGPU) -> const Frame * { return _impl->beginFrame(waitForGPU); }
 auto Swapchain::present(const PresentParameters & pp) -> BackbufferStatus { return _impl->present(pp); }
 
 // *********************************************************************************************************************
