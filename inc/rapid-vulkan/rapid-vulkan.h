@@ -2232,7 +2232,7 @@ public:
     };
 
     struct Backbuffer {
-        Image *         image {};
+        Image *         image {}; // this is never null for a valid backbuffer.
         vk::ImageView   view {};
         vk::Framebuffer framebuffer {};
     };
