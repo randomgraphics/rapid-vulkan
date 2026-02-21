@@ -273,7 +273,7 @@ public:
 
     auto desc() const -> const Desc & { return _desc; }
 
-    void cmdCopy(const CopyParameters & params) {
+    void cmdCopy(const CopyParameters & params) const {
         if (!params.cb) {
             RVI_LOGE("Can't copy buffer: command buffer is null.");
             return;
@@ -326,7 +326,7 @@ public:
         }
     }
 
-    auto readContent(const ReadParameters & params) -> std::vector<uint8_t> {
+    auto readContent(const ReadParameters & params) const -> std::vector<uint8_t> {
         // validate reading range.
         auto offset = params.offset;
         auto size   = params.size;
@@ -438,12 +438,12 @@ Buffer::~Buffer() {
     _impl = nullptr;
 }
 auto Buffer::desc() const -> const Desc & { return _impl->desc(); }
-void Buffer::cmdCopy(const CopyParameters & p) { return _impl->cmdCopy(p); }
+void Buffer::cmdCopy(const CopyParameters & p) const { return _impl->cmdCopy(p); }
 auto Buffer::setContent(const SetContentParameters & p) -> Buffer & {
     _impl->setContent(p);
     return *this;
 }
-auto Buffer::readContent(const ReadParameters & p) -> std::vector<uint8_t> { return _impl->readContent(p); }
+auto Buffer::readContent(const ReadParameters & p) const -> std::vector<uint8_t> { return _impl->readContent(p); }
 auto Buffer::map(const MapParameters & p) -> MappedResult { return _impl->map(p); }
 void Buffer::unmap() { return _impl->unmap(); }
 void Buffer::onNameChanged(const std::string &) { _impl->onNameChanged(); }
@@ -883,7 +883,7 @@ public:
         }
     }
 
-    Content readContent(const ReadContentParameters & params) {
+    Content readContent(const ReadContentParameters & params) const {
         // uint32_t mipLevel   = params.mipLevel;
         // uint32_t levelCount = params.layerCount;
         // uint32_t arrayLayer = params.arrayLayer;
@@ -1077,7 +1077,7 @@ Image::~Image() {
 auto Image::desc() const -> const Desc & { return _impl->desc(); }
 auto Image::getView(const GetViewParameters & p) const -> vk::ImageView { return _impl->getView(p); }
 void Image::setContent(const SetContentParameters & p) { return _impl->setContent(p); }
-auto Image::readContent(const ReadContentParameters & p) -> Content { return _impl->readContent(p); }
+auto Image::readContent(const ReadContentParameters & p) const -> Content { return _impl->readContent(p); }
 
 // *********************************************************************************************************************
 // Shader

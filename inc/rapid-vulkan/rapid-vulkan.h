@@ -1126,9 +1126,9 @@ public:
     ~Buffer() override;
 
     auto desc() const -> const Desc &;
-    void cmdCopy(const CopyParameters &);
+    void cmdCopy(const CopyParameters &) const;
     auto setContent(const SetContentParameters &) -> Buffer &;
-    auto readContent(const ReadParameters &) -> std::vector<uint8_t>;
+    auto readContent(const ReadParameters &) const -> std::vector<uint8_t>;
     auto map(const MapParameters &) -> MappedResult;
     void unmap();
 
@@ -1390,7 +1390,7 @@ public:
 
     /// @brief Synchronously read content of the whole image.
     /// This method, if succeeded, will transfer the image into vk::ImageLayout::eTransferSrcOptimal layout.
-    Content readContent(const ReadContentParameters &);
+    Content readContent(const ReadContentParameters &) const;
 
     vk::Image handle() const { return desc().handle; }
 
