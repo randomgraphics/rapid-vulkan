@@ -1146,7 +1146,7 @@ private:
     ConstructParameters _cp; // keep construct parameters around for debug purpose only.
 #endif
 };
-    
+
 RenderPass::ConstructParameters & RenderPass::ConstructParameters::simple(vk::ArrayProxy<const vk::Format> colors, vk::Format depth, bool clear, bool store) {
     // initialize attachment array
     for (auto c : colors) {
