@@ -64,13 +64,14 @@ void entry(const Options & options) {
     auto q      = CommandQueue({{"main"}, gi, device.graphics()->family(), device.graphics()->index()});
 
     // create the swapchain.
-    auto w    = uint32_t(1280);
-    auto h    = uint32_t(720);
-    auto glfw = GLFWInit(options.headless, instance, w, h, "triangle");
-    auto sw   = Swapchain(Swapchain::ConstructParameters {{"triangle"}}
-                              .setSurface(options.headless ? nullptr : glfw.surface)
-                              .setDevice(device)
-                              .setDimensions(options.headless ? w : 0, options.headless ? h : 0));
+    auto w              = uint32_t(1280);
+    auto h              = uint32_t(720);
+    auto glfw           = GLFWInit(options.headless, instance, w, h, "triangle");
+    auto sw             = Swapchain(Swapchain::ConstructParameters {{"triangle"}}
+                                        .setSurface(options.headless ? nullptr : glfw.surface)
+                                        .setDevice(device)
+                                        .setDimensions(options.headless ? w : 0, options.headless ? h : 0));
+    auto renderFinished = gi->device.createSemaphoreUnique({}, gi->allocator);
 
     // create the graphics pipeline
     auto gcp = GraphicsPipeline::ConstructParameters {{"triangle"}}.setRenderPass(sw.renderPass()).setVS(&vs).setFS(&fs);
@@ -88,19 +89,20 @@ void entry(const Options & options) {
     glfw.show();
     for (;;) {
         if (!options.headless && !glfw.processEvents()) break;
-        auto frame = sw.beginFrame();
+        auto                                      frame = sw.beginFrame();
+        rapid_vulkan::Swapchain::BackbufferStatus backbufferStatus;
         if (frame) {
             if (options.headless) {
-                if (frame->index > options.headless) break; // only render number of required frames in headless mode, then quite.
-                std::cout << "Frame " << frame->index << std::endl;
+                if (frame->frameCounter() > options.headless) break; // only render number of required frames in headless mode, then quite.
+                std::cout << "Frame " << frame->frameCounter() << std::endl;
             }
             auto c = q.begin("triangle");
             sw.cmdBeginBuiltInRenderPass(c, Swapchain::BeginRenderPassParameters {}.setClearColorF({0.0f, 1.0f, 0.0f, 1.0f})); // clear to green
             p.cmdDraw(c, GraphicsPipeline::DrawParameters {}.setNonIndexed(3));                                                // then draw a blue triangle.
-            sw.cmdEndBuiltInRenderPass(c);
-            q.submit({c, {}, {frame->imageAvailable}, {frame->renderFinished}});
+            backbufferStatus = sw.cmdEndBuiltInRenderPass(c);
+            q.submit({c, {}, {frame->imageAvailable()}, {renderFinished.get()}});
         }
-        sw.present({});
+        sw.present(Swapchain::PresentParameters(backbufferStatus).setRenderFinished({renderFinished.get()}));
     }
     device.waitIdle(); // don't forget to wait for the device to be idle before destroying vulkan objects.
 }

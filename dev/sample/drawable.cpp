@@ -59,26 +59,27 @@ void entry(const Options & options) {
         instancePtr = std::make_unique<Instance>(Instance::ConstructParameters {}.setValidation(Instance::BREAK_ON_VK_ERROR).setBacktrace(backtrace));
         instance    = instancePtr->handle();
     }
-    auto device = Device(Device::ConstructParameters {instance}.setPrintVkInfo(options.verbosity));
-    auto gi     = device.gi();
-    auto q      = CommandQueue({{"main"}, gi, device.graphics()->family(), device.graphics()->index()});
-    auto w      = uint32_t(1280);
-    auto h      = uint32_t(720);
-    auto glfw   = GLFWInit(options.headless, instance, w, h, "pipeline-args");
-    auto sw     = Swapchain(Swapchain::ConstructParameters {{"swapchain"}}
-                                .setSurface(options.headless ? nullptr : glfw.surface)
-                                .setDevice(device)
-                                .setDimensions(options.headless ? w : 0, options.headless ? h : 0));
-    auto vs     = Shader(Shader::ConstructParameters {{"vs"}}.setGi(gi).setSpirv(pipeline_vert));
-    auto fs     = Shader(Shader::ConstructParameters {{"fs"}, gi}.setSpirv(pipeline_frag));
-    auto p      = Ref<GraphicsPipeline>::make(GraphicsPipeline::ConstructParameters {}
-                                                  .setRenderPass(sw.renderPass())
-                                                  .setVS(&vs)
-                                                  .setFS(&fs)
-                                                  .dynamicScissor()
-                                                  .dynamicViewport()
-                                                  .addVertexAttribute(0, 0, vk::Format::eR32G32Sfloat)
-                                                  .addVertexBuffer(2 * sizeof(float)));
+    auto device         = Device(Device::ConstructParameters {instance}.setPrintVkInfo(options.verbosity));
+    auto gi             = device.gi();
+    auto q              = CommandQueue({{"main"}, gi, device.graphics()->family(), device.graphics()->index()});
+    auto w              = uint32_t(1280);
+    auto h              = uint32_t(720);
+    auto glfw           = GLFWInit(options.headless, instance, w, h, "pipeline-args");
+    auto sw             = Swapchain(Swapchain::ConstructParameters {{"swapchain"}}
+                                        .setSurface(options.headless ? nullptr : glfw.surface)
+                                        .setDevice(device)
+                                        .setDimensions(options.headless ? w : 0, options.headless ? h : 0));
+    auto vs             = Shader(Shader::ConstructParameters {{"vs"}}.setGi(gi).setSpirv(pipeline_vert));
+    auto fs             = Shader(Shader::ConstructParameters {{"fs"}, gi}.setSpirv(pipeline_frag));
+    auto p              = Ref<GraphicsPipeline>::make(GraphicsPipeline::ConstructParameters {}
+                                                          .setRenderPass(sw.renderPass())
+                                                          .setVS(&vs)
+                                                          .setFS(&fs)
+                                                          .dynamicScissor()
+                                                          .dynamicViewport()
+                                                          .addVertexAttribute(0, 0, vk::Format::eR32G32Sfloat)
+                                                          .addVertexBuffer(2 * sizeof(float)));
+    auto renderFinished = gi->device.createSemaphoreUnique({}, gi->allocator);
 
     // This part is what this sample is about. We create some buffers and bind them to the drawable.
     auto u0 = Ref(new Buffer(Buffer::ConstructParameters {{"ub0"}, gi}.setUniform().setSize(sizeof(float) * 2)));
@@ -105,17 +106,18 @@ void entry(const Options & options) {
     glfw.show();
     for (;;) {
         if (!options.headless && !glfw.processEvents()) break;
-        auto frame = sw.beginFrame();
+        auto                                      frame = sw.beginFrame();
+        rapid_vulkan::Swapchain::BackbufferStatus backbufferStatus;
         if (frame) {
             // Standard boilerplate of rendering a frame. It is basically the same as triangle.cpp.
             if (options.headless) {
-                if (frame->index > options.headless) break; // render required number of frames in headless mode, then quit.
-                std::cout << "Frame " << frame->index << std::endl;
+                if (frame->frameCounter() > options.headless) break; // render required number of frames in headless mode, then quit.
+                std::cout << "Frame " << frame->frameCounter() << std::endl;
             }
             // Animate the triangle. Note that this is not the most efficient way to animate things, since it serializes
             // CPU and GPU. But it's simple and it is not the focus of this sample.
             auto bc      = Buffer::SetContentParameters {}.setQueue(*device.graphics());
-            auto elapsed = (float) frame->index / 60.0f;
+            auto elapsed = (float) frame->frameCounter() / 60.0f;
             u0->setContent(bc.setData<float>({(float) std::sin(elapsed) * .25f, (float) std::cos(elapsed) * .25f}));
             u1->setContent(bc.setData<float>({(float) std::sin(elapsed) * .5f + .5f, (float) std::cos(elapsed) * .5f + .5f, 1.f}));
 
@@ -133,14 +135,14 @@ void entry(const Options & options) {
             c.render(dp);
 
             // end render pass
-            sw.cmdEndBuiltInRenderPass(c);
+            backbufferStatus = sw.cmdEndBuiltInRenderPass(c);
 
             // submit the command buffer
-            q.submit({c, {}, {frame->imageAvailable}, {frame->renderFinished}});
+            q.submit({c, {}, {frame->imageAvailable()}, {renderFinished.get()}});
         }
 
         // end of the frame.
-        sw.present({});
+        sw.present(Swapchain::PresentParameters(backbufferStatus).setRenderFinished({renderFinished.get()}));
     }
     device.waitIdle();
 }

@@ -25,8 +25,8 @@ SOFTWARE.
 #ifndef RAPID_VULKAN_H_
 #define RAPID_VULKAN_H_
 
-/// A monotonically increasing number that uniquely identify the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 26
+/// A monotonically increasing number that uniquely identifies the revision of the header.
+#define RAPID_VULKAN_HEADER_REVISION 27
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -42,7 +42,7 @@ SOFTWARE.
 
 /// \def RAPID_VULKAN_ENABLE_LOADER
 /// Set to 0 to disable built-in Vulkan API loader. Enabled by default.
-/// \todo explain in what cases and why you might wnat to disable the built-in loader.
+/// \todo explain in what cases and why you might want to disable the built-in loader.
 #ifndef RAPID_VULKAN_ENABLE_LOADER
 #define RAPID_VULKAN_ENABLE_LOADER 1
 #endif
@@ -54,7 +54,7 @@ SOFTWARE.
 #endif
 
 /// \def RAPID_VULKAN_ENABLE_GLFW3
-/// Set to 1 to enable GLFW3 interation helpers. Disabled by default.
+/// Set to 1 to enable GLFW3 integration helpers. Disabled by default.
 #ifndef RAPID_VULKAN_ENABLE_GLFW3
 #define RAPID_VULKAN_ENABLE_GLFW3 0
 #endif
@@ -275,12 +275,12 @@ SOFTWARE.
         }                                                                              \
     } while (false)
 
-#define RVI_VK_REQUIRE(condition, ...)                                                     \
-    do {                                                                                   \
-        if (VK_SUCCESS != (VkResult) (condition)) {                                        \
-            auto errorMessage__ = RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__);             \
-            RVI_THROW("Vulkan fuction " #condition " failed. %s", errorMessage__.c_str()); \
-        }                                                                                  \
+#define RVI_VK_REQUIRE(condition, ...)                                                      \
+    do {                                                                                    \
+        if (VK_SUCCESS != (VkResult) (condition)) {                                         \
+            auto errorMessage__ = RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__);              \
+            RVI_THROW("Vulkan function " #condition " failed. %s", errorMessage__.c_str()); \
+        }                                                                                   \
     } while (false)
 
 // Check C++ standard
@@ -294,7 +294,7 @@ SOFTWARE.
 #endif
 #else
 #if __cplusplus < 201703L
-#error "c++17 or higher is required"
+#error "C++17 or higher is required"
 #elif __cplusplus < 202002L
 #define RVI_CXX_STANDARD 17
 #else
@@ -454,6 +454,40 @@ inline void setVkHandleName(vk::Device device, T handle, const char * name) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
+/// Helper function to calculate the maximum number of mips for a given width, height and depth.
+inline constexpr uint32_t calculateMaxMips(uint32_t width, uint32_t height, uint32_t depth) {
+    auto maxDimension = width;
+    if (height > maxDimension) maxDimension = height;
+    if (depth > maxDimension) maxDimension = depth;
+    uint32_t numMips = 0;
+    while (maxDimension > 0) {
+        maxDimension >>= 1;
+        numMips++;
+    }
+    return numMips;
+}
+static_assert(calculateMaxMips(1, 1, 1) == 1, "calculateMaxMips(1, 1, 1) should return 1");
+static_assert(calculateMaxMips(2, 4, 8) == 4, "calculateMaxMips(2, 4, 8) should return 4");
+
+inline constexpr uint32_t calculateMaxMips(const vk::Extent3D & extent) { return calculateMaxMips(extent.width, extent.height, extent.depth); }
+inline constexpr uint32_t calculateMaxMips(const vk::Extent2D & extent) { return calculateMaxMips(extent.width, extent.height, 1); }
+inline constexpr uint32_t calculateMaxMips(uint32_t extent) { return calculateMaxMips(extent, 1, 1); }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Helper function to get the extent of a given mip level.
+inline constexpr vk::Extent3D getMipLevelExtent(const vk::Extent3D & baseExtent, uint32_t level) {
+    auto extent    = baseExtent;
+    auto maxLevels = calculateMaxMips(baseExtent);
+    if (level >= maxLevels) level = maxLevels - 1;
+    for (uint32_t i = 0; i < level; ++i) {
+        extent.width  = std::max(extent.width / 2, 1u);
+        extent.height = std::max(extent.height / 2, 1u);
+        extent.depth  = std::max(extent.depth / 2, 1u);
+    }
+    return extent;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
 /// Helper function to set Vulkan opaque handle's name (VK_EXT_debug_utils).
 template<typename T>
 inline void setVkHandleName(vk::Device device, T handle, std::string name) {
@@ -488,7 +522,7 @@ inline std::vector<T> completeEnumerate(Q query) {
     // between the initial query for the count and the
     // request for VkLayerProperties. The loader indicates that
     // by returning a VK_INCOMPLETE status and will update the
-    // the count parameter.
+    // count parameter.
     // The count parameter will be updated with the number of
     // entries loaded into the data pointer - in case the number
     // of layers went down or is smaller than the size given.
@@ -524,7 +558,7 @@ vk::PhysicalDevice selectTheMostPowerfulPhysicalDevice(vk::ArrayProxy<const vk::
 std::vector<vk::ExtensionProperties> enumerateDeviceExtensions(vk::PhysicalDevice dev);
 
 // ---------------------------------------------------------------------------------------------------------------------
-/// Query an usable/default depth format of the device.
+/// Query a usable/default depth format of the device.
 /// \param dev The physical device in question
 /// \param stencil If we need stencil format. <0: don't care. 0: no. >0: required. Default value is -1.
 /// \return An format that is suitble to create depth/stencil buffer. Or vk::eUndefined if failed.
@@ -568,7 +602,7 @@ public:
     }
 
     /// @brief Mark the object as "not being automatically deleted when reference count reaches zero".
-    /// This is a ver hacky way to keep the object allocated on stack alive even after all references are gone.
+    /// This is a very hacky way to keep the object allocated on stack alive even after all references are gone.
     /// The intended scenario is passing a stack allocated object to a function that takes a Ref<T> parameter.
     /// By calling this method, the object will not be deleted even when all references are gone. Instead, it will be
     /// destroyed automatically along with the stack frame, regardless if there are still references to it.
@@ -1042,7 +1076,7 @@ public:
         vk::DeviceSize size   = 0;       ///< the size of the mapped area, in bytes.
     };
 
-    /// @brief A helper class that maps the buffer and and automatically unmap the buffer when destroyed.
+    /// @brief A helper class that maps the buffer and automatically unmap the buffer when destroyed.
     template<typename T = uint8_t>
     struct Map {
         Buffer *       buffer = nullptr;
@@ -1092,9 +1126,9 @@ public:
     ~Buffer() override;
 
     auto desc() const -> const Desc &;
-    void cmdCopy(const CopyParameters &);
+    void cmdCopy(const CopyParameters &) const;
     auto setContent(const SetContentParameters &) -> Buffer &;
-    auto readContent(const ReadParameters &) -> std::vector<uint8_t>;
+    auto readContent(const ReadParameters &) const -> std::vector<uint8_t>;
     auto map(const MapParameters &) -> MappedResult;
     void unmap();
 
@@ -1331,7 +1365,7 @@ public:
 
     /// @brief A utility function to determine image aspect flags from a format.
     /// @param format The pixel format of the image.
-    /// @param hint   The hint of the aspect flags. The function will try to use this hinted aspect flag, as long as it is compatible the format.
+    /// @param hint   The hint of the aspect flags. The function will try to use this hinted aspect flag, as long as it is compatible with the format.
     ///               Set to vk::ImageAspectFlagBits::eNone to let the function determine the aspect flags.
     static vk::ImageAspectFlags determineImageAspect(vk::Format format, vk::ImageAspectFlags hint = vk::ImageAspectFlagBits::eNoneKHR);
 
@@ -1356,7 +1390,7 @@ public:
 
     /// @brief Synchronously read content of the whole image.
     /// This method, if succeeded, will transfer the image into vk::ImageLayout::eTransferSrcOptimal layout.
-    Content readContent(const ReadContentParameters &);
+    Content readContent(const ReadContentParameters &) const;
 
     vk::Image handle() const { return desc().handle; }
 
@@ -1703,7 +1737,7 @@ public:
             return *this;
         }
 
-        /// @brief Enable dyanmic viewport. Also specify the number of viewports.
+        /// @brief Enable dynamic viewport. Also specify the number of viewports.
         /// @param count Specify how many viewports will be used. Minimal count is 1.
         ConstructParameters & dynamicViewport(size_t count = 1) {
             if (count < 1) count = 1;
@@ -2082,10 +2116,6 @@ public:
 
         bool empty() const { return !queue || 0 == index; }
 
-        bool newerThan(int64_t other) const { return index - other > 0; }
-
-        bool olderThan(int64_t other) const { return index - other < 0; }
-
         void wait() const {
             if (empty()) return;
             auto q = (CommandQueue *) (intptr_t) queue;
@@ -2194,10 +2224,13 @@ public:
         /// If the surface is null, then the width and height must be non-zero.
         size_t height = 0;
 
-        /// @brief Number of frames in flight. Recommanded value is 2. Must be at least 1.
-        /// The more frames in flight, the more latency you'll have. But on the other hand, the GPU will be
-        /// less likely to be idle.
-        size_t maxFramesInFlight = 2;
+        /// @brief Max number of frames we can queue for GPU processing. Must be at least 1.
+        /// The more frames in flight, the more latency you'll have. But on the other hand, CPU and GPU
+        /// will be less likely to stall.
+        /// It determines the number of backbuffer images to be created by the swapchain. Note that this
+        /// is just a hint to the swapchain. The actual number of frames in flight could be affected
+        /// by the surface capabilities and hardware & driver implementations.
+        size_t maxFramesInFlight = 1;
 
         /// @brief Whether to enable vsync. Ignored when the swapchain is headless.
         bool vsync = true;
@@ -2225,8 +2258,7 @@ public:
             return *this;
         }
     };
-
-    /// @brief Specify the desired status of the back buffer image.
+    /// @brief Specify the current status of the back buffer image.
     struct BackbufferStatus {
         vk::ImageLayout        layout {};
         vk::AccessFlags        access {};
@@ -2234,34 +2266,41 @@ public:
     };
 
     struct Backbuffer {
-        Ref<Image>       image {};
-        vk::ImageView    view {};
-        vk::Framebuffer  framebuffer {};
-        BackbufferStatus status {};
-        vk::Semaphore    frameEndSemaphore {}; // the semaphore that present() call is waiting on to ensure
+        Image *         image {}; // this is never null for a valid backbuffer.
+        vk::ImageView   view {};
+        vk::Framebuffer framebuffer {};
     };
 
     /// @brief Represents a GPU frame.
     struct Frame {
+        /// @brief Incremental counter of the frames presented. The value is increased by 1 after each present.
+        uint64_t frameCounter() const { return _index; }
+
+        /// @brief Pointer to the backbuffer of the frame.
+        /// The pointer value will be invalidated after each present.
+        const Backbuffer & backbuffer() const {
+            RVI_REQUIRE(_backbuffer != nullptr);
+            return *_backbuffer;
+        }
+
+        /// @brief The semaphore that is signaled when the last present of the current backbuffer image is done.
+        /// The first rendering submission for current frame should wait for this semaphore.
+        vk::Semaphore imageAvailable() const { return _imageAvailable; }
+
+    protected:
         /// @brief Index of the frame. The value will be incremented after each present.
-        uint64_t index = 0;
+        uint64_t _index = 0;
 
         // /// @brief Index of the frame that GPU has done all the rendering. All resources used to render this frame could be safely recycled or destroyed.
         // int64_t safeFrameIndex = -1;
 
         /// @brief Pointer to the backbuffer of the frame.
         /// The pointer value will be invalidated after each present.
-        const Backbuffer * backbuffer;
+        const Backbuffer * _backbuffer = nullptr;
 
         /// @brief The semaphore that is signaled when the last present of the current backbuffer image is done.
         /// The first rendering submission for current frame should wait for this semaphore.
-        vk::Semaphore imageAvailable;
-
-        /// @brief The semaphore that present() call uses to ensure presenting happens after all rendering is done.
-        /// !!! IMPORTANT !!! : It is caller's responsibility to ensure that this semaphore is signaled and only signaled by the last rendering
-        /// submission of the frame. Failing to signal this semaphore will cause present() to wait forever. On the other hand, signaling this
-        /// semaphore too early could cause present() showing partially rendered frame.
-        vk::Semaphore renderFinished;
+        vk::Semaphore _imageAvailable;
     };
 
     /// @brief Parameters to begin the built-in render pass of the swapchain.
@@ -2276,7 +2315,7 @@ public:
         /// This is for the cmdBeginRenderPass() method insert proper barriers to transition the image to the desired layout for the render pass.
         /// If the back buffer is already in vk::ImageLayout::eColorAttachmentOptimal layout, then no barrier will be inserted.
         /// When built-in render pass ends, the back buffer image will be automatically transitioned into status suitable for present().
-        BackbufferStatus backbufferStatus = {vk::ImageLayout::ePresentSrcKHR, vk::AccessFlagBits::eMemoryRead, vk::PipelineStageFlagBits::eBottomOfPipe};
+        // BackbufferStatus backbufferStatus = {vk::ImageLayout::ePresentSrcKHR, vk::AccessFlagBits::eMemoryRead, vk::PipelineStageFlagBits::eBottomOfPipe};
 
         BeginRenderPassParameters & setClearColorF(vk::ArrayProxy<const float> color) {
             clearColor.setFloat32({color.size() > 0 ? color.data()[0] : 0.f, color.size() > 1 ? color.data()[1] : 0.f, color.size() > 2 ? color.data()[2] : 0.f,
@@ -2292,10 +2331,28 @@ public:
 
     /// @brief Specify parameters to call present().
     struct PresentParameters {
+
+        PresentParameters(vk::ImageLayout backbufferLayuout, vk::AccessFlags backbufferAccessFlags) {
+            backbufferStatus = {backbufferLayuout, backbufferAccessFlags, vk::PipelineStageFlagBits::eBottomOfPipe};
+        }
+
+        PresentParameters(const BackbufferStatus & backbufferStatus_): backbufferStatus(backbufferStatus_) {}
+
         /// @brief Specify the current status of the back buffer image when calling present().
         /// The present() function will insert proper barrier to transit the current back buffer image into VK_IMAGE_LAYOUT_PRESENT_SRC_KHR layouy.
         /// If the back buffer image is already in VK_IMAGE_LAYOUT_PRESENT_SRC_KHR layout, then no barrier will be inserted.
-        BackbufferStatus backbufferStatus = {vk::ImageLayout::ePresentSrcKHR, vk::AccessFlagBits::eMemoryRead, vk::PipelineStageFlagBits::eBottomOfPipe};
+        BackbufferStatus backbufferStatus;
+
+        /// @brief Optional list of semaphores that present() call uses to ensure presenting happens after all rendering of the frame is done.
+        /// !!! IMPORTANT !!! : If not empty, caller MUST ensure that all semaphores in the list are signaled by th end of the frame rendering.
+        /// Failing to do so will cause present() to wait forever. On the other hand, signaling these
+        /// semaphores too early could cause present() showing partially rendered frame.
+        vk::ArrayProxy<const vk::Semaphore> renderFinished = {};
+
+        PresentParameters & setRenderFinished(vk::ArrayProxy<const vk::Semaphore> renderFinished_) {
+            renderFinished = renderFinished_;
+            return *this;
+        }
     };
 
     Swapchain(const ConstructParameters &);
@@ -2319,22 +2376,22 @@ public:
 
     /// @brief Begin a new rendering frame. Must be called in pair with present().
     /// Behavior is undefined if calling beginFrame() more than once w/o calling present() in between.
-    /// \returns The pointer to the current frame structure, or null if failed.
+    /// \returns The pointer to the next frame for rendering. Or nullptr if failed.
     const Frame * beginFrame();
 
     /// @brief Present the current frame. Must be called in pair with beginFrame(). Behavior is undefined, if calling present() more than once
     /// w/o calling beginFrame() in between.
     /// This method also invalidated the frame pointer returned by beginFrame(). Accessing the frame structure outside of scope of beginFrame() and
     /// present() is prohibited and could cause undefined behavior.
-    void present(const PresentParameters &);
+    BackbufferStatus present(const PresentParameters &);
 
     /// @brief Begin a new built-in render pass. Can only be called between beginFrame() and present().
     void cmdBeginBuiltInRenderPass(vk::CommandBuffer, const BeginRenderPassParameters &);
 
-    /// @brief End the built-in render pass.
+    /// @brief End the built-in render pass. Returns the
     /// After built-in render pass ends, the back buffer image will be automatically transitioned into status suitable for present(). You can check the
     /// actual value of the status via currentFrame().backbuffer->status.
-    void cmdEndBuiltInRenderPass(vk::CommandBuffer);
+    BackbufferStatus cmdEndBuiltInRenderPass(vk::CommandBuffer);
 
 private:
     class Impl;
@@ -2360,29 +2417,6 @@ struct StructureChain {
         return (T *) buffer.data();
     }
 };
-
-// ---------------------------------------------------------------------------------------------------------------------
-// Misc. classes for future use.
-
-// this is name space for experimental features. It is not part of the public API.
-namespace experimental {
-
-class RenderLoop : public Root {
-public:
-    struct ConstructParameters : public Root::ConstructParameters {
-        uint32_t maxPendingGPUFrames = 1;
-    };
-
-    RenderLoop(const ConstructParameters &);
-
-    void run();
-
-private:
-    class Impl;
-    Impl * _impl = nullptr;
-};
-
-} // namespace experimental
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// \def Device A wrapper class for VkDevice
@@ -2413,10 +2447,10 @@ public:
         /// Basic device feature list defined by Vulkan 1.0
         vk::PhysicalDeviceFeatures features1 {};
 
-        /// Extensible device feature list defined Vulkan 1.1
+        /// Extensible device feature list defined by Vulkan 1.1 and above
         std::vector<StructureChain> features2 {};
 
-        /// Pointer of an already-built feature chain. If not empty, this will be attached after feature1 and feature2.
+        /// Pointer of an already-built feature chain. If not empty, this will be attached after features1 and features2.
         void * features3 = nullptr;
 
         /// Set to true to create VMA allocator and store in the GlobalInfo::vmaAllocator field.
@@ -2606,6 +2640,28 @@ private:
     vk::Instance               _instance {};
     vk::DebugReportCallbackEXT _debugReport {};
 };
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Experimental classes for prototyping & unstable features. It is not part of the public API. Use at your own risk.
+
+namespace experimental {
+
+class RenderLoop : public Root {
+public:
+    struct ConstructParameters : public Root::ConstructParameters {
+        uint32_t maxPendingGPUFrames = 1;
+    };
+
+    RenderLoop(const ConstructParameters &);
+
+    void run();
+
+private:
+    class Impl;
+    Impl * _impl = nullptr;
+};
+
+} // namespace experimental
 
 #ifdef _MSC_VER
 #pragma warning(pop)
