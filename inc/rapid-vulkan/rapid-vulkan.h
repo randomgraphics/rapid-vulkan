@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identifies the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 27
+#define RAPID_VULKAN_HEADER_REVISION 28
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -80,15 +80,6 @@ SOFTWARE.
 /// \param message The message to log. The type is const char *.
 #ifndef RAPID_VULKAN_LOG
 #define RAPID_VULKAN_LOG(severity, prefix, message) fprintf((severity) < RAPID_VULKAN_NAMESPACE::LogSeverity::INFO ? stderr : stdout, "%s%s\n", prefix, message)
-#endif
-
-/// \def RAPID_VULKAN_BACKTRACE
-/// Define custom function to retrieve current call stack and store in std::string.
-/// This macro is called when rapid-vulkan encounters critical error, to help
-/// quickly identify the source of the error. The default implementation does
-/// nothing but return empty string.
-#ifndef RAPID_VULKAN_BACKTRACE
-#define RAPID_VULKAN_BACKTRACE() std::string("You have to define RAPID_VULKAN_BACKTRACE to retrieve current call stack.")
 #endif
 
 /// \def RAPID_VULKAN_ASSERT
@@ -406,6 +397,9 @@ format(const char * format, ...) {
 // ---------------------------------------------------------------------------------------------------------------------
 /// Overload of format() method for empty parameter list.
 inline std::string format() { return ""s; }
+
+/// @brief Convert a Vulkan format to a string.
+const char * vkFormat2String(vk::Format format);
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Clamp a range of [offset, offset + length) into range of [0, capacity)
