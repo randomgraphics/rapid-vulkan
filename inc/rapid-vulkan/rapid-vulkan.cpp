@@ -3026,7 +3026,7 @@ public:
 
     const Frame * beginFrame() {
         // make sure frame is ended.
-        RVI_REQUIRE(ENDED == _frameStatus);
+        RVI_REQUIRE(ENDED == _frameStatus, "Frame is not ended. Current frame status: %d", (int)_frameStatus);
 
         auto & frame = currentFrame();
 
