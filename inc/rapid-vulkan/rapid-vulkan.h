@@ -1650,6 +1650,8 @@ public:
     struct ConstructParameters : public Root::ConstructParameters {
         vk::RenderPass                                     pass {};
         uint32_t                                           subpass {};
+        std::vector<vk::Format>                            dynamicRenderingColorFormats {}; ///< non-empty => use dynamic rendering (ignore pass)
+        vk::Format                                         dynamicRenderingDepthFormat {vk::Format::eUndefined};
         const Shader *                                     vs {}; ///< vertex shasder. can't be null.
         const Shader *                                     fs {}; ///< fragment shader. can be null.
         std::vector<vk::VertexInputAttributeDescription>   va {};
@@ -1675,6 +1677,22 @@ public:
         ConstructParameters & setRenderPass(vk::RenderPass pass_, size_t sub = 0) {
             pass    = pass_;
             subpass = (uint32_t) sub;
+            return *this;
+        }
+
+        /// @brief Use dynamic rendering (VK_KHR_dynamic_rendering). When set, pass/subpass are ignored; pipeline is created with VkPipelineRenderingCreateInfo.
+        /// @param colorFormats Color attachment format(s). Must be non-empty.
+        /// @param depthFormat Optional depth attachment format (eUndefined for no depth).
+        ConstructParameters & setDynamicRendering(vk::ArrayProxy<const vk::Format> colorFormats, vk::Format depthFormat = vk::Format::eUndefined) {
+            dynamicRenderingColorFormats.assign(colorFormats.begin(), colorFormats.end());
+            dynamicRenderingDepthFormat = depthFormat;
+            return *this;
+        }
+
+        /// @brief Single color format overload for setDynamicRendering.
+        ConstructParameters & setDynamicRendering(vk::Format colorFormat, vk::Format depthFormat = vk::Format::eUndefined) {
+            dynamicRenderingColorFormats.assign(1, colorFormat);
+            dynamicRenderingDepthFormat = depthFormat;
             return *this;
         }
 

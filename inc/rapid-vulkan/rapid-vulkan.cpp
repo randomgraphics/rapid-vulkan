@@ -1692,11 +1692,22 @@ GraphicsPipeline::GraphicsPipeline(const ConstructParameters & params): Pipeline
     blend.blendConstants = params.blendConstants;
 
     // setup the create info
-    auto ci = vk::GraphicsPipelineCreateInfo({}, (uint32_t) shaderStages.size(), shaderStages.data(), &vertex, &params.ia, &params.tess, &viewport,
-                                             &params.rast, &params.msaa, &params.depth, &blend, &dynamicCI, _impl->layout().handle(), params.pass,
-                                             params.subpass, params.baseHandle, params.baseIndex);
+    vk::PipelineRenderingCreateInfo renderingInfo;
+    const bool useDynamicRendering = !params.dynamicRenderingColorFormats.empty();
+    if (useDynamicRendering) {
+        renderingInfo.setColorAttachmentFormats(params.dynamicRenderingColorFormats);
+        if (params.dynamicRenderingDepthFormat != vk::Format::eUndefined)
+            renderingInfo.setDepthAttachmentFormat(params.dynamicRenderingDepthFormat);
+    }
 
-    // create the shader.
+    auto ci = vk::GraphicsPipelineCreateInfo({}, (uint32_t) shaderStages.size(), shaderStages.data(), &vertex, &params.ia, &params.tess, &viewport,
+                                             &params.rast, &params.msaa, &params.depth, &blend, &dynamicCI, _impl->layout().handle(),
+                                             useDynamicRendering ? vk::RenderPass {} : params.pass,
+                                             useDynamicRendering ? 0u : params.subpass,
+                                             params.baseHandle, params.baseIndex);
+    if (useDynamicRendering) ci.setPNext(&renderingInfo);
+
+    // create the pipeline
     _impl->setHandle(gi->device.createGraphicsPipeline(nullptr, ci, gi->allocator).value, name());
 }
 
