@@ -3374,7 +3374,10 @@ private:
         // Determine image count. Added 1 to minimal account to allow at least one GPU frame in flight.
         if (0 == _cp.maxFramesInFlight) _cp.maxFramesInFlight = 1;
         auto desiredImageCount = (uint32_t) (_cp.maxFramesInFlight + 1);
-        desiredImageCount      = std::min(std::max(desiredImageCount, surfaceCaps.minImageCount), surfaceCaps.maxImageCount);
+        desiredImageCount      = std::max(desiredImageCount, surfaceCaps.minImageCount);
+        if (surfaceCaps.maxImageCount > 0) {
+            desiredImageCount = std::min(desiredImageCount, surfaceCaps.maxImageCount);
+        }
 
         // Select an supported alpha composite flag
         vk::CompositeAlphaFlagBitsKHR compositeAlpha;
