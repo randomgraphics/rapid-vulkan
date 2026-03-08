@@ -2371,6 +2371,8 @@ public:
 
     ~Swapchain();
 
+    const ConstructParameters & cp() const;
+
     vk::RenderPass renderPass() const;
 
     CommandQueue & graphics() const;

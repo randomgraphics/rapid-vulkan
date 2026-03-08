@@ -2999,6 +2999,8 @@ public:
         _presentQueue = vk::Queue {};
     }
 
+    const ConstructParameters & cp() const { return _cp; }
+
     const RenderPass & renderPass() const { return *_renderPass; }
 
     CommandQueue & graphics() const { return *_graphicsQueue; }
@@ -3545,6 +3547,7 @@ Swapchain::~Swapchain() {
     delete _impl;
     _impl = nullptr;
 }
+auto Swapchain::cp() const -> const ConstructParameters & { return _impl->cp(); }
 auto Swapchain::renderPass() const -> vk::RenderPass { return _impl->renderPass().handle(); }
 auto Swapchain::graphics() const -> CommandQueue & { return _impl->graphics(); }
 void Swapchain::cmdBeginBuiltInRenderPass(vk::CommandBuffer cb, const BeginRenderPassParameters & bp) { return _impl->cmdBeginBuiltInRenderPass(cb, bp); }
