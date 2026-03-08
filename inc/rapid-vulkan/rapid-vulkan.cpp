@@ -1395,9 +1395,9 @@ static PipelineReflection convertRefl(std::map<uint32_t, MergedDescriptorSet> & 
 
 static void convertVertexInputs(PipelineReflection & refl, vk::ArrayProxy<SpvReflectInterfaceVariable *> vertexInputs) {
     for (auto i : vertexInputs) {
-        // TODO: a better way is check builtIn flag instead of name.
-        auto name = std::string(i->name ? i->name : "");
-        if (name.empty() ||name.substr(0, 3) == "gl_") continue; // skip OpenGL's reserved inputs.
+        // ignore built-in attributes.
+        if (-1 != i->built_in) continue;
+        auto name                = std::string(i->name ? i->name : "<unnamed>");
         refl.vertex[i->location] = {(vk::Format) i->format, name};
     }
 }
@@ -1694,17 +1694,15 @@ GraphicsPipeline::GraphicsPipeline(const ConstructParameters & params): Pipeline
 
     // setup the create info
     vk::PipelineRenderingCreateInfo renderingInfo;
-    const bool useDynamicRendering = !params.dynamicRenderingColorFormats.empty();
+    const bool                      useDynamicRendering = !params.dynamicRenderingColorFormats.empty();
     if (useDynamicRendering) {
         renderingInfo.setColorAttachmentFormats(params.dynamicRenderingColorFormats);
-        if (params.dynamicRenderingDepthFormat != vk::Format::eUndefined)
-            renderingInfo.setDepthAttachmentFormat(params.dynamicRenderingDepthFormat);
+        if (params.dynamicRenderingDepthFormat != vk::Format::eUndefined) renderingInfo.setDepthAttachmentFormat(params.dynamicRenderingDepthFormat);
     }
 
     auto ci = vk::GraphicsPipelineCreateInfo({}, (uint32_t) shaderStages.size(), shaderStages.data(), &vertex, &params.ia, &params.tess, &viewport,
                                              &params.rast, &params.msaa, &params.depth, &blend, &dynamicCI, _impl->layout().handle(),
-                                             useDynamicRendering ? vk::RenderPass {} : params.pass,
-                                             useDynamicRendering ? 0u : params.subpass,
+                                             useDynamicRendering ? vk::RenderPass {} : params.pass, useDynamicRendering ? 0u : params.subpass,
                                              params.baseHandle, params.baseIndex);
     if (useDynamicRendering) ci.setPNext(&renderingInfo);
 
@@ -3038,7 +3036,7 @@ public:
 
     const Frame * beginFrame() {
         // make sure frame is ended.
-        RVI_REQUIRE(ENDED == _frameStatus, "Frame is not ended. Current frame status: %d", (int)_frameStatus);
+        RVI_REQUIRE(ENDED == _frameStatus, "Frame is not ended. Current frame status: %d", (int) _frameStatus);
 
         auto & frame = currentFrame();
 
@@ -3387,9 +3385,7 @@ private:
         if (0 == _cp.maxFramesInFlight) _cp.maxFramesInFlight = 1;
         auto desiredImageCount = (uint32_t) (_cp.maxFramesInFlight + 1);
         desiredImageCount      = std::max(desiredImageCount, surfaceCaps.minImageCount);
-        if (surfaceCaps.maxImageCount > 0) {
-            desiredImageCount = std::min(desiredImageCount, surfaceCaps.maxImageCount);
-        }
+        if (surfaceCaps.maxImageCount > 0) { desiredImageCount = std::min(desiredImageCount, surfaceCaps.maxImageCount); }
 
         // Select an supported alpha composite flag
         vk::CompositeAlphaFlagBitsKHR compositeAlpha;
