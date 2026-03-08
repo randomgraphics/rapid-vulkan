@@ -1395,8 +1395,9 @@ static PipelineReflection convertRefl(std::map<uint32_t, MergedDescriptorSet> & 
 
 static void convertVertexInputs(PipelineReflection & refl, vk::ArrayProxy<SpvReflectInterfaceVariable *> vertexInputs) {
     for (auto i : vertexInputs) {
+        // TODO: a better way is check builtIn flag instead of name.
         auto name = std::string(i->name ? i->name : "");
-        if (name.substr(0, 3) == "gl_") continue; // skip OpenGL's reserved inputs.
+        if (name.empty() ||name.substr(0, 3) == "gl_") continue; // skip OpenGL's reserved inputs.
         refl.vertex[i->location] = {(vk::Format) i->format, name};
     }
 }
