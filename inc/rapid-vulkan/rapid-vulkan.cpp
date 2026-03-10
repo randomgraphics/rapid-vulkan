@@ -1395,8 +1395,7 @@ static PipelineReflection convertRefl(std::map<uint32_t, MergedDescriptorSet> & 
 
 static void convertVertexInputs(PipelineReflection & refl, vk::ArrayProxy<SpvReflectInterfaceVariable *> vertexInputs) {
     for (auto i : vertexInputs) {
-        // ignore built-in attributes.
-        if (SpvBuiltInMax == i->built_in) continue;
+        if ((int)i->built_in >= 0) continue; // ignore all built-in attributes.
         auto name                = std::string(i->name ? i->name : "<unnamed>");
         refl.vertex[i->location] = {(vk::Format) i->format, name};
     }
