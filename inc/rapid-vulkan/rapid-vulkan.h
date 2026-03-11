@@ -2074,6 +2074,12 @@ public:
         return *this;
     }
 
+    CommandBuffer & operator=(CommandBuffer && o) {
+        _impl   = o._impl;
+        o._impl = nullptr;
+        return *this;
+    }
+
     bool operator<(const CommandBuffer & o) const { return _impl < o._impl; }
 
     bool operator==(const CommandBuffer & o) const { return _impl == o._impl; }

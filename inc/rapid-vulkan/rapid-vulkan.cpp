@@ -1395,7 +1395,7 @@ static PipelineReflection convertRefl(std::map<uint32_t, MergedDescriptorSet> & 
 
 static void convertVertexInputs(PipelineReflection & refl, vk::ArrayProxy<SpvReflectInterfaceVariable *> vertexInputs) {
     for (auto i : vertexInputs) {
-        if ((int)i->built_in >= 0) continue; // ignore all built-in attributes.
+        if ((int) i->built_in >= 0) continue; // ignore all built-in attributes.
         auto name                = std::string(i->name ? i->name : "<unnamed>");
         refl.vertex[i->location] = {(vk::Format) i->format, name};
     }
@@ -3209,11 +3209,6 @@ private:
     }
 
     void recoverSwapchainOnPresentError() {
-        // RVI_LOGD("Waiting for graphics queue to idle...");
-        _graphicsQueue->waitIdle(); // make sure frame rendering is done.
-        _presentQueue.waitIdle();   // also need to make sure present is done.
-        // RVI_LOGD("Graphics queue is idle.");
-
         // verify surface caps.
         auto surfaceCaps = _cp.gi->physical.getSurfaceCapabilitiesKHR(_cp.surface);
         if (0 == surfaceCaps.maxImageExtent.width || 0 == surfaceCaps.maxImageExtent.height) {
@@ -3343,6 +3338,10 @@ private:
             frame.waitForFrameEnd();
             frame.setBackbuffer(nullptr); // clear old backbuffer pointer
         }
+
+        // Make sure both queues are idle
+        if (_graphicsQueue) _graphicsQueue->waitIdle();
+        if (_presentQueue) _presentQueue.waitIdle();
 
         // destroy swapchain resources
         for (auto & bb : _backbuffers) {
