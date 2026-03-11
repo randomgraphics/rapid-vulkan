@@ -1,4 +1,5 @@
 /build*/
 .vscode/
 .cache/
+/tmp/
 __pycache__/

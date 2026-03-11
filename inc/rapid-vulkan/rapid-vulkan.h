@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identifies the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 27
+#define RAPID_VULKAN_HEADER_REVISION 28
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -80,15 +80,6 @@ SOFTWARE.
 /// \param message The message to log. The type is const char *.
 #ifndef RAPID_VULKAN_LOG
 #define RAPID_VULKAN_LOG(severity, prefix, message) fprintf((severity) < RAPID_VULKAN_NAMESPACE::LogSeverity::INFO ? stderr : stdout, "%s%s\n", prefix, message)
-#endif
-
-/// \def RAPID_VULKAN_BACKTRACE
-/// Define custom function to retrieve current call stack and store in std::string.
-/// This macro is called when rapid-vulkan encounters critical error, to help
-/// quickly identify the source of the error. The default implementation does
-/// nothing but return empty string.
-#ifndef RAPID_VULKAN_BACKTRACE
-#define RAPID_VULKAN_BACKTRACE() std::string("You have to define RAPID_VULKAN_BACKTRACE to retrieve current call stack.")
 #endif
 
 /// \def RAPID_VULKAN_ASSERT
@@ -406,6 +397,9 @@ format(const char * format, ...) {
 // ---------------------------------------------------------------------------------------------------------------------
 /// Overload of format() method for empty parameter list.
 inline std::string format() { return ""s; }
+
+/// @brief Convert a Vulkan format to a string.
+const char * vkFormat2String(vk::Format format);
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Clamp a range of [offset, offset + length) into range of [0, capacity)
@@ -1468,19 +1462,19 @@ public:
 
         template<typename T, size_t C>
         ConstructParameters & setSpirv(const std::array<T, C> & data) {
-            spirv = vk::ArrayProxy<const uint32_t>(C * sizeof(T) / sizeof(uint32_t), (const uint32_t *) data.data());
+            spirv = vk::ArrayProxy<const uint32_t>((uint32_t) (C * sizeof(T) / sizeof(uint32_t)), (const uint32_t *) data.data());
             return *this;
         }
 
         template<typename T, size_t C>
         ConstructParameters & setSpirv(const T (&data)[C]) {
-            spirv = vk::ArrayProxy<const uint32_t>(C * sizeof(T) / sizeof(uint32_t), (const uint32_t *) data);
+            spirv = vk::ArrayProxy<const uint32_t>((uint32_t) (C * sizeof(T) / sizeof(uint32_t)), (const uint32_t *) data);
             return *this;
         }
 
         template<typename T>
         ConstructParameters & setSpirv(size_t countInUnitOfT, const T * data) {
-            spirv = vk::ArrayProxy<const uint32_t>(countInUnitOfT * sizeof(T) / sizeof(uint32_t), (const uint32_t *) data);
+            spirv = vk::ArrayProxy<const uint32_t>((uint32_t) (countInUnitOfT * sizeof(T) / sizeof(uint32_t)), (const uint32_t *) data);
             return *this;
         }
 
@@ -1656,6 +1650,8 @@ public:
     struct ConstructParameters : public Root::ConstructParameters {
         vk::RenderPass                                     pass {};
         uint32_t                                           subpass {};
+        std::vector<vk::Format>                            dynamicRenderingColorFormats {}; ///< non-empty => use dynamic rendering (ignore pass)
+        vk::Format                                         dynamicRenderingDepthFormat {vk::Format::eUndefined};
         const Shader *                                     vs {}; ///< vertex shasder. can't be null.
         const Shader *                                     fs {}; ///< fragment shader. can be null.
         std::vector<vk::VertexInputAttributeDescription>   va {};
@@ -1681,6 +1677,22 @@ public:
         ConstructParameters & setRenderPass(vk::RenderPass pass_, size_t sub = 0) {
             pass    = pass_;
             subpass = (uint32_t) sub;
+            return *this;
+        }
+
+        /// @brief Use dynamic rendering (VK_KHR_dynamic_rendering). When set, pass/subpass are ignored; pipeline is created with VkPipelineRenderingCreateInfo.
+        /// @param colorFormats Color attachment format(s). Must be non-empty.
+        /// @param depthFormat Optional depth attachment format (eUndefined for no depth).
+        ConstructParameters & setDynamicRendering(vk::ArrayProxy<const vk::Format> colorFormats, vk::Format depthFormat = vk::Format::eUndefined) {
+            dynamicRenderingColorFormats.assign(colorFormats.begin(), colorFormats.end());
+            dynamicRenderingDepthFormat = depthFormat;
+            return *this;
+        }
+
+        /// @brief Single color format overload for setDynamicRendering.
+        ConstructParameters & setDynamicRendering(vk::Format colorFormat, vk::Format depthFormat = vk::Format::eUndefined) {
+            dynamicRenderingColorFormats.assign(1, colorFormat);
+            dynamicRenderingDepthFormat = depthFormat;
             return *this;
         }
 
@@ -2062,6 +2074,12 @@ public:
         return *this;
     }
 
+    CommandBuffer & operator=(CommandBuffer && o) {
+        _impl   = o._impl;
+        o._impl = nullptr;
+        return *this;
+    }
+
     bool operator<(const CommandBuffer & o) const { return _impl < o._impl; }
 
     bool operator==(const CommandBuffer & o) const { return _impl == o._impl; }
@@ -2358,6 +2376,8 @@ public:
     Swapchain(const ConstructParameters &);
 
     ~Swapchain();
+
+    const ConstructParameters & cp() const;
 
     vk::RenderPass renderPass() const;
 
