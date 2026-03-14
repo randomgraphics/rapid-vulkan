@@ -1043,6 +1043,11 @@ public:
         uint32_t       queueIndex  = 0;
         vk::DeviceSize offset      = 0;                  ///< byte offset of the source buffer where the data will be read from.
         vk::DeviceSize size        = vk::DeviceSize(-1); ///< size of the data to be read, in bytes.
+        
+        /// @brief Callback to be called when the data is read.
+        /// @param data The data that was read.
+        /// @param size The size of the data that was read.
+        std::function<void(const void * data, size_t size)> callback;
 
         ReadParameters & setQueue(uint32_t family, uint32_t index) {
             queueFamily = family;
@@ -1122,7 +1127,7 @@ public:
     auto desc() const -> const Desc &;
     void cmdCopy(const CopyParameters &) const;
     auto setContent(const SetContentParameters &) -> Buffer &;
-    auto readContent(const ReadParameters &) const -> std::vector<uint8_t>;
+    auto readContent(const ReadParameters &) -> Buffer &;
     auto map(const MapParameters &) -> MappedResult;
     void unmap();
 

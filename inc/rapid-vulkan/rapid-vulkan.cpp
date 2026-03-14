@@ -326,30 +326,30 @@ public:
         }
     }
 
-    auto readContent(const ReadParameters & params) const -> std::vector<uint8_t> {
+    void readContent(const ReadParameters & params) const {
         // validate reading range.
         auto offset = params.offset;
         auto size   = params.size;
         clampRange(offset, size, _desc.size);
-        if (0 == size) return {};
+        if (0 == size) return;
 
         // Always copy buffer content to another staging buffer. This is to ensure all pending
         // work items in the queue are finished before we read the buffer content.
         // TODO: change buffer barrier to make it a copy source.
         auto staging = Buffer(Buffer::ConstructParameters {{_owner.name()}, _gi, size}.setStaging());
         auto queue   = CommandQueue({{_owner.name()}, _gi, params.queueFamily, params.queueIndex});
-        if (auto cb = queue.begin(_owner.name().c_str(), vk::CommandBufferLevel::ePrimary)) {
-            cmdCopy({cb, staging.handle(), size, 0, offset});
-            queue.wait(queue.submit({cb}));
-        } else {
-            return {};
-        }
+        auto cb      = queue.begin(_owner.name().c_str(), vk::CommandBufferLevel::ePrimary);
+        if (!cb) return;
+
+        // copy data from the source buffer to the staging buffer. wait for it to complete.
+        cmdCopy({cb, staging.handle(), size, 0, offset});
+        queue.wait(queue.submit({cb}));
 
         // read data from the staging buffer
         auto m = Map<uint8_t>(staging);
         RVI_ASSERT(0 == m.offset);
         RVI_ASSERT(m.length == size);
-        return std::vector<uint8_t>(m.data, m.data + m.length);
+        if (params.callback) params.callback(m.data, m.length);
     }
 
     auto map(const MapParameters & params) -> MappedResult {
@@ -443,7 +443,10 @@ auto Buffer::setContent(const SetContentParameters & p) -> Buffer & {
     _impl->setContent(p);
     return *this;
 }
-auto Buffer::readContent(const ReadParameters & p) const -> std::vector<uint8_t> { return _impl->readContent(p); }
+auto Buffer::readContent(const ReadParameters & p) -> Buffer & {
+    _impl->readContent(p);
+    return *this;
+}
 auto Buffer::map(const MapParameters & p) -> MappedResult { return _impl->map(p); }
 void Buffer::unmap() { return _impl->unmap(); }
 void Buffer::onNameChanged(const std::string &) { _impl->onNameChanged(); }
