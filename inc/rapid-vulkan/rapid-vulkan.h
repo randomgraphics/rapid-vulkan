@@ -1043,7 +1043,7 @@ public:
         uint32_t       queueIndex  = 0;
         vk::DeviceSize offset      = 0;                  ///< byte offset of the source buffer where the data will be read from.
         vk::DeviceSize size        = vk::DeviceSize(-1); ///< size of the data to be read, in bytes.
-        
+
         /// @brief Callback to be called when the data is read.
         /// @param data The data that was read.
         /// @param size The size of the data that was read.
