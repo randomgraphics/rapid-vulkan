@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identifies the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 28
+#define RAPID_VULKAN_HEADER_REVISION 29
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -1064,6 +1064,15 @@ public:
         }
     };
 
+    struct ReadParametersWithCallback : public ReadParameters {
+        std::function<void(const void * data, size_t size)> callback;
+
+        ReadParameters & setCallback(std::function<void(const void * data, size_t size)> callback_) {
+            this->callback = callback_;
+            return *this;
+        }
+    };
+
     struct MapParameters {
         vk::DeviceSize offset = 0;                  ///< the offset of the mapped area, in bytes.
         vk::DeviceSize size   = vk::DeviceSize(-1); ///< the size of the mapped area, in bytes.
@@ -1127,7 +1136,8 @@ public:
     auto desc() const -> const Desc &;
     void cmdCopy(const CopyParameters &) const;
     auto setContent(const SetContentParameters &) -> Buffer &;
-    auto readContent(const ReadParameters &) -> Buffer &;
+    auto readContent(const ReadParameters &) -> std::vector<uint8_t>;
+    auto readContentWithCallback(const ReadParametersWithCallback &) -> Buffer &;
     auto map(const MapParameters &) -> MappedResult;
     void unmap();
 
@@ -1919,15 +1929,32 @@ public:
         std::vector<uint8_t> value {};
     };
 
-    const Ref<const Pipeline>                        pipeline; ///< Pipeline used by the draw pack. It is immutable.
-    std::vector<std::vector<vk::WriteDescriptorSet>> descriptors;
-    Dependencies                                     dependencies;
-    std::vector<ConstantArgument>                    constants;
-    std::vector<Ref<Buffer>>                         vertexBuffers;
-    std::vector<vk::DeviceSize>                      vertexOffsets;
-    Ref<Buffer>                                      indexBuffer;                          ///< Index buffer. Null, if the draw is non-indexed.
-    vk::DeviceSize                                   indexOffset = 0;                      ///< Offset into the index buffer. Ignored for non-indexed draw.
-    vk::IndexType                                    indexType   = vk::IndexType::eUint16; ///< Type of index. Ignored for non-indexed draw.
+    struct DescriptorSetArgument {
+        std::vector<vk::WriteDescriptorSet> writes;
+        std::vector<uint32_t>               dynamicOffsets;
+
+        DescriptorSetArgument() = default;
+
+        DescriptorSetArgument(const DescriptorSetArgument & rhs): writes(rhs.writes), dynamicOffsets(rhs.dynamicOffsets) {}
+        DescriptorSetArgument & operator=(const DescriptorSetArgument & rhs) {
+            writes         = rhs.writes;
+            dynamicOffsets = rhs.dynamicOffsets;
+            return *this;
+        }
+
+        DescriptorSetArgument(DescriptorSetArgument && rhs)             = default;
+        DescriptorSetArgument & operator=(DescriptorSetArgument && rhs) = default;
+    };
+
+    const Ref<const Pipeline>          pipeline;    ///< Pipeline used by the draw pack. It is immutable.
+    std::vector<DescriptorSetArgument> descriptors; ///< indexed by set index
+    Dependencies                       dependencies;
+    std::vector<ConstantArgument>      constants;
+    std::vector<Ref<Buffer>>           vertexBuffers;
+    std::vector<vk::DeviceSize>        vertexOffsets;
+    Ref<Buffer>                        indexBuffer;                          ///< Index buffer. Null, if the draw is non-indexed.
+    vk::DeviceSize                     indexOffset = 0;                      ///< Offset into the index buffer. Ignored for non-indexed draw.
+    vk::IndexType                      indexType   = vk::IndexType::eUint16; ///< Type of index. Ignored for non-indexed draw.
 
     union {
         GraphicsPipeline::DrawParameters    draw;     ///< Draw parameters for graphics pipeline.
@@ -1993,6 +2020,12 @@ public:
 
     /// @brief Set value of buffer argument. Do nothing if the argument is not used by the pipeline.
     Drawable & b(DescriptorIdentifier id, vk::ArrayProxy<const BufferView>);
+
+    /// @brief Set value of dynamic buffer argument. Do nothing if the argument is not used by the pipeline.
+    /// @param id The identifier of the dynamic buffer argument.
+    /// @param v The array of buffer views to set.
+    /// @param dynamicOffset The dynamic offset to add to the buffer views.
+    Drawable & b(DescriptorIdentifier id, vk::ArrayProxy<const BufferView>, size_t dynamicOffset);
 
     /// @brief Set value of texture (image/sampler) argument. Do nothing if the argument is not used by the pipeline.
     Drawable & t(DescriptorIdentifier id, vk::ArrayProxy<const ImageSampler>);

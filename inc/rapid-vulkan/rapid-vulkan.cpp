@@ -68,6 +68,7 @@ SOFTWARE.
 #include <functional>
 #include <signal.h>
 #include <inttypes.h>
+#include <optional>
 
 #if RAPID_VULKAN_ENABLE_LOADER
 // implement the default dynamic dispatcher storage. Has to use this macro outside of any namespace.
@@ -326,7 +327,17 @@ public:
         }
     }
 
-    void readContent(const ReadParameters & params) const {
+    auto readContent(const ReadParameters & params) -> std::vector<uint8_t> {
+        std::vector<uint8_t>       result;
+        ReadParametersWithCallback p;
+        p.setQueue(params.queueFamily, params.queueIndex);
+        p.setRange(params.offset, params.size);
+        p.setCallback([&](const void * data, size_t size) { result.assign((const uint8_t *) data, (const uint8_t *) data + size); });
+        readContentWithCallback(p);
+        return result;
+    }
+
+    void readContentWithCallback(const ReadParametersWithCallback & params) {
         // validate reading range.
         auto offset = params.offset;
         auto size   = params.size;
@@ -443,8 +454,9 @@ auto Buffer::setContent(const SetContentParameters & p) -> Buffer & {
     _impl->setContent(p);
     return *this;
 }
-auto Buffer::readContent(const ReadParameters & p) -> Buffer & {
-    _impl->readContent(p);
+auto Buffer::readContent(const ReadParameters & p) -> std::vector<uint8_t> { return _impl->readContent(p); }
+auto Buffer::readContentWithCallback(const ReadParametersWithCallback & p) -> Buffer & {
+    _impl->readContentWithCallback(p);
     return *this;
 }
 auto Buffer::map(const MapParameters & p) -> MappedResult { return _impl->map(p); }
@@ -1788,6 +1800,14 @@ static inline bool sameDescriptorSet(const std::vector<vk::WriteDescriptorSet> &
     return true;
 }
 
+static inline bool sameDynamicOffsets(const std::vector<uint32_t> & a, const std::vector<uint32_t> & b) {
+    if (a.size() != b.size()) return false;
+    for (uint32_t i = 0; i < a.size(); ++i) {
+        if (a[i] != b[i]) return false;
+    }
+    return true;
+}
+
 void DrawPack::cmdRender(vk::CommandBuffer cb, const RenderParameters & rp) const {
     if (!pipeline) return;
 
@@ -1797,16 +1817,26 @@ void DrawPack::cmdRender(vk::CommandBuffer cb, const RenderParameters & rp) cons
     cb.bindPipeline(bp, pipeline->handle());
 
     for (uint32_t s = 0; s < descriptors.size(); ++s) {
-        auto & w = descriptors[s];
-        if (w.empty()) continue;
+        auto & currentSet = const_cast<DescriptorSetArgument &>(descriptors[s]);
+        if (currentSet.writes.empty()) continue;
 
-        // check if the descriptor set is changed or not.
-        if (rp.previous && s < rp.previous->descriptors.size() && sameDescriptorSet(rp.previous->descriptors[s], w)) continue;
+        const auto * previousSet = (rp.previous && s < rp.previous->descriptors.size()) ? &rp.previous->descriptors[s] : nullptr;
+        if (previousSet && sameDescriptorSet(previousSet->writes, currentSet.writes)) {
+            // Store the previous set in the current set. So it can be referenced by next draw pack.
+            for (uint32_t i = 0; i < currentSet.writes.size(); ++i) { currentSet.writes[i].dstSet = previousSet->writes[i].dstSet; }
 
-        auto set = rp.descriptorSetAllocator(*pipeline, s);
-        for (auto & d : w) const_cast<vk::WriteDescriptorSet &>(d).dstSet = set;
-        rp.device.updateDescriptorSets(w, {});
-        cb.bindDescriptorSets(bp, layout, s, 1, &set, 0, nullptr);
+            // Check if we need to rebind the dynamic offsets.
+            if (!sameDynamicOffsets(previousSet->dynamicOffsets, currentSet.dynamicOffsets)) {
+                auto set = currentSet.writes[0].dstSet;
+                cb.bindDescriptorSets(bp, layout, s, 1, &set, (uint32_t) currentSet.dynamicOffsets.size(), currentSet.dynamicOffsets.data());
+            }
+        } else {
+            // if descriptor set is different, the logic is very simple::create a new set, update it, then bind it.
+            auto set = rp.descriptorSetAllocator(*pipeline, s);
+            for (auto & d : currentSet.writes) d.dstSet = set;
+            rp.device.updateDescriptorSets(currentSet.writes, {});
+            cb.bindDescriptorSets(bp, layout, s, 1, &set, (uint32_t) currentSet.dynamicOffsets.size(), currentSet.dynamicOffsets.data());
+        }
     }
 
     for (const auto & c : constants) cb.pushConstants(layout, c.stages, c.offset, (uint32_t) c.value.size(), c.value.data());
@@ -1848,6 +1878,9 @@ public:
     /// @brief Set value of buffer argument. No effect, if the argument is not a buffer.
     Argument & b(vk::ArrayProxy<const BufferView>);
 
+    /// @brief Set value of dynamic buffer argument. No effect, if the argument is not a dynamic buffer.
+    Argument & b(vk::ArrayProxy<const BufferView>, size_t dynamicOffset);
+
     /// @brief Set value of texture argument. No effect, if the argument is not a image/sampler
     Argument & t(vk::ArrayProxy<const ImageSampler>);
 
@@ -1866,6 +1899,7 @@ public:
     struct BufferArgs {
         std::vector<vk::DescriptorBufferInfo> infos;
         std::vector<BufferView>               buffers;
+        std::optional<size_t>                 dynamicOffset;
 
         size_t size() const {
             RAPID_VULKAN_ASSERT(infos.size() == buffers.size());
@@ -1898,7 +1932,7 @@ public:
 
     ~Impl() {}
 
-    void b(vk::ArrayProxy<const BufferView> v) {
+    void b(vk::ArrayProxy<const BufferView> v, std::optional<size_t> dynamicOffset = {}) {
         auto sameValue = [&]() {
             auto p = std::get_if<BufferArgs>(&_value);
             if (!p) return false;
@@ -1906,7 +1940,7 @@ public:
             for (size_t i = 0; i < v.size(); ++i) {
                 if (p->buffers[i] != v.data()[i]) return false;
             }
-            return true;
+            return dynamicOffset == p->dynamicOffset;
         };
         if (sameValue()) return;
         _value      = BufferArgs();
@@ -1918,6 +1952,7 @@ public:
             args.infos[i].offset = args.buffers[i].offset;
             args.infos[i].range  = args.buffers[i].size;
         }
+        args.dynamicOffset = dynamicOffset;
         _timestamp.fetch_add(1);
     }
 
@@ -2032,6 +2067,10 @@ Argument & Argument::b(vk::ArrayProxy<const BufferView> v) {
     _impl->b(v);
     return *this;
 }
+Argument & Argument::b(vk::ArrayProxy<const BufferView> v, size_t dynamicOffset) {
+    _impl->b(v, dynamicOffset);
+    return *this;
+}
 Argument & Argument::t(vk::ArrayProxy<const ImageSampler> v) {
     _impl->t(v);
     return *this;
@@ -2058,6 +2097,11 @@ public:
 
     void set(DescriptorIdentifier id, vk::ArrayProxy<const BufferView> v) {
         _descriptors[id].b(v);
+        _dirty.descriptors = true;
+    }
+
+    void set(DescriptorIdentifier id, vk::ArrayProxy<const BufferView> v, size_t dynamicOffset) {
+        _descriptors[id].b(v, dynamicOffset);
         _dirty.descriptors = true;
     }
 
@@ -2223,11 +2267,12 @@ private:
         const auto & refl = _pipeline->reflection();
         pack.dependencies.clear();
         pack.descriptors.clear();
-        pack.descriptors.resize(refl.descriptors.size());
-        auto dep = DrawPack::Dependencies();
+        auto descriptors = std::vector<DrawPack::DescriptorSetArgument>(refl.descriptors.size());
+        auto dep         = DrawPack::Dependencies();
         for (uint32_t si = 0; si < refl.descriptors.size(); ++si) {
-            const auto & s      = refl.descriptors[si];
-            auto         writes = std::vector<vk::WriteDescriptorSet>();
+            const auto & s   = refl.descriptors[si];
+            auto &       arg = descriptors[si];
+            // auto         writes = std::vector<vk::WriteDescriptorSet>();
             for (uint32_t i = 0; i < s.size(); ++i) {
                 if (s[i].empty()) continue;
                 const auto & b = s[i].binding;
@@ -2270,6 +2315,9 @@ private:
                     RVI_ASSERT(blob->size() == buf->infos.size() * sizeof(vk::DescriptorBufferInfo));
                     dep.blobs.push_back(blob);
                     w.setDescriptorCount((uint32_t) buf->infos.size()).setPBufferInfo((vk::DescriptorBufferInfo *) blob->data());
+
+                    // Store dynamic offsets for this binding.
+                    if (buf->dynamicOffset.has_value()) { arg.dynamicOffsets.push_back((uint32_t) buf->dynamicOffset.value()); }
                 } else if (auto img = std::get_if<Argument::Impl::ImageArgs>(&value)) {
                     if (b.descriptorType == vk::DescriptorType::eSampler || b.descriptorType == vk::DescriptorType::eCombinedImageSampler) {
                         for (size_t j = 0; j < img->images.size(); ++j) {
@@ -2307,11 +2355,13 @@ private:
                 w.setDescriptorType(b.descriptorType);
                 // must set descriptor count explicitly in case that the argument has more descriptors than the binding requires.
                 if (b.descriptorCount > 0) w.setDescriptorCount(b.descriptorCount);
-                writes.push_back(w);
+
+                // add to draw pack's descriptor set argument.
+                arg.writes.push_back(std::move(w));
             }
-            pack.descriptors[si] = std::move(writes);
-            pack.dependencies    = std::move(dep);
         }
+        pack.descriptors  = std::move(descriptors);
+        pack.dependencies = std::move(dep);
         return true;
     }
 
@@ -2385,6 +2435,10 @@ auto Drawable::reset() -> Drawable & {
 }
 auto Drawable::b(DescriptorIdentifier id, vk::ArrayProxy<const BufferView> v) -> Drawable & {
     _impl->set(id, v);
+    return *this;
+}
+auto Drawable::b(DescriptorIdentifier id, vk::ArrayProxy<const BufferView> v, size_t dynamicOffset) -> Drawable & {
+    _impl->set(id, v, dynamicOffset);
     return *this;
 }
 auto Drawable::t(DescriptorIdentifier id, vk::ArrayProxy<const ImageSampler> v) -> Drawable & {
