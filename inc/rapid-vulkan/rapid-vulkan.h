@@ -1265,21 +1265,16 @@ public:
     };
 
     struct Desc {
-        vk::Image               handle         = {};
-        vk::ImageType           type           = vk::ImageType::e2D;
-        vk::Format              format         = vk::Format::eR8G8B8A8Unorm;
-        vk::Extent3D            extent         = {1, 1, 1};
-        uint32_t                mipLevels      = 1;
-        uint32_t                arrayLayers    = 1;
-        vk::SampleCountFlagBits samples        = vk::SampleCountFlagBits::e1;
-        bool                    cubeCompatible = false;
+        vk::Image               handle      = {};
+        vk::ImageType           type        = vk::ImageType::e2D;
+        vk::Format              format      = vk::Format::eR8G8B8A8Unorm;
+        vk::Extent3D            extent      = {1, 1, 1};
+        uint32_t                mipLevels   = 1;
+        uint32_t                arrayLayers = 1;
+        vk::SampleCountFlagBits samples     = vk::SampleCountFlagBits::e1;
 
-        bool isCube() const { return vk::ImageType::e2D == type && extent.width == extent.height && 1 == extent.depth && 6 == arrayLayers && cubeCompatible; }
-
-        bool isCubeOrCubeArray() const {
-            return vk::ImageType::e2D == type && extent.width == extent.height && 1 == extent.depth && 6 <= arrayLayers && 0 == (arrayLayers % 6) &&
-                   cubeCompatible;
-        }
+        /// If the image, or part of it, can be viewed as a cube map.
+        bool isCubeCompatible() const { return vk::ImageType::e2D == type && extent.width == extent.height && 1 == extent.depth && arrayLayers >= 6; }
     };
 
     struct ImportParameters : Root::ConstructParameters {
