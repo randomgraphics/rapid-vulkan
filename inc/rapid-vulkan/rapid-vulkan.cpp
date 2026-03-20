@@ -770,14 +770,20 @@ public:
         onNameChanged();
 
         // store image description
-        _desc.handle         = _handle;
-        _desc.type           = cp.info.imageType;
-        _desc.format         = cp.info.format;
-        _desc.extent         = cp.info.extent;
-        _desc.mipLevels      = cp.info.mipLevels;
-        _desc.arrayLayers    = cp.info.arrayLayers;
-        _desc.samples        = cp.info.samples;
-        _desc.cubeCompatible = !!(cp.info.flags & vk::ImageCreateFlagBits::eCubeCompatible);
+        _desc.handle      = _handle;
+        _desc.type        = cp.info.imageType;
+        _desc.format      = cp.info.format;
+        _desc.extent      = cp.info.extent;
+        _desc.mipLevels   = cp.info.mipLevels;
+        _desc.arrayLayers = cp.info.arrayLayers;
+        _desc.samples     = cp.info.samples;
+
+        // determine cube compatible flag
+        if (_desc.isCubeCompatible()) {
+            cp.info.flags |= vk::ImageCreateFlagBits::eCubeCompatible;
+        } else {
+            cp.info.flags &= ~vk::ImageCreateFlagBits::eCubeCompatible;
+        }
 
         // // create a default image view that covers the whole image
         // auto aspect          = determineImageAspect(ci.aspect, ci.format);
@@ -819,7 +825,13 @@ public:
     vk::ImageView getView(GetViewParameters p) const {
         if (p.format == vk::Format::eUndefined) p.format = _desc.format;
         p.range.aspectMask = determineImageAspect(p.format, p.range.aspectMask);
-        p.type             = determineViewType(p.type, p.range);
+        clampRange(p.range.baseMipLevel, p.range.levelCount, _desc.mipLevels);
+        clampRange(p.range.baseArrayLayer, p.range.layerCount, _desc.arrayLayers);
+        if (0 == p.range.layerCount || 0 == p.range.levelCount) {
+            RVI_LOGE("Image::getView: subresource range is out of bounds");
+            return {};
+        }
+        p.type = determineViewType(p.type, p.range);
         if ((int) p.type < 0) return {};
         auto & view = _views[p];
         if (!view) view = _gi->device.createImageView(vk::ImageViewCreateInfo({}, _desc.handle, p.type, p.format).setSubresourceRange(p.range), _gi->allocator);
@@ -993,12 +1005,14 @@ private:
             else
                 return vk::ImageViewType::e1D;
         case vk::ImageType::e2D: {
-            bool isArray = (_desc.arrayLayers > 1 && range.layerCount > 1);
-            bool isCube  = _desc.isCubeOrCubeArray() && (0 == range.baseArrayLayer && range.layerCount == VK_REMAINING_ARRAY_LAYERS);
-            if (isArray)
-                return isCube ? vk::ImageViewType::eCubeArray : vk::ImageViewType::e2DArray;
+            if (_desc.isCubeCompatible() && (6 == range.layerCount))
+                return vk::ImageViewType::eCube;
+            else if (_desc.isCubeCompatible() && (range.layerCount > 6) && (0 == (range.layerCount % 6)))
+                return vk::ImageViewType::eCubeArray;
+            else if (range.layerCount > 1)
+                return vk::ImageViewType::e2DArray;
             else
-                return isCube ? vk::ImageViewType::eCube : vk::ImageViewType::e2D;
+                return vk::ImageViewType::e2D;
         }
         case vk::ImageType::e3D:
         default:
