@@ -293,6 +293,14 @@ SOFTWARE.
 #endif
 #endif
 
+#if RVI_CXX_STANDARD >= 20
+#define RVI_LIKELY   [[likely]]
+#define RVI_UNLIKELY [[unlikely]]
+#else
+#define RVI_LIKELY
+#define RVI_UNLIKELY
+#endif
+
 namespace RAPID_VULKAN_NAMESPACE {
 
 #ifdef _MSC_VER
@@ -432,9 +440,9 @@ inline T clampRange2(T & srcOffset, T & dstOffset, T & length, const T & srcCapa
 template<typename T>
 inline void setVkHandleName(vk::Device device, T handle, const char * name) {
 #if VULKAN_HPP_DISPATCH_LOADER_DYNAMIC == 1
-    if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkSetDebugUtilsObjectNameEXT) [[unlikely]] return;
+    if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkSetDebugUtilsObjectNameEXT) RVI_UNLIKELY return;
 #endif
-    if (!device || !handle || !name) [[unlikely]] return;
+    if (!device || !handle || !name) RVI_UNLIKELY return;
 
     union HandleAlias {
         uint64_t u64 {};
@@ -458,9 +466,9 @@ inline void setVkHandleName(vk::Device device, T handle, std::string name) {
 /// @brief Helper function to insert a begin label to command buffer
 inline bool cmdBeginDebugLabel(vk::CommandBuffer cmd, const char * name, const std::array<float, 4> & color = {1, 1, 1, 1}) {
 #if VULKAN_HPP_DISPATCH_LOADER_DYNAMIC == 1
-    if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdBeginDebugUtilsLabelEXT) [[unlikely]] return false;
+    if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdBeginDebugUtilsLabelEXT) RVI_UNLIKELY return false;
 #endif
-    if (!cmd || !name) [[unlikely]] return false;
+    if (!cmd || !name) RVI_UNLIKELY return false;
     cmd.beginDebugUtilsLabelEXT(vk::DebugUtilsLabelEXT().setPLabelName(name).setColor(color));
     return true;
 }
@@ -469,15 +477,16 @@ inline bool cmdBeginDebugLabel(vk::CommandBuffer cmd, const char * name, const s
 /// Helper function to insert a end label to command buffer
 inline void cmdEndDebugLabel(vk::CommandBuffer cmd) {
 #if VULKAN_HPP_DISPATCH_LOADER_DYNAMIC == 1
-    if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdEndDebugUtilsLabelEXT) return;
+    if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdEndDebugUtilsLabelEXT) RVI_UNLIKELY return;
 #endif
-    if (cmd) [[likely]] cmd.endDebugUtilsLabelEXT();
+    if (cmd) RVI_LIKELY cmd.endDebugUtilsLabelEXT();
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// Helper class to automatically insert a begin and end label to command buffer
 class CmdDebugLabel {
     vk::CommandBuffer _cmd;
+
 public:
     CmdDebugLabel(vk::CommandBuffer cmd, const char * name, const std::array<float, 4> & color = {1, 1, 1, 1}): _cmd(cmd) {
         cmdBeginDebugLabel(_cmd, name, color);
@@ -1420,7 +1429,6 @@ public:
 
 protected:
     void onNameChanged(const std::string &) override;
-
 
 private:
     class Impl;

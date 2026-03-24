@@ -909,11 +909,11 @@ public:
         auto c = q.begin(_owner.name().data());
         if (c) {
             CmdDebugLabel label(c, ("set image content of " + _owner.name()).c_str());
-            auto r = vk::ImageSubresourceRange(aspect, params.mipLevel, 1, params.arrayLayer, 1);
+            auto          r = vk::ImageSubresourceRange(aspect, params.mipLevel, 1, params.arrayLayer, 1);
             Barrier {}
                 .s(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer)
                 .i(_desc.handle, vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead,
-                    vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, r)
+                   vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, r)
                 .cmdWrite(c);
             c.handle().copyBufferToImage(staging, _desc.handle, vk::ImageLayout::eTransferDstOptimal, {copyRegion});
             label.end();
