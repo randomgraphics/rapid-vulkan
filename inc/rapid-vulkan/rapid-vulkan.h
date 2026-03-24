@@ -1418,6 +1418,10 @@ public:
 
     operator VkImage() const { return (VkImage) desc().handle; }
 
+protected:
+    void onNameChanged(const std::string &) override;
+
+
 private:
     class Impl;
     Impl * _impl = nullptr;

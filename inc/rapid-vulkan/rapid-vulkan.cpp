@@ -1118,7 +1118,7 @@ auto Image::desc() const -> const Desc & { return _impl->desc(); }
 auto Image::getView(const GetViewParameters & p) const -> vk::ImageView { return _impl->getView(p); }
 void Image::setContent(const SetContentParameters & p) { return _impl->setContent(p); }
 auto Image::readContent(const ReadContentParameters & p) const -> Content { return _impl->readContent(p); }
-
+void Image::onNameChanged(const std::string &) { _impl->onNameChanged(); }
 // *********************************************************************************************************************
 // Shader
 // *********************************************************************************************************************
