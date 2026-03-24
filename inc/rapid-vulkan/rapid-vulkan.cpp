@@ -322,7 +322,9 @@ public:
         // copy to the target buffer.
         auto queue = CommandQueue({{_owner.name()}, _gi, params.queueFamily, params.queueIndex});
         if (auto cb = queue.begin(_owner.name().c_str(), vk::CommandBufferLevel::ePrimary)) {
+            CmdDebugLabel label(cb, ("set buffer content of " + _owner.name()).c_str());
             staging.cmdCopy({cb, _owner.handle(), _desc.size, dstOffset, 0, size});
+            label.end();
             queue.wait(queue.submit({{cb}}));
         }
     }
@@ -906,13 +908,15 @@ public:
         auto q = CommandQueue({{_owner.name()}, _gi, params.queueFamily, params.queueIndex});
         auto c = q.begin(_owner.name().data());
         if (c) {
+            CmdDebugLabel label(c, ("set image content of " + _owner.name()).c_str());
             auto r = vk::ImageSubresourceRange(aspect, params.mipLevel, 1, params.arrayLayer, 1);
             Barrier {}
                 .s(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer)
                 .i(_desc.handle, vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead,
-                   vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, r)
+                    vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, r)
                 .cmdWrite(c);
             c.handle().copyBufferToImage(staging, _desc.handle, vk::ImageLayout::eTransferDstOptimal, {copyRegion});
+            label.end();
             q.wait(q.submit({{c}}));
         }
     }
@@ -961,7 +965,7 @@ public:
             Barrier {}
                 .s(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer)
                 .i(_desc.handle, vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead,
-                   vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferSrcOptimal, r)
+                   vk::ImageLayout::eGeneral, vk::ImageLayout::eTransferSrcOptimal, r)
                 .cmdWrite(c);
             c.handle().copyImageToBuffer(_desc.handle, vk::ImageLayout::eTransferSrcOptimal, staging, copyRegions);
             q.wait(q.submit({c}));

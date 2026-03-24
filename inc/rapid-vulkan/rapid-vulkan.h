@@ -432,9 +432,9 @@ inline T clampRange2(T & srcOffset, T & dstOffset, T & length, const T & srcCapa
 template<typename T>
 inline void setVkHandleName(vk::Device device, T handle, const char * name) {
 #if VULKAN_HPP_DISPATCH_LOADER_DYNAMIC == 1
-    if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkSetDebugUtilsObjectNameEXT) return;
+    if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkSetDebugUtilsObjectNameEXT) [[unlikely]] return;
 #endif
-    if (!device || !handle || !name) return;
+    if (!device || !handle || !name) [[unlikely]] return;
 
     union HandleAlias {
         uint64_t u64 {};
@@ -446,6 +446,47 @@ inline void setVkHandleName(vk::Device device, T handle, const char * name) {
     auto info    = vk::DebugUtilsObjectNameInfoEXT().setObjectType(handle.objectType).setObjectHandle(alias.u64).setPObjectName(name);
     device.setDebugUtilsObjectNameEXT(info);
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// Helper function to set Vulkan opaque handle's name (VK_EXT_debug_utils).
+template<typename T>
+inline void setVkHandleName(vk::Device device, T handle, std::string name) {
+    setVkHandleName(device, handle, name.c_str());
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// @brief Helper function to insert a begin label to command buffer
+inline bool cmdBeginDebugLabel(vk::CommandBuffer cmd, const char * name, const std::array<float, 4> & color = {1, 1, 1, 1}) {
+#if VULKAN_HPP_DISPATCH_LOADER_DYNAMIC == 1
+    if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdBeginDebugUtilsLabelEXT) [[unlikely]] return false;
+#endif
+    if (!cmd || !name) [[unlikely]] return false;
+    cmd.beginDebugUtilsLabelEXT(vk::DebugUtilsLabelEXT().setPLabelName(name).setColor(color));
+    return true;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// Helper function to insert a end label to command buffer
+inline void cmdEndDebugLabel(vk::CommandBuffer cmd) {
+#if VULKAN_HPP_DISPATCH_LOADER_DYNAMIC == 1
+    if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdEndDebugUtilsLabelEXT) return;
+#endif
+    if (cmd) [[likely]] cmd.endDebugUtilsLabelEXT();
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// Helper class to automatically insert a begin and end label to command buffer
+class CmdDebugLabel {
+    vk::CommandBuffer _cmd;
+public:
+    CmdDebugLabel(vk::CommandBuffer cmd, const char * name, const std::array<float, 4> & color = {1, 1, 1, 1}): _cmd(cmd) {
+        cmdBeginDebugLabel(_cmd, name, color);
+    }
+    ~CmdDebugLabel() { end(); }
+    void end() {
+        if (_cmd) cmdEndDebugLabel(_cmd), _cmd = nullptr;
+    }
+};
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// Helper function to calculate the maximum number of mips for a given width, height and depth.
@@ -479,31 +520,6 @@ inline constexpr vk::Extent3D getMipLevelExtent(const vk::Extent3D & baseExtent,
         extent.depth  = std::max(extent.depth / 2, 1u);
     }
     return extent;
-}
-
-// ---------------------------------------------------------------------------------------------------------------------
-/// Helper function to set Vulkan opaque handle's name (VK_EXT_debug_utils).
-template<typename T>
-inline void setVkHandleName(vk::Device device, T handle, std::string name) {
-    setVkHandleName(device, handle, name.c_str());
-}
-
-// ---------------------------------------------------------------------------------------------------------------------
-/// @brief Helper function to insert a begin label to command buffer
-inline bool cmdBeginDebugLabel(vk::CommandBuffer cmd, const char * name, const std::array<float, 4> & color = {1, 1, 1, 1}) {
-#if VULKAN_HPP_DISPATCH_LOADER_DYNAMIC == 1
-    if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdBeginDebugUtilsLabelEXT) return false;
-#endif
-    if (!cmd || !name) return false;
-    cmd.beginDebugUtilsLabelEXT(vk::DebugUtilsLabelEXT().setPLabelName(name).setColor(color));
-    return true;
-}
-
-inline void cmdEndDebugLabel(vk::CommandBuffer cmd) {
-#if VULKAN_HPP_DISPATCH_LOADER_DYNAMIC == 1
-    if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdEndDebugUtilsLabelEXT) return;
-#endif
-    if (cmd) cmd.endDebugUtilsLabelEXT();
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
