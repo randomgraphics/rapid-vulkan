@@ -965,7 +965,9 @@ public:
             Barrier {}
                 .s(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer)
                 .i(_desc.handle, vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead,
-                   vk::ImageLayout::eGeneral, vk::ImageLayout::eTransferSrcOptimal, r)
+                    // TOOD: undefined state allows driver to discard the content. Need to use in the actual
+                    // layout of the image. AFter the copy, also need to restore the original layout.
+                   vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferSrcOptimal, r)
                 .cmdWrite(c);
             c.handle().copyImageToBuffer(_desc.handle, vk::ImageLayout::eTransferSrcOptimal, staging, copyRegions);
             q.wait(q.submit({c}));

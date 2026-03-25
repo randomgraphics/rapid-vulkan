@@ -2,9 +2,12 @@
 - A 3D model viewer that as a complex-enough use case of the library.-
 - BUG: simple triangle sample crash when minimized.
 - BUG: drawable sample seems leaking small amount of memory every frame.
+- Texture::readContent() need to pass in current layout of each subresource for proper barrier. The method
+  also need to restore the layout at the end.
+- currently used resource tracking is missing in drawpack and command buffer class.
 
 # P1
-- A more powerful render pass class that combined vk::RenderPass and vk::Framebuffers together.
+- [DROPPED in favor of dynamic rendering] A more powerful render pass class that combined vk::RenderPass and vk::Framebuffers together.
   - this is not a P0 task, since Swapchain's built-in render pass can handle the most common usages already.
 - Pipeline and layout cache
 
