@@ -3179,7 +3179,7 @@ public:
         if (pp.backbufferStatus.layout != DESIRED_PRESENT_STATUS.layout) {
             Barrier()
                 .i(bb.image->handle(), pp.backbufferStatus.access, DESIRED_PRESENT_STATUS.access, pp.backbufferStatus.layout, DESIRED_PRESENT_STATUS.layout,
-                    vk::ImageAspectFlagBits::eColor)
+                   vk::ImageAspectFlagBits::eColor)
                 .s(pp.backbufferStatus.stages, DESIRED_PRESENT_STATUS.stages)
                 .cmdWrite(cb);
         }
@@ -3187,17 +3187,17 @@ public:
 
         PresentResult pr;
         pr.backbufferStatus = DESIRED_PRESENT_STATUS;
-        pr.status = PresentResult::SUCCESS;
+        pr.status           = PresentResult::SUCCESS;
 
         // present current frame
         if (_handle) {
             // Call present queue to do the actual present, waiting for the frame end semaphore.
             auto presentInfo = vk::PresentInfoKHR()
-                                    .setSwapchainCount(1)
-                                    .setPSwapchains(&_handle)
-                                    .setPImageIndices(&frame.imageIndex)
-                                    .setWaitSemaphoreCount(1)
-                                    .setPWaitSemaphores(&bb.frameEndSemaphore);
+                                   .setSwapchainCount(1)
+                                   .setPSwapchains(&_handle)
+                                   .setPImageIndices(&frame.imageIndex)
+                                   .setWaitSemaphoreCount(1)
+                                   .setPWaitSemaphores(&bb.frameEndSemaphore);
             auto result = _presentQueue.presentKHR(&presentInfo);
             if (result == vk::Result::eErrorOutOfDateKHR) {
                 recoverSwapchainOnPresentError();

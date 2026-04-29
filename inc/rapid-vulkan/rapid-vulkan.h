@@ -2425,7 +2425,8 @@ public:
         enum Status {
             FAILED     = -1, ///< Present failed. The back buffer image is in undefined state. Consider delete and recreate the swapchain.
             SUCCESS    = 0,  ///< Present successfully. The back buffer image is now in the layout specified by the backbufferStatus field.
-            SUBOPTIMAL = 1,  ///< Present successfully, but the swapchain is in suboptimal state. The back buffer image is now in the layout specified by the backbufferStatus field.
+            SUBOPTIMAL = 1,  ///< Present successfully, but the swapchain is in suboptimal state. The back buffer image is now in the layout specified by the
+                             ///< backbufferStatus field.
         };
 
         /// The result status of the present() call. If FAILED, the rest of the structure is undefined.
