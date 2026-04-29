@@ -2398,12 +2398,6 @@ public:
     /// @brief Specify parameters to call present().
     struct PresentParameters {
 
-        PresentParameters(vk::ImageLayout backbufferLayuout, vk::AccessFlags backbufferAccessFlags) {
-            backbufferStatus = {backbufferLayuout, backbufferAccessFlags, vk::PipelineStageFlagBits::eBottomOfPipe};
-        }
-
-        PresentParameters(const BackbufferStatus & backbufferStatus_): backbufferStatus(backbufferStatus_) {}
-
         /// @brief Specify the current status of the back buffer image when calling present().
         /// The present() function will insert proper barrier to transit the current back buffer image into VK_IMAGE_LAYOUT_PRESENT_SRC_KHR layouy.
         /// If the back buffer image is already in VK_IMAGE_LAYOUT_PRESENT_SRC_KHR layout, then no barrier will be inserted.
@@ -2415,10 +2409,35 @@ public:
         /// semaphores too early could cause present() showing partially rendered frame.
         vk::ArrayProxy<const vk::Semaphore> renderFinished = {};
 
+        PresentParameters(vk::ImageLayout backbufferLayuout, vk::AccessFlags backbufferAccessFlags) {
+            backbufferStatus = {backbufferLayuout, backbufferAccessFlags, vk::PipelineStageFlagBits::eBottomOfPipe};
+        }
+
+        PresentParameters(const BackbufferStatus & backbufferStatus_): backbufferStatus(backbufferStatus_) {}
+
         PresentParameters & setRenderFinished(vk::ArrayProxy<const vk::Semaphore> renderFinished_) {
             renderFinished = renderFinished_;
             return *this;
         }
+    };
+
+    struct PresentResult {
+        enum Status {
+            FAILED     = -1, ///< Present failed. The back buffer image is in undefined state. Consider delete and recreate the swapchain.
+            SUCCESS    = 0,  ///< Present successfully. The back buffer image is now in the layout specified by the backbufferStatus field.
+            SUBOPTIMAL = 1,  ///< Present successfully, but the swapchain is in suboptimal state. The back buffer image is now in the layout specified by the backbufferStatus field.
+        };
+
+        /// The result status of the present() call. If FAILED, the rest of the structure is undefined.
+        Status status = FAILED;
+
+        /// The actual status of the back buffer image after present() call.
+        /// Note that the status specified in the PresentParameters may not be the same as this value,
+        /// since present() will insert proper barriers to transition the image into a layout suitable for presentation.
+        /// Undefined if the present() call failed.
+        BackbufferStatus backbufferStatus;
+
+        operator bool() const { return status != FAILED; }
     };
 
     Swapchain(const ConstructParameters &);
@@ -2451,7 +2470,7 @@ public:
     /// w/o calling beginFrame() in between.
     /// This method also invalidated the frame pointer returned by beginFrame(). Accessing the frame structure outside of scope of beginFrame() and
     /// present() is prohibited and could cause undefined behavior.
-    BackbufferStatus present(const PresentParameters &);
+    PresentResult present(const PresentParameters &);
 
     /// @brief Begin a new built-in render pass. Can only be called between beginFrame() and present().
     void cmdBeginBuiltInRenderPass(vk::CommandBuffer, const BeginRenderPassParameters &);
