@@ -3087,7 +3087,7 @@ public:
 
         // TODO: check if the render pass is already begun;
 
-        auto & bb = currentFrame().backbuffer();
+        auto & bb = *currentFrame().backbuffer;
 
         // set dynamic viewport and scissor
         const auto & extent = bb.image->desc().extent;
@@ -3203,7 +3203,7 @@ public:
             } else {
                 // For headless swapchain, we do a dummy submit to signal the image available semaphore.
                 auto dummySwap           = _graphicsQueue->begin("headless dummy swap");
-                frame.frameEndSubmission = _graphicsQueue->submit({dummySwap, {}, {bb.frameEndSemaphore}, {frame.imageAvailable()}});
+                frame.frameEndSubmission = _graphicsQueue->submit({dummySwap, {}, {bb.frameEndSemaphore}, {frame.imageAvailable}});
             }
 
             // Move to the next frame.
@@ -3372,8 +3372,8 @@ private:
             auto & frame = _frames[i];
 
             // create image available semaphore
-            frame.setImageAvailable(_cp.gi->device.createSemaphore({}, _cp.gi->allocator));
-            setVkHandleName(_cp.gi->device, frame.imageAvailable(), format("image available semaphore for frame %zu", i));
+            frame.imageAvailable = _cp.gi->device.createSemaphore({}, _cp.gi->allocator);
+            setVkHandleName(_cp.gi->device, frame.imageAvailable, format("image available semaphore for frame %zu", i));
 
             // do not signal them like in headless mode. Vulkan present queue will signal them automatically.
         }
@@ -3401,12 +3401,12 @@ private:
             auto & frame = _frames[i];
 
             // create image available semaphore
-            frame.setImageAvailable(_cp.gi->device.createSemaphore({}, _cp.gi->allocator));
-            setVkHandleName(_cp.gi->device, frame.imageAvailable(), format("image available semaphore for headless frame %zu", i));
+            frame.imageAvailable = _cp.gi->device.createSemaphore({}, _cp.gi->allocator);
+            setVkHandleName(_cp.gi->device, frame.imageAvailable, format("image available semaphore for headless frame %zu", i));
 
             // then signal it.
             auto cb = _graphicsQueue->begin(format("dummy submit to signal image available semaphore for headless frame %zu", i).c_str());
-            _graphicsQueue->submit({cb, {}, {}, {frame.imageAvailable()}});
+            _graphicsQueue->submit({cb, {}, {}, {frame.imageAvailable}});
         }
 
         recreateHeadlessSwapchain();
@@ -3416,7 +3416,7 @@ private:
         // wait for all GPU rendering to be done for all frames.
         for (auto & frame : _frames) {
             frame.waitForFrameEnd();
-            frame.setBackbuffer(nullptr); // clear old backbuffer pointer
+            frame.backbuffer = nullptr;
         }
 
         // Make sure both queues are idle
