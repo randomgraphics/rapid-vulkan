@@ -43,11 +43,17 @@ SOFTWARE.
 #pragma GCC diagnostic ignored "-Wimplicit-fallthrough"
 #endif
 
+#ifdef RAPID_VULKAN_EXTERNAL_C_IMPL
+#include "3rd-party/spriv-reflect/spirv_reflect.h"
+#else
 #include "3rd-party/spriv-reflect/spirv_reflect.c"
-#ifdef RVI_NEED_VMA_IMPL
-#define VMA_IMPLEMENTATION
-#include "3rd-party/vma-3.0.1/vk_mem_alloc.h"
+#endif
 
+#ifdef RVI_NEED_VMA_IMPL
+#ifndef RAPID_VULKAN_EXTERNAL_C_IMPL
+#define VMA_IMPLEMENTATION
+#endif
+#include "3rd-party/vma-3.0.1/vk_mem_alloc.h"
 #ifdef _MSC_VER
 #pragma warning(pop)
 #elif defined(__GNUC__)
@@ -70,7 +76,7 @@ SOFTWARE.
 #include <inttypes.h>
 #include <optional>
 
-#if RAPID_VULKAN_ENABLE_LOADER
+#if RAPID_VULKAN_ENABLE_LOADER && !defined(RAPID_VULKAN_EXTERNAL_C_IMPL)
 // implement the default dynamic dispatcher storage. Has to use this macro outside of any namespace.
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE;
 #endif
