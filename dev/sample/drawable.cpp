@@ -108,16 +108,16 @@ void entry(const Options & options) {
         if (!options.headless && !glfw.processEvents()) break;
         auto                                      frame = sw.beginFrame();
         rapid_vulkan::Swapchain::BackbufferStatus backbufferStatus;
-        if (frame) {
+        if (frame.valid()) {
             // Standard boilerplate of rendering a frame. It is basically the same as triangle.cpp.
             if (options.headless) {
-                if (frame->frameCounter() > options.headless) break; // render required number of frames in headless mode, then quit.
-                std::cout << "Frame " << frame->frameCounter() << std::endl;
+                if (frame.index > options.headless) break; // render required number of frames in headless mode, then quit.
+                std::cout << "Frame " << frame.index << std::endl;
             }
             // Animate the triangle. Note that this is not the most efficient way to animate things, since it serializes
             // CPU and GPU. But it's simple and it is not the focus of this sample.
             auto bc      = Buffer::SetContentParameters {}.setQueue(*device.graphics());
-            auto elapsed = (float) frame->frameCounter() / 60.0f;
+            auto elapsed = (float) frame.index / 60.0f;
             u0->setContent(bc.setData<float>({(float) std::sin(elapsed) * .25f, (float) std::cos(elapsed) * .25f}));
             u1->setContent(bc.setData<float>({(float) std::sin(elapsed) * .5f + .5f, (float) std::cos(elapsed) * .5f + .5f, 1.f}));
 
@@ -138,7 +138,7 @@ void entry(const Options & options) {
             backbufferStatus = sw.cmdEndBuiltInRenderPass(c);
 
             // submit the command buffer
-            q.submit({c, {}, {frame->imageAvailable()}, {renderFinished.get()}});
+            q.submit({c, {}, {frame.imageAvailable}, {renderFinished.get()}});
         }
 
         // end of the frame.
