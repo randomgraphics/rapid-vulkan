@@ -3066,7 +3066,7 @@ public:
     ~Impl() {
         clearSwapchain();
         for (auto & f : _frames) {
-            auto s = f.imageAvailable();
+            auto s = f.imageAvailable;
             _cp.gi->safeDestroy(s);
         }
         _frames.clear();
@@ -3153,6 +3153,9 @@ public:
         RAPID_VULKAN_ASSERT(frame.imageIndex < _backbuffers.size());
         frame.backbuffer = &_backbuffers[frame.imageIndex];
 
+        // update the backbuffer state to ready for rendering.
+
+
         _frameStatus = READY;
         return frame;
     }
@@ -3226,6 +3229,9 @@ private:
     struct FrameImpl : public Frame {
         uint32_t                   imageIndex {};
         CommandQueue::SubmissionID frameEndSubmission {};
+
+        // Back buffer is always in the desired present status when it is acquired.
+        FrameImpl() { backbufferStatus = DESIRED_PRESENT_STATUS; }
 
         void waitForFrameEnd() {
             if (frameEndSubmission) {
@@ -3538,7 +3544,7 @@ private:
             bb.frameEndSemaphore = gi->device.createSemaphore({}, gi->allocator);
             setVkHandleName(gi->device, bb.frameEndSemaphore, format("frame end semaphore for back buffer %zu", i));
 
-            // transfer backbuffers to right layout.
+            // transfer backbuffers to layout ready for presentation.
             Barrier()
                 .i(bb.image->handle(), vk::AccessFlagBits::eNone, DESIRED_PRESENT_STATUS.access, vk::ImageLayout::eUndefined, DESIRED_PRESENT_STATUS.layout,
                    vk::ImageAspectFlagBits::eColor)
