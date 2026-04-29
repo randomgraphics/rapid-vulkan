@@ -2352,34 +2352,21 @@ public:
 
     /// @brief Represents a GPU frame.
     struct Frame {
+        /// @brief Pointer to the backbuffer of the frame.
+        /// The pointer value will be invalidated after each present.
+        const Backbuffer * backbuffer = nullptr;
+
+        /// Status of the back buffer image at the beginning of the frame.
+        BackbufferStatus backbufferStatus {};
+
+        /// @brief The semaphore that will be signaled when the last present of the current backbuffer image is done.
+        /// The first rendering submission for current frame should wait for this semaphore.
+        vk::Semaphore imageAvailable = {};
+
         /// @brief Incremental counter of the frames presented. The value is increased by 1 after each present.
-        uint64_t frameCounter() const { return _index; }
+        uint64_t index = 0;
 
-        /// @brief Pointer to the backbuffer of the frame.
-        /// The pointer value will be invalidated after each present.
-        const Backbuffer & backbuffer() const {
-            RVI_REQUIRE(_backbuffer != nullptr);
-            return *_backbuffer;
-        }
-
-        /// @brief The semaphore that is signaled when the last present of the current backbuffer image is done.
-        /// The first rendering submission for current frame should wait for this semaphore.
-        vk::Semaphore imageAvailable() const { return _imageAvailable; }
-
-    protected:
-        /// @brief Index of the frame. The value will be incremented after each present.
-        uint64_t _index = 0;
-
-        // /// @brief Index of the frame that GPU has done all the rendering. All resources used to render this frame could be safely recycled or destroyed.
-        // int64_t safeFrameIndex = -1;
-
-        /// @brief Pointer to the backbuffer of the frame.
-        /// The pointer value will be invalidated after each present.
-        const Backbuffer * _backbuffer = nullptr;
-
-        /// @brief The semaphore that is signaled when the last present of the current backbuffer image is done.
-        /// The first rendering submission for current frame should wait for this semaphore.
-        vk::Semaphore _imageAvailable;
+        bool valid() const { return backbuffer != nullptr; }
     };
 
     /// @brief Parameters to begin the built-in render pass of the swapchain.
@@ -2457,8 +2444,8 @@ public:
 
     /// @brief Begin a new rendering frame. Must be called in pair with present().
     /// Behavior is undefined if calling beginFrame() more than once w/o calling present() in between.
-    /// \returns The pointer to the next frame for rendering. Or nullptr if failed.
-    const Frame * beginFrame();
+    /// \returns The next frame for rendering. If failed, an empty frame (with null backbuffer pointer) will be returned.
+    Frame beginFrame();
 
     /// @brief Present the current frame. Must be called in pair with beginFrame(). Behavior is undefined, if calling present() more than once
     /// w/o calling beginFrame() in between.

@@ -3112,7 +3112,7 @@ public:
         return DESIRED_PRESENT_STATUS;
     }
 
-    const Frame * beginFrame() {
+    Frame beginFrame() {
         // make sure frame is ended.
         RVI_REQUIRE(ENDED == _frameStatus, "Frame is not ended. Current frame status: %d", (int) _frameStatus);
 
@@ -3123,12 +3123,12 @@ public:
         frame.waitForFrameEnd();
 
         // update the frame index.
-        frame.setFrameCounter(_frameCounter);
+        frame.index = _frameCounter;
 
         if (_handle) {
             // For a real swapchain, we need to ask Vulkan for the next available swapchain image.
             try {
-                auto result = _cp.gi->device.acquireNextImageKHR(_handle, uint64_t(-1), frame.imageAvailable());
+                auto result = _cp.gi->device.acquireNextImageKHR(_handle, uint64_t(-1), frame.imageAvailable);
                 if (vk::Result::eSuccess == result.result || vk::Result::eSuboptimalKHR == result.result) {
                     // we acquired the frame (might be suboptimal, but stil usable) and is ready for rendering.
                     frame.imageIndex = result.value;
@@ -3136,31 +3136,31 @@ public:
                     // beginFrame failed for some reason. We will try again next frame.
                     RVI_LOGE("vkAcquireNextImageKHR() failed to acquire swapchain image: %s", vk::to_string(result.result).c_str());
                     _frameStatus = FAILED;
-                    return nullptr;
+                    return {};
                 }
             } catch (vk::SystemError & err) {
                 // beginFrame failed for some reason. We will try again next frame.
                 RVI_LOGE("%s", err.what());
                 _frameStatus = FAILED;
-                return nullptr;
+                return {};
             }
         } else {
             // For headless mode, we don't need to acquire the next image.
-            frame.imageIndex = (uint32_t) (frame.frameCounter() % _backbuffers.size());
+            frame.imageIndex = (uint32_t) (frame.index % _backbuffers.size());
         }
 
         // update the backbuffer pointer.
         RAPID_VULKAN_ASSERT(frame.imageIndex < _backbuffers.size());
-        frame.setBackbuffer(&_backbuffers[frame.imageIndex]);
+        frame.backbuffer = &_backbuffers[frame.imageIndex];
 
         _frameStatus = READY;
-        return &frame;
+        return frame;
     }
 
     BackbufferStatus present(const PresentParameters & pp) {
         if (READY == _frameStatus) {
-            auto & frame = (FrameImpl &) currentFrame();
-            auto & bb    = (BackbufferImpl &) frame.backbuffer();
+            auto & frame = currentFrame();
+            auto & bb    = (BackbufferImpl &) *frame.backbuffer;
 
             // Transition the backbuffer image to present source layout.
             auto cb = _graphicsQueue->begin("frame end");
@@ -3227,9 +3227,6 @@ private:
         uint32_t                   imageIndex {};
         CommandQueue::SubmissionID frameEndSubmission {};
 
-        void setFrameCounter(uint64_t i) { _index = i; }
-        void setImageAvailable(vk::Semaphore s) { _imageAvailable = s; }
-        void setBackbuffer(Backbuffer * b) { _backbuffer = b; }
         void waitForFrameEnd() {
             if (frameEndSubmission) {
                 frameEndSubmission.wait();
@@ -3627,7 +3624,7 @@ auto Swapchain::renderPass() const -> vk::RenderPass { return _impl->renderPass(
 auto Swapchain::graphics() const -> CommandQueue & { return _impl->graphics(); }
 void Swapchain::cmdBeginBuiltInRenderPass(vk::CommandBuffer cb, const BeginRenderPassParameters & bp) { return _impl->cmdBeginBuiltInRenderPass(cb, bp); }
 auto Swapchain::cmdEndBuiltInRenderPass(vk::CommandBuffer cb) -> BackbufferStatus { return _impl->cmdEndBuiltInRenderPass(cb); }
-auto Swapchain::beginFrame() -> const Frame * { return _impl->beginFrame(); }
+auto Swapchain::beginFrame() -> Frame { return _impl->beginFrame(); }
 auto Swapchain::present(const PresentParameters & pp) -> BackbufferStatus { return _impl->present(pp); }
 
 // *********************************************************************************************************************
