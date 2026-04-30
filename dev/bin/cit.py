@@ -43,12 +43,14 @@ def run_style_check():
     diff_script = sdk_root_dir / "dev/bin/clang-format-diff.py"
     system = platform.system()
     if "Windows" == system:
-        clang_format = sdk_root_dir / "dev/bin/clang-format-14.exe"
+        clang_format = sdk_root_dir / "dev/bin/clang-format/clang-format-22.1.0.exe"
         cmdline = ["python.exe", str(diff_script.absolute()), "-p1", "-binary", str(clang_format.absolute())]
     elif "Darwin" == system:
-        cmdline = [str(diff_script.absolute()), "-p1", "-binary", "clang-format-mp-14"]
+        clang_format = sdk_root_dir / "dev/bin/clang-format/clang-format-22.1.0-apple"  
+        cmdline = [str(diff_script.absolute()), "-p1", "-binary", str(clang_format.absolute())]
     else:
-        cmdline = [str(diff_script.absolute()), "-p1", "-binary", "clang-format-14"]
+        clang_format = sdk_root_dir / "dev/bin/clang-format/clang-format-22.1.0-x64-linux"
+        cmdline = [str(diff_script.absolute()), "-p1", "-binary", str(clang_format.absolute())]
 
     # check coding style of the diff
     format_diff = subprocess.check_output(cmdline, input=diff, cwd=sdk_root_dir).decode("utf-8")

@@ -377,8 +377,7 @@ struct GlobalInfo {
 #ifdef __GNUC__
 __attribute__((format(printf, 1, 2)))
 #endif
-inline std::string
-format(const char * format, ...) {
+inline std::string format(const char * format, ...) {
     va_list args;
 
     // Get the size of the buffer needed to store the formatted string.

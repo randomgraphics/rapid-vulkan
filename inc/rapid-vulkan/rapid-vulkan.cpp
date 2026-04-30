@@ -3198,7 +3198,7 @@ public:
                                    .setPImageIndices(&frame.imageIndex)
                                    .setWaitSemaphoreCount(1)
                                    .setPWaitSemaphores(&bb.frameEndSemaphore);
-            auto result = _presentQueue.presentKHR(&presentInfo);
+            auto result      = _presentQueue.presentKHR(&presentInfo);
             if (result == vk::Result::eErrorOutOfDateKHR) {
                 recoverSwapchainOnPresentError();
                 frame.frameEndSubmission = {};
@@ -3525,13 +3525,13 @@ private:
         for (size_t i = 0; i < images.size(); ++i) {
             auto & bb = _backbuffers[i];
             bb.image  = new Image(Image::ImportParameters {{format("back buffer image %zu", i)},
-                                                          gi,
-                                                          {
+                                                           gi,
+                                                           {
                                                                images[i],
                                                                vk::ImageType::e2D,
                                                                swapchainCreateInfo.imageFormat,
                                                                {w, h, 1},
-                                                          }});
+                                                           }});
             bb.view   = bb.image->getView({vk::ImageViewType::e2D, swapchainCreateInfo.imageFormat});
             setVkHandleName(gi->device, images[i], format("back buffer image %zu", i));
             setVkHandleName(gi->device, bb.view, format("back buffer view %zu", i));
@@ -4345,7 +4345,7 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
         _library = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
         if (_library == nullptr) { _library = dlopen("libvulkan.so.1", RTLD_NOW | RTLD_LOCAL); }
 #elif defined(__APPLE__)
-        _library       = dlopen("libvulkan.dylib", RTLD_NOW | RTLD_LOCAL);
+        _library = dlopen("libvulkan.dylib", RTLD_NOW | RTLD_LOCAL);
 #elif defined(_WIN32)
         _library = (void *) ::LoadLibraryA("vulkan-1.dll");
 #else
@@ -4442,10 +4442,10 @@ Instance::Instance(ConstructParameters cp): _cp(cp) {
     RVI_LOGD("Creating Vulkan instance...");
     auto appInfo = vk::ApplicationInfo().setApiVersion(_cp.apiVersion);
     auto ici     = vk::InstanceCreateInfo()
-                   .setPNext(buildStructureChain(_cp.instanceCreateInfo.begin(), _cp.instanceCreateInfo.end()))
-                   .setPApplicationInfo(&appInfo)
-                   .setPEnabledLayerNames(supported.layers)
-                   .setPEnabledExtensionNames(supported.instanceExtensions);
+                       .setPNext(buildStructureChain(_cp.instanceCreateInfo.begin(), _cp.instanceCreateInfo.end()))
+                       .setPApplicationInfo(&appInfo)
+                       .setPEnabledLayerNames(supported.layers)
+                       .setPEnabledExtensionNames(supported.instanceExtensions);
 #if defined(__APPLE__) // macOS
     ici.flags |= vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR;
 #endif
