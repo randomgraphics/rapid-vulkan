@@ -32,7 +32,7 @@ public:
 #else
         const char * path = "librenderdoc.so";
 #endif
-        void *       mod  = dlopen(path, RTLD_NOW | RTLD_NOLOAD);
+        void * mod = dlopen(path, RTLD_NOW | RTLD_NOLOAD);
         if (!mod) {
             logi("%s is not loaded. RDC capture functionalities are disabled.", path);
             return;

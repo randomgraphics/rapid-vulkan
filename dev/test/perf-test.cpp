@@ -53,7 +53,7 @@ TEST_CASE("texture-array", "[perf]") {
     d->t({0, 1}, a);
     d->s({0, 2}, {s});
 
-    REQUIRE(sw.beginFrame() != nullptr);
+    REQUIRE(sw.beginFrame().valid());
 
     auto c = q->begin("texture-array");
     Barrier()

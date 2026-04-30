@@ -91,16 +91,16 @@ void entry(const Options & options) {
         if (!options.headless && !glfw.processEvents()) break;
         auto                                      frame = sw.beginFrame();
         rapid_vulkan::Swapchain::BackbufferStatus backbufferStatus;
-        if (frame) {
+        if (frame.valid()) {
             if (options.headless) {
-                if (frame->frameCounter() > options.headless) break; // only render number of required frames in headless mode, then quite.
-                std::cout << "Frame " << frame->frameCounter() << std::endl;
+                if (frame.index > options.headless) break; // only render number of required frames in headless mode, then quite.
+                std::cout << "Frame " << frame.index << std::endl;
             }
             auto c = q.begin("triangle");
             sw.cmdBeginBuiltInRenderPass(c, Swapchain::BeginRenderPassParameters {}.setClearColorF({0.0f, 1.0f, 0.0f, 1.0f})); // clear to green
             p.cmdDraw(c, GraphicsPipeline::DrawParameters {}.setNonIndexed(3));                                                // then draw a blue triangle.
             backbufferStatus = sw.cmdEndBuiltInRenderPass(c);
-            q.submit({c, {}, {frame->imageAvailable()}, {renderFinished.get()}});
+            q.submit({c, {}, {frame.imageAvailable}, {renderFinished.get()}});
         }
         sw.present(Swapchain::PresentParameters(backbufferStatus).setRenderFinished({renderFinished.get()}));
     }

@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identifies the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 28
+#define RAPID_VULKAN_HEADER_REVISION 29
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -293,6 +293,14 @@ SOFTWARE.
 #endif
 #endif
 
+#if RVI_CXX_STANDARD >= 20
+#define RVI_LIKELY   [[likely]]
+#define RVI_UNLIKELY [[unlikely]]
+#else
+#define RVI_LIKELY
+#define RVI_UNLIKELY
+#endif
+
 namespace RAPID_VULKAN_NAMESPACE {
 
 #ifdef _MSC_VER
@@ -369,8 +377,7 @@ struct GlobalInfo {
 #ifdef __GNUC__
 __attribute__((format(printf, 1, 2)))
 #endif
-inline std::string
-format(const char * format, ...) {
+inline std::string format(const char * format, ...) {
     va_list args;
 
     // Get the size of the buffer needed to store the formatted string.
@@ -432,9 +439,9 @@ inline T clampRange2(T & srcOffset, T & dstOffset, T & length, const T & srcCapa
 template<typename T>
 inline void setVkHandleName(vk::Device device, T handle, const char * name) {
 #if VULKAN_HPP_DISPATCH_LOADER_DYNAMIC == 1
-    if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkSetDebugUtilsObjectNameEXT) return;
+    if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkSetDebugUtilsObjectNameEXT) RVI_UNLIKELY return;
 #endif
-    if (!device || !handle || !name) return;
+    if (!device || !handle || !name) RVI_UNLIKELY return;
 
     union HandleAlias {
         uint64_t u64 {};
@@ -446,6 +453,48 @@ inline void setVkHandleName(vk::Device device, T handle, const char * name) {
     auto info    = vk::DebugUtilsObjectNameInfoEXT().setObjectType(handle.objectType).setObjectHandle(alias.u64).setPObjectName(name);
     device.setDebugUtilsObjectNameEXT(info);
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// Helper function to set Vulkan opaque handle's name (VK_EXT_debug_utils).
+template<typename T>
+inline void setVkHandleName(vk::Device device, T handle, std::string name) {
+    setVkHandleName(device, handle, name.c_str());
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// @brief Helper function to insert a begin label to command buffer
+inline bool cmdBeginDebugLabel(vk::CommandBuffer cmd, const char * name, const std::array<float, 4> & color = {1, 1, 1, 1}) {
+#if VULKAN_HPP_DISPATCH_LOADER_DYNAMIC == 1
+    if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdBeginDebugUtilsLabelEXT) RVI_UNLIKELY return false;
+#endif
+    if (!cmd || !name) RVI_UNLIKELY return false;
+    cmd.beginDebugUtilsLabelEXT(vk::DebugUtilsLabelEXT().setPLabelName(name).setColor(color));
+    return true;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// Helper function to insert a end label to command buffer
+inline void cmdEndDebugLabel(vk::CommandBuffer cmd) {
+#if VULKAN_HPP_DISPATCH_LOADER_DYNAMIC == 1
+    if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdEndDebugUtilsLabelEXT) RVI_UNLIKELY return;
+#endif
+    if (cmd) RVI_LIKELY cmd.endDebugUtilsLabelEXT();
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+/// Helper class to automatically insert a begin and end label to command buffer
+class CmdDebugLabel {
+    vk::CommandBuffer _cmd;
+
+public:
+    CmdDebugLabel(vk::CommandBuffer cmd, const char * name, const std::array<float, 4> & color = {1, 1, 1, 1}): _cmd(cmd) {
+        cmdBeginDebugLabel(_cmd, name, color);
+    }
+    ~CmdDebugLabel() { end(); }
+    void end() {
+        if (_cmd) cmdEndDebugLabel(_cmd), _cmd = nullptr;
+    }
+};
 
 // ---------------------------------------------------------------------------------------------------------------------
 /// Helper function to calculate the maximum number of mips for a given width, height and depth.
@@ -479,31 +528,6 @@ inline constexpr vk::Extent3D getMipLevelExtent(const vk::Extent3D & baseExtent,
         extent.depth  = std::max(extent.depth / 2, 1u);
     }
     return extent;
-}
-
-// ---------------------------------------------------------------------------------------------------------------------
-/// Helper function to set Vulkan opaque handle's name (VK_EXT_debug_utils).
-template<typename T>
-inline void setVkHandleName(vk::Device device, T handle, std::string name) {
-    setVkHandleName(device, handle, name.c_str());
-}
-
-// ---------------------------------------------------------------------------------------------------------------------
-/// @brief Helper function to insert a begin label to command buffer
-inline bool cmdBeginDebugLabel(vk::CommandBuffer cmd, const char * name, const std::array<float, 4> & color = {1, 1, 1, 1}) {
-#if VULKAN_HPP_DISPATCH_LOADER_DYNAMIC == 1
-    if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdBeginDebugUtilsLabelEXT) return false;
-#endif
-    if (!cmd || !name) return false;
-    cmd.beginDebugUtilsLabelEXT(vk::DebugUtilsLabelEXT().setPLabelName(name).setColor(color));
-    return true;
-}
-
-inline void cmdEndDebugLabel(vk::CommandBuffer cmd) {
-#if VULKAN_HPP_DISPATCH_LOADER_DYNAMIC == 1
-    if (!VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdEndDebugUtilsLabelEXT) return;
-#endif
-    if (cmd) cmd.endDebugUtilsLabelEXT();
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1044,6 +1068,11 @@ public:
         vk::DeviceSize offset      = 0;                  ///< byte offset of the source buffer where the data will be read from.
         vk::DeviceSize size        = vk::DeviceSize(-1); ///< size of the data to be read, in bytes.
 
+        /// @brief Callback to be called when the data is read.
+        /// @param data The data that was read.
+        /// @param size The size of the data that was read.
+        std::function<void(const void * data, size_t size)> callback;
+
         ReadParameters & setQueue(uint32_t family, uint32_t index) {
             queueFamily = family;
             queueIndex  = index;
@@ -1055,6 +1084,15 @@ public:
         ReadParameters & setRange(vk::DeviceSize o, vk::DeviceSize s = vk::DeviceSize(-1)) {
             offset = o;
             size   = s;
+            return *this;
+        }
+    };
+
+    struct ReadParametersWithCallback : public ReadParameters {
+        std::function<void(const void * data, size_t size)> callback;
+
+        ReadParameters & setCallback(std::function<void(const void * data, size_t size)> callback_) {
+            this->callback = callback_;
             return *this;
         }
     };
@@ -1122,7 +1160,8 @@ public:
     auto desc() const -> const Desc &;
     void cmdCopy(const CopyParameters &) const;
     auto setContent(const SetContentParameters &) -> Buffer &;
-    auto readContent(const ReadParameters &) const -> std::vector<uint8_t>;
+    auto readContent(const ReadParameters &) -> std::vector<uint8_t>;
+    auto readContentWithCallback(const ReadParametersWithCallback &) -> Buffer &;
     auto map(const MapParameters &) -> MappedResult;
     void unmap();
 
@@ -1250,21 +1289,16 @@ public:
     };
 
     struct Desc {
-        vk::Image               handle         = {};
-        vk::ImageType           type           = vk::ImageType::e2D;
-        vk::Format              format         = vk::Format::eR8G8B8A8Unorm;
-        vk::Extent3D            extent         = {1, 1, 1};
-        uint32_t                mipLevels      = 1;
-        uint32_t                arrayLayers    = 1;
-        vk::SampleCountFlagBits samples        = vk::SampleCountFlagBits::e1;
-        bool                    cubeCompatible = false;
+        vk::Image               handle      = {};
+        vk::ImageType           type        = vk::ImageType::e2D;
+        vk::Format              format      = vk::Format::eR8G8B8A8Unorm;
+        vk::Extent3D            extent      = {1, 1, 1};
+        uint32_t                mipLevels   = 1;
+        uint32_t                arrayLayers = 1;
+        vk::SampleCountFlagBits samples     = vk::SampleCountFlagBits::e1;
 
-        bool isCube() const { return vk::ImageType::e2D == type && extent.width == extent.height && 1 == extent.depth && 6 == arrayLayers && cubeCompatible; }
-
-        bool isCubeOrCubeArray() const {
-            return vk::ImageType::e2D == type && extent.width == extent.height && 1 == extent.depth && 6 <= arrayLayers && 0 == (arrayLayers % 6) &&
-                   cubeCompatible;
-        }
+        /// If the image, or part of it, can be viewed as a cube map.
+        bool isCubeCompatible() const { return vk::ImageType::e2D == type && extent.width == extent.height && 1 == extent.depth && arrayLayers >= 6; }
     };
 
     struct ImportParameters : Root::ConstructParameters {
@@ -1391,6 +1425,9 @@ public:
     operator vk::Image() const { return desc().handle; }
 
     operator VkImage() const { return (VkImage) desc().handle; }
+
+protected:
+    void onNameChanged(const std::string &) override;
 
 private:
     class Impl;
@@ -1914,15 +1951,32 @@ public:
         std::vector<uint8_t> value {};
     };
 
-    const Ref<const Pipeline>                        pipeline; ///< Pipeline used by the draw pack. It is immutable.
-    std::vector<std::vector<vk::WriteDescriptorSet>> descriptors;
-    Dependencies                                     dependencies;
-    std::vector<ConstantArgument>                    constants;
-    std::vector<Ref<Buffer>>                         vertexBuffers;
-    std::vector<vk::DeviceSize>                      vertexOffsets;
-    Ref<Buffer>                                      indexBuffer;                          ///< Index buffer. Null, if the draw is non-indexed.
-    vk::DeviceSize                                   indexOffset = 0;                      ///< Offset into the index buffer. Ignored for non-indexed draw.
-    vk::IndexType                                    indexType   = vk::IndexType::eUint16; ///< Type of index. Ignored for non-indexed draw.
+    struct DescriptorSetArgument {
+        std::vector<vk::WriteDescriptorSet> writes;
+        std::vector<uint32_t>               dynamicOffsets;
+
+        DescriptorSetArgument() = default;
+
+        DescriptorSetArgument(const DescriptorSetArgument & rhs): writes(rhs.writes), dynamicOffsets(rhs.dynamicOffsets) {}
+        DescriptorSetArgument & operator=(const DescriptorSetArgument & rhs) {
+            writes         = rhs.writes;
+            dynamicOffsets = rhs.dynamicOffsets;
+            return *this;
+        }
+
+        DescriptorSetArgument(DescriptorSetArgument && rhs)             = default;
+        DescriptorSetArgument & operator=(DescriptorSetArgument && rhs) = default;
+    };
+
+    const Ref<const Pipeline>          pipeline;    ///< Pipeline used by the draw pack. It is immutable.
+    std::vector<DescriptorSetArgument> descriptors; ///< indexed by set index
+    Dependencies                       dependencies;
+    std::vector<ConstantArgument>      constants;
+    std::vector<Ref<Buffer>>           vertexBuffers;
+    std::vector<vk::DeviceSize>        vertexOffsets;
+    Ref<Buffer>                        indexBuffer;                          ///< Index buffer. Null, if the draw is non-indexed.
+    vk::DeviceSize                     indexOffset = 0;                      ///< Offset into the index buffer. Ignored for non-indexed draw.
+    vk::IndexType                      indexType   = vk::IndexType::eUint16; ///< Type of index. Ignored for non-indexed draw.
 
     union {
         GraphicsPipeline::DrawParameters    draw;     ///< Draw parameters for graphics pipeline.
@@ -1988,6 +2042,12 @@ public:
 
     /// @brief Set value of buffer argument. Do nothing if the argument is not used by the pipeline.
     Drawable & b(DescriptorIdentifier id, vk::ArrayProxy<const BufferView>);
+
+    /// @brief Set value of dynamic buffer argument. Do nothing if the argument is not used by the pipeline.
+    /// @param id The identifier of the dynamic buffer argument.
+    /// @param v The array of buffer views to set.
+    /// @param dynamicOffset The dynamic offset to add to the buffer views.
+    Drawable & b(DescriptorIdentifier id, vk::ArrayProxy<const BufferView>, size_t dynamicOffset);
 
     /// @brief Set value of texture (image/sampler) argument. Do nothing if the argument is not used by the pipeline.
     Drawable & t(DescriptorIdentifier id, vk::ArrayProxy<const ImageSampler>);
@@ -2291,34 +2351,21 @@ public:
 
     /// @brief Represents a GPU frame.
     struct Frame {
+        /// @brief Pointer to the backbuffer of the frame.
+        /// The pointer value will be invalidated after each present.
+        const Backbuffer * backbuffer = nullptr;
+
+        /// Status of the back buffer image at the beginning of the frame.
+        BackbufferStatus backbufferStatus {};
+
+        /// @brief The semaphore that will be signaled when the last present of the current backbuffer image is done.
+        /// The first rendering submission for current frame should wait for this semaphore.
+        vk::Semaphore imageAvailable = {};
+
         /// @brief Incremental counter of the frames presented. The value is increased by 1 after each present.
-        uint64_t frameCounter() const { return _index; }
+        uint64_t index = 0;
 
-        /// @brief Pointer to the backbuffer of the frame.
-        /// The pointer value will be invalidated after each present.
-        const Backbuffer & backbuffer() const {
-            RVI_REQUIRE(_backbuffer != nullptr);
-            return *_backbuffer;
-        }
-
-        /// @brief The semaphore that is signaled when the last present of the current backbuffer image is done.
-        /// The first rendering submission for current frame should wait for this semaphore.
-        vk::Semaphore imageAvailable() const { return _imageAvailable; }
-
-    protected:
-        /// @brief Index of the frame. The value will be incremented after each present.
-        uint64_t _index = 0;
-
-        // /// @brief Index of the frame that GPU has done all the rendering. All resources used to render this frame could be safely recycled or destroyed.
-        // int64_t safeFrameIndex = -1;
-
-        /// @brief Pointer to the backbuffer of the frame.
-        /// The pointer value will be invalidated after each present.
-        const Backbuffer * _backbuffer = nullptr;
-
-        /// @brief The semaphore that is signaled when the last present of the current backbuffer image is done.
-        /// The first rendering submission for current frame should wait for this semaphore.
-        vk::Semaphore _imageAvailable;
+        bool valid() const { return backbuffer != nullptr; }
     };
 
     /// @brief Parameters to begin the built-in render pass of the swapchain.
@@ -2350,12 +2397,6 @@ public:
     /// @brief Specify parameters to call present().
     struct PresentParameters {
 
-        PresentParameters(vk::ImageLayout backbufferLayuout, vk::AccessFlags backbufferAccessFlags) {
-            backbufferStatus = {backbufferLayuout, backbufferAccessFlags, vk::PipelineStageFlagBits::eBottomOfPipe};
-        }
-
-        PresentParameters(const BackbufferStatus & backbufferStatus_): backbufferStatus(backbufferStatus_) {}
-
         /// @brief Specify the current status of the back buffer image when calling present().
         /// The present() function will insert proper barrier to transit the current back buffer image into VK_IMAGE_LAYOUT_PRESENT_SRC_KHR layouy.
         /// If the back buffer image is already in VK_IMAGE_LAYOUT_PRESENT_SRC_KHR layout, then no barrier will be inserted.
@@ -2367,10 +2408,36 @@ public:
         /// semaphores too early could cause present() showing partially rendered frame.
         vk::ArrayProxy<const vk::Semaphore> renderFinished = {};
 
+        PresentParameters(vk::ImageLayout backbufferLayuout, vk::AccessFlags backbufferAccessFlags) {
+            backbufferStatus = {backbufferLayuout, backbufferAccessFlags, vk::PipelineStageFlagBits::eBottomOfPipe};
+        }
+
+        PresentParameters(const BackbufferStatus & backbufferStatus_): backbufferStatus(backbufferStatus_) {}
+
         PresentParameters & setRenderFinished(vk::ArrayProxy<const vk::Semaphore> renderFinished_) {
             renderFinished = renderFinished_;
             return *this;
         }
+    };
+
+    struct PresentResult {
+        enum Status {
+            FAILED     = -1, ///< Present failed. The back buffer image is in undefined state. Consider delete and recreate the swapchain.
+            SUCCESS    = 0,  ///< Present successfully. The back buffer image is now in the layout specified by the backbufferStatus field.
+            SUBOPTIMAL = 1,  ///< Present successfully, but the swapchain is in suboptimal state. The back buffer image is now in the layout specified by the
+                             ///< backbufferStatus field.
+        };
+
+        /// The result status of the present() call. If FAILED, the rest of the structure is undefined.
+        Status status = FAILED;
+
+        /// The actual status of the back buffer image after present() call.
+        /// Note that the status specified in the PresentParameters may not be the same as this value,
+        /// since present() will insert proper barriers to transition the image into a layout suitable for presentation.
+        /// Undefined if the present() call failed.
+        BackbufferStatus backbufferStatus;
+
+        operator bool() const { return status != FAILED; }
     };
 
     Swapchain(const ConstructParameters &);
@@ -2396,14 +2463,14 @@ public:
 
     /// @brief Begin a new rendering frame. Must be called in pair with present().
     /// Behavior is undefined if calling beginFrame() more than once w/o calling present() in between.
-    /// \returns The pointer to the next frame for rendering. Or nullptr if failed.
-    const Frame * beginFrame();
+    /// \returns The next frame for rendering. If failed, an empty frame (with null backbuffer pointer) will be returned.
+    Frame beginFrame();
 
     /// @brief Present the current frame. Must be called in pair with beginFrame(). Behavior is undefined, if calling present() more than once
     /// w/o calling beginFrame() in between.
     /// This method also invalidated the frame pointer returned by beginFrame(). Accessing the frame structure outside of scope of beginFrame() and
     /// present() is prohibited and could cause undefined behavior.
-    BackbufferStatus present(const PresentParameters &);
+    PresentResult present(const PresentParameters &);
 
     /// @brief Begin a new built-in render pass. Can only be called between beginFrame() and present().
     void cmdBeginBuiltInRenderPass(vk::CommandBuffer, const BeginRenderPassParameters &);
