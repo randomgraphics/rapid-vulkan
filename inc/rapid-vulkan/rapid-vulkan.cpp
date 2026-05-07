@@ -861,13 +861,13 @@ public:
         return view;
     }
 
-    void setContent(const SetContentParameters & params) {
+    bool setContent(const SetContentParameters & params) {
         // make sure area is aligned to block size
         auto formatDesc = VkFormatDesc::get(_desc.format);
         if ((params.area.x % formatDesc.blockW) != 0 || (params.area.y % formatDesc.blockH) != 0 || (params.area.w % formatDesc.blockW) != 0 ||
             (params.area.h % formatDesc.blockH) != 0) {
             RVI_LOGE("Image::setContent: area is not aligned to block size");
-            return;
+            return false;
         }
 
         // validate row pitch
@@ -878,14 +878,14 @@ public:
         if (0 == rowPitch) { rowPitch = width * formatDesc.sizeBytes; }
         if (rowPitch < width * formatDesc.sizeBytes) {
             RVI_LOGE("Image::setContent: row pitch is too small");
-            return;
+            return false;
         }
 
         // TODO: validate mip level and array layer.
 
         // adjust area to fit image size
         auto area = clampRect3D(params.area, mipExtent);
-        if (area.w == 0 || area.h == 0 || area.d == 0) return;
+        if (area.w == 0 || area.h == 0 || area.d == 0) return false;
 
         // adjust pixel array pointer and size based on the clamped area.
         // (TODO: revisit this math. could be wrong)
@@ -913,18 +913,22 @@ public:
         // copy image content from staging buffer to image
         auto q = CommandQueue({{_owner.name()}, _gi, params.queueFamily, params.queueIndex});
         auto c = q.begin(_owner.name().data());
-        if (c) {
-            CmdDebugLabel label(c, ("set image content of " + _owner.name()).c_str());
-            auto          r = vk::ImageSubresourceRange(aspect, params.mipLevel, 1, params.arrayLayer, 1);
-            Barrier {}
-                .s(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer)
-                .i(_desc.handle, vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead,
-                   vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, r)
-                .cmdWrite(c);
-            c.handle().copyBufferToImage(staging, _desc.handle, vk::ImageLayout::eTransferDstOptimal, {copyRegion});
-            label.end();
-            q.wait(q.submit({{c}}));
+        if (!c) {
+            RVI_LOGE("Image::setContent: failed to begin command buffer");
+            return false;
         }
+
+        CmdDebugLabel label(c, ("set image content of " + _owner.name()).c_str());
+        auto          r = vk::ImageSubresourceRange(aspect, params.mipLevel, 1, params.arrayLayer, 1);
+        Barrier {}
+            .s(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer)
+            .i(_desc.handle, vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead,
+               vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, r)
+            .cmdWrite(c);
+        c.handle().copyBufferToImage(staging, _desc.handle, vk::ImageLayout::eTransferDstOptimal, {copyRegion});
+        label.end();
+        q.wait(q.submit({{c}}));
+        return true;
     }
 
     Content readContent(const ReadContentParameters & params) const {
@@ -970,10 +974,8 @@ public:
             auto r = vk::ImageSubresourceRange(aspect, 0, _desc.mipLevels, 0, _desc.arrayLayers);
             Barrier {}
                 .s(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer)
-                .i(_desc.handle, vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead,
-                   // TOOD: undefined state allows driver to discard the content. Need to use in the actual
-                   // layout of the image. AFter the copy, also need to restore the original layout.
-                   vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferSrcOptimal, r)
+                .i(_desc.handle, vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead, params.currentLayout,
+                   vk::ImageLayout::eTransferSrcOptimal, r)
                 .cmdWrite(c);
             c.handle().copyImageToBuffer(_desc.handle, vk::ImageLayout::eTransferSrcOptimal, staging, copyRegions);
             q.wait(q.submit({c}));
@@ -1124,7 +1126,7 @@ Image::~Image() {
 }
 auto Image::desc() const -> const Desc & { return _impl->desc(); }
 auto Image::getView(const GetViewParameters & p) const -> vk::ImageView { return _impl->getView(p); }
-void Image::setContent(const SetContentParameters & p) { return _impl->setContent(p); }
+bool Image::setContent(const SetContentParameters & p) { return _impl->setContent(p); }
 auto Image::readContent(const ReadContentParameters & p) const -> Content { return _impl->readContent(p); }
 void Image::onNameChanged(const std::string &) { _impl->onNameChanged(); }
 // *********************************************************************************************************************
