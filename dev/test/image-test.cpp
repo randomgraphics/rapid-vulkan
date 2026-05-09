@@ -27,8 +27,8 @@ TEST_CASE("image-read-write") {
     const uint32_t pixels[] = {0xff000000, 0x00ff0000, 0x0000ff00, 0x000000ff};
     image.setContent(Image::SetContentParameters {}.setQueue(*dev->graphics()).setPixels(pixels));
 
-    // then read it back
-    auto read = image.readContent(Image::ReadContentParameters {}.setQueue(*dev->graphics()));
+    // setContent() leaves the image in eTransferDstOptimal; readContent() needs the actual current layout.
+    auto read = image.readContent(Image::ReadContentParameters {}.setQueue(*dev->graphics()).setCurrentLayout(vk::ImageLayout::eTransferDstOptimal));
     REQUIRE(read.format == cp.info.format);
     REQUIRE(read.storage.size() == 4 * cp.info.extent.width * cp.info.extent.height);
     auto p = (const uint32_t *) read.storage.data();

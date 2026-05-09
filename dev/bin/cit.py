@@ -12,24 +12,23 @@ def check_header_revision():
     git_remote = subprocess.check_output(["git", "remote"], cwd=sdk_root_dir).decode(sys.stdout.encoding).strip()
     header_path = "inc/rapid-vulkan/rapid-vulkan.h"
     header_diff = subprocess.check_output(["git", "diff", "-U0", "--no-color", git_remote + "/main", "--", header_path], cwd=sdk_root_dir).decode(sys.stdout.encoding).strip()
-    if 0 == len(header_diff):
-        print("OK.")
-        return
 
     # get header revision of the local file
     with open(sdk_root_dir / header_path, "r") as f: local_revision = get_header_revision(f.read())
-    # print(f"Local header revision: {local_revision}")
 
-    # get header revision of the remote file
+    # get header revision of the remote main
     remote_header = subprocess.check_output(["git", "show", git_remote + "/main:" + str(header_path)], cwd=sdk_root_dir).decode(sys.stdout.encoding).strip()
     remote_revision = get_header_revision(remote_header)
-    # print(f"Remote header revision: {remote_revision}")
+
+    if 0 == len(header_diff):
+        print(f"OK (revision {local_revision}, no change from main).")
+        return
 
     # check if the header revision is increased
     if local_revision <= remote_revision:
-        utils.rip("The header revision is not increased. Please increase the header revision.")
+        utils.rip(f"Header revision not increased (local={local_revision}, main={remote_revision}). Please bump RAPID_VULKAN_HEADER_REVISION.")
     else:
-        print("OK")
+        print(f"OK (revision {remote_revision} -> {local_revision}).")
 
 def run_style_check():
     print("Checking code styles...", end="")
