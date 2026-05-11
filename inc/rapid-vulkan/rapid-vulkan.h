@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identifies the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 30
+#define RAPID_VULKAN_HEADER_REVISION 31
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -1306,10 +1306,13 @@ public:
         Desc               desc {};
     };
 
+    inline static constexpr vk::ImageSubresourceRange FULL_RANGE = {vk::FlagTraits<vk::ImageAspectFlagBits>::allFlags, 0, VK_REMAINING_MIP_LEVELS, 0,
+                                                                    VK_REMAINING_ARRAY_LAYERS};
+
     struct GetViewParameters {
         vk::ImageViewType         type   = (vk::ImageViewType) -1; ///< set to -1 to use the default view type.
         vk::Format                format = vk::Format::eUndefined; ///< set to eUndefined to use image's format.
-        vk::ImageSubresourceRange range  = {{}, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS};
+        vk::ImageSubresourceRange range  = FULL_RANGE;
 
         GetViewParameters & setType(vk::ImageViewType t) {
             type = t;
@@ -1360,9 +1363,8 @@ public:
     };
 
     struct ReadContentParameters {
-        uint32_t        queueFamily   = 0;
-        uint32_t        queueIndex    = 0;
-        vk::ImageLayout currentLayout = vk::ImageLayout::eTransferSrcOptimal;
+        uint32_t queueFamily = 0;
+        uint32_t queueIndex  = 0;
 
         ReadContentParameters & setQueue(uint32_t family, uint32_t index) {
             queueFamily = family;
@@ -1371,11 +1373,6 @@ public:
         }
 
         ReadContentParameters & setQueue(const CommandQueue &);
-
-        ReadContentParameters & setCurrentLayout(vk::ImageLayout l) {
-            currentLayout = l;
-            return *this;
-        }
     };
 
     struct SubresourceContent {
@@ -1399,11 +1396,66 @@ public:
         operator bool() const { return format != vk::Format::eUndefined && !storage.empty() && !subresources.empty(); }
     };
 
-    /// @brief A utility function to determine image aspect flags from a format.
-    /// @param format The pixel format of the image.
-    /// @param hint   The hint of the aspect flags. The function will try to use this hinted aspect flag, as long as it is compatible with the format.
-    ///               Set to vk::ImageAspectFlagBits::eNone to let the function determine the aspect flags.
-    static vk::ImageAspectFlags determineImageAspect(vk::Format format, vk::ImageAspectFlags hint = vk::ImageAspectFlagBits::eNoneKHR);
+    /// Tracks per-subresource Vulkan image state (layout, access flags, pipeline stage).
+    /// Each subresource slot holds one PlaneState per aspect plane the image's format has.
+    /// The plane set is fixed at image construction time and never grows or shrinks.
+    struct State {
+        /// State of a single aspect plane of a single subresource.
+        struct PlaneState {
+            vk::ImageLayout        layout = vk::ImageLayout::eUndefined;
+            vk::AccessFlags        access = vk::AccessFlagBits::eNone;
+            vk::PipelineStageFlags stages = vk::PipelineStageFlagBits::eBottomOfPipe;
+            const char *           usage  = "<unspecified>";
+
+            bool operator==(const PlaneState & o) const { return layout == o.layout && access == o.access && stages == o.stages; }
+            bool operator!=(const PlaneState & o) const { return !(*this == o); }
+
+            bool isWrite() const {
+                // clang-format off
+                return (access & (vk::AccessFlagBits::eShaderWrite |
+                                  vk::AccessFlagBits::eColorAttachmentWrite |
+                                  vk::AccessFlagBits::eDepthStencilAttachmentWrite |
+                                  vk::AccessFlagBits::eTransferWrite |
+                                  vk::AccessFlagBits::eHostWrite |
+                                  vk::AccessFlagBits::eMemoryWrite)) != vk::AccessFlags{};
+                // clang-format on
+            }
+
+            static constexpr PlaneState UNDEFINED() {
+                return {vk::ImageLayout::eUndefined, vk::AccessFlagBits::eNone, vk::PipelineStageFlagBits::eBottomOfPipe};
+            }
+            static constexpr PlaneState TRANSFER_SRC() {
+                return {vk::ImageLayout::eTransferSrcOptimal, vk::AccessFlagBits::eTransferRead, vk::PipelineStageFlagBits::eTransfer};
+            }
+            static constexpr PlaneState TRANSFER_DST() {
+                return {vk::ImageLayout::eTransferDstOptimal, vk::AccessFlagBits::eTransferWrite, vk::PipelineStageFlagBits::eTransfer};
+            }
+        };
+
+        struct AspectHash {
+            size_t operator()(vk::ImageAspectFlagBits a) const { return std::hash<uint32_t> {}(static_cast<uint32_t>(a)); }
+        };
+        struct SubresourceState {
+            std::unordered_map<vk::ImageAspectFlagBits, PlaneState, AspectHash> planes;
+        };
+
+        /// Returns per-plane state for (mip, arrayLayer, aspect), or nullptr if out of range or not a
+        /// valid plane for this image's format.
+        const PlaneState * get(uint32_t mip, uint32_t arrayLayer, vk::ImageAspectFlagBits aspect) const {
+            if (mip >= numMips || arrayLayer >= numLayers) RVI_UNLIKELY return nullptr;
+            const auto & sr = subresources[subresourceIndex(mip, arrayLayer)];
+            auto         it = sr.planes.find(aspect);
+            if (it == sr.planes.end()) RVI_UNLIKELY return nullptr;
+            return &it->second;
+        }
+
+        size_t subresourceIndex(uint32_t mip, uint32_t arrayLayer) const { return mip * numLayers + arrayLayer; }
+
+        vk::ImageAspectFlags          validAspects = {};
+        uint32_t                      numMips      = 0;
+        uint32_t                      numLayers    = 0;
+        std::vector<SubresourceState> subresources; // size = numMips * numLayers. Use subresourceIndex() to index into it.
+    };
 
     /// @brief Construct an image from scratch (will create a new vk::Image handle)
     Image(const ConstructParameters &);
@@ -1425,9 +1477,17 @@ public:
     bool setContent(const SetContentParameters &);
 
     /// @brief Synchronously read content of the whole image.
-    /// This method, if succeeded, will transfer the entire image into vk::ImageLayout::eTransferSrcOptimal layout.
-    /// If failed, returns empty content with undefined format.
-    Content readContent(const ReadContentParameters &) const;
+    /// Transitions every subresource to eTransferSrcOptimal and updates internal state on success.
+    /// Returns empty content with undefined format on failure.
+    Content readContent(const ReadContentParameters &);
+
+    /// @brief Returns the current per-subresource image state tracked internally.
+    const State & getState() const;
+
+    /// @brief Updates the state for all subresources in \p range.
+    /// The aspectMask in \p range is intersected with the image's valid planes; unknown bits are ignored.
+    /// The default range covers all aspects, all mips, and all array layers of the entire image.
+    void setState(const State::PlaneState & newState, const vk::ImageSubresourceRange & range = FULL_RANGE);
 
     vk::Image handle() const { return desc().handle; }
 
@@ -2345,13 +2405,6 @@ public:
             return *this;
         }
     };
-    /// @brief Specify the current status of the back buffer image.
-    struct BackbufferStatus {
-        vk::ImageLayout        layout {};
-        vk::AccessFlags        access {};
-        vk::PipelineStageFlags stages {};
-    };
-
     struct Backbuffer {
         Image *         image {}; // this is never null for a valid backbuffer.
         vk::ImageView   view {};
@@ -2363,9 +2416,6 @@ public:
         /// @brief Pointer to the backbuffer of the frame.
         /// The pointer value will be invalidated after each present.
         const Backbuffer * backbuffer = nullptr;
-
-        /// Status of the back buffer image at the beginning of the frame.
-        BackbufferStatus backbufferStatus {};
 
         /// @brief The semaphore that will be signaled when the last present of the current backbuffer image is done.
         /// The first rendering submission for current frame should wait for this semaphore.
@@ -2385,12 +2435,6 @@ public:
         /// @brief Specify the clear value for depth and stencil buffer.
         vk::ClearDepthStencilValue clearDepth = vk::ClearDepthStencilValue(1.0f, 0);
 
-        /// @brief Specify the current status of the back buffer image.
-        /// This is for the cmdBeginRenderPass() method insert proper barriers to transition the image to the desired layout for the render pass.
-        /// If the back buffer is already in vk::ImageLayout::eColorAttachmentOptimal layout, then no barrier will be inserted.
-        /// When built-in render pass ends, the back buffer image will be automatically transitioned into status suitable for present().
-        // BackbufferStatus backbufferStatus = {vk::ImageLayout::ePresentSrcKHR, vk::AccessFlagBits::eMemoryRead, vk::PipelineStageFlagBits::eBottomOfPipe};
-
         BeginRenderPassParameters & setClearColorF(vk::ArrayProxy<const float> color) {
             clearColor.setFloat32({color.size() > 0 ? color.data()[0] : 0.f, color.size() > 1 ? color.data()[1] : 0.f, color.size() > 2 ? color.data()[2] : 0.f,
                                    color.size() > 3 ? color.data()[3] : 1.f});
@@ -2406,22 +2450,11 @@ public:
     /// @brief Specify parameters to call present().
     struct PresentParameters {
 
-        /// @brief Specify the current status of the back buffer image when calling present().
-        /// The present() function will insert proper barrier to transit the current back buffer image into VK_IMAGE_LAYOUT_PRESENT_SRC_KHR layouy.
-        /// If the back buffer image is already in VK_IMAGE_LAYOUT_PRESENT_SRC_KHR layout, then no barrier will be inserted.
-        BackbufferStatus backbufferStatus;
-
         /// @brief Optional list of semaphores that present() call uses to ensure presenting happens after all rendering of the frame is done.
-        /// !!! IMPORTANT !!! : If not empty, caller MUST ensure that all semaphores in the list are signaled by th end of the frame rendering.
+        /// !!! IMPORTANT !!! : If not empty, caller MUST ensure that all semaphores in the list are signaled by the end of the frame rendering.
         /// Failing to do so will cause present() to wait forever. On the other hand, signaling these
         /// semaphores too early could cause present() showing partially rendered frame.
         vk::ArrayProxy<const vk::Semaphore> renderFinished = {};
-
-        PresentParameters(vk::ImageLayout backbufferLayuout, vk::AccessFlags backbufferAccessFlags) {
-            backbufferStatus = {backbufferLayuout, backbufferAccessFlags, vk::PipelineStageFlagBits::eBottomOfPipe};
-        }
-
-        PresentParameters(const BackbufferStatus & backbufferStatus_): backbufferStatus(backbufferStatus_) {}
 
         PresentParameters & setRenderFinished(vk::ArrayProxy<const vk::Semaphore> renderFinished_) {
             renderFinished = renderFinished_;
@@ -2431,20 +2464,13 @@ public:
 
     struct PresentResult {
         enum Status {
-            FAILED     = -1, ///< Present failed. The back buffer image is in undefined state. Consider delete and recreate the swapchain.
-            SUCCESS    = 0,  ///< Present successfully. The back buffer image is now in the layout specified by the backbufferStatus field.
-            SUBOPTIMAL = 1,  ///< Present successfully, but the swapchain is in suboptimal state. The back buffer image is now in the layout specified by the
-                             ///< backbufferStatus field.
+            FAILED     = -1, ///< Present failed. The back buffer image state is undefined; consider recreating the swapchain.
+            SUCCESS    = 0,  ///< Present succeeded. The back buffer image is in VK_IMAGE_LAYOUT_PRESENT_SRC_KHR.
+            SUBOPTIMAL = 1,  ///< Present succeeded, but the swapchain is suboptimal.
         };
 
-        /// The result status of the present() call. If FAILED, the rest of the structure is undefined.
+        /// The result status of the present() call.
         Status status = FAILED;
-
-        /// The actual status of the back buffer image after present() call.
-        /// Note that the status specified in the PresentParameters may not be the same as this value,
-        /// since present() will insert proper barriers to transition the image into a layout suitable for presentation.
-        /// Undefined if the present() call failed.
-        BackbufferStatus backbufferStatus;
 
         operator bool() const { return status != FAILED; }
     };
@@ -2484,10 +2510,10 @@ public:
     /// @brief Begin a new built-in render pass. Can only be called between beginFrame() and present().
     void cmdBeginBuiltInRenderPass(vk::CommandBuffer, const BeginRenderPassParameters &);
 
-    /// @brief End the built-in render pass. Returns the
-    /// After built-in render pass ends, the back buffer image will be automatically transitioned into status suitable for present(). You can check the
-    /// actual value of the status via currentFrame().backbuffer->status.
-    BackbufferStatus cmdEndBuiltInRenderPass(vk::CommandBuffer);
+    /// @brief End the built-in render pass.
+    /// After the render pass ends, the back buffer image is automatically transitioned to VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+    /// and the image's tracked state is updated accordingly.
+    void cmdEndBuiltInRenderPass(vk::CommandBuffer);
 
 private:
     class Impl;

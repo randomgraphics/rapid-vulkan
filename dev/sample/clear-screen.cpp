@@ -73,9 +73,8 @@ void entry(const Options & options) {
     glfw.show();
     for (;;) {
         if (!options.headless && !glfw.processEvents()) break;
-        auto                                      frame        = sw.beginFrame();
-        float                                     clearColor[] = {0.0f, 1.0f, 0.0f, 1.0f};
-        rapid_vulkan::Swapchain::BackbufferStatus backbufferStatus;
+        auto  frame        = sw.beginFrame();
+        float clearColor[] = {0.0f, 1.0f, 0.0f, 1.0f};
         if (frame.valid()) {
             // Standard boilerplate of rendering a frame. It is basically the same as triangle.cpp.
             if (options.headless) {
@@ -94,15 +93,15 @@ void entry(const Options & options) {
             // begin the render pass
             sw.cmdBeginBuiltInRenderPass(c, Swapchain::BeginRenderPassParameters {}.setClearColorF(clearColor)); // clear the screen.
 
-            // end render pass
-            backbufferStatus = sw.cmdEndBuiltInRenderPass(c);
+            // end render pass (also updates image state to DESIRED_PRESENT_STATUS)
+            sw.cmdEndBuiltInRenderPass(c);
 
             // submit the command buffer. also signal the render finished semaphore.
             q.submit({c, {}, {frame.imageAvailable}, {renderFinished.get()}});
         }
 
         // end of the frame.
-        sw.present(Swapchain::PresentParameters(backbufferStatus).setRenderFinished({renderFinished.get()}));
+        sw.present(Swapchain::PresentParameters {}.setRenderFinished({renderFinished.get()}));
     }
     device.waitIdle();
 }

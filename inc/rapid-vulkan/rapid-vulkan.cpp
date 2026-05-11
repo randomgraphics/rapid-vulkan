@@ -808,22 +808,14 @@ public:
             cp.info.flags &= ~vk::ImageCreateFlagBits::eCubeCompatible;
         }
 
-        // // create a default image view that covers the whole image
-        // auto aspect          = determineImageAspect(ci.aspect, ci.format);
-        // auto vci             = VkImageViewCreateInfo {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-        // vci.image            = image;
-        // vci.viewType         = ci.isCube() ? VK_IMAGE_VIEW_TYPE_CUBE : ci.arrayLayers > 1 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
-        // vci.format           = ci.format;
-        // vci.components       = {VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_B, VK_COMPONENT_SWIZZLE_A};
-        // vci.subresourceRange = {aspect, 0, ci.mipLevels, 0, ci.arrayLayers};
-        // RVI_VK_REQUIRE(vkCreateImageView(g.device, &vci, g.allocator, &view));
-        // setVkHandleName(g.device, view, name);
+        initState(State::PlaneState::UNDEFINED());
     }
 
     Impl(Image & o, const ImportParameters & ip): _owner(o), _gi(ip.gi) {
         RVI_REQUIRE(ip.gi);
         RVI_REQUIRE(ip.desc.handle);
         _desc = ip.desc;
+        initState(State::PlaneState::UNDEFINED());
     }
 
     ~Impl() {
@@ -843,17 +835,22 @@ public:
         }
     }
 
-    const Desc & desc() const { return _desc; }
+    const Desc &  desc() const { return _desc; }
+    const State & state() const { return _state; }
 
     vk::ImageView getView(GetViewParameters p) const {
         if (p.format == vk::Format::eUndefined) p.format = _desc.format;
-        p.range.aspectMask = determineImageAspect(p.format, p.range.aspectMask);
+        p.range.aspectMask &= _state.validAspects;
+        if (!p.range.aspectMask) RVI_UNLIKELY {
+                RVI_LOGE("Image::getView: subresource aspect mask is not valid for this image");
+                return {};
+            }
         clampRange(p.range.baseMipLevel, p.range.levelCount, _desc.mipLevels);
         clampRange(p.range.baseArrayLayer, p.range.layerCount, _desc.arrayLayers);
-        if (0 == p.range.layerCount || 0 == p.range.levelCount) {
-            RVI_LOGE("Image::getView: subresource range is out of bounds");
-            return {};
-        }
+        if (0 == p.range.layerCount || 0 == p.range.levelCount) RVI_UNLIKELY {
+                RVI_LOGE("Image::getView: subresource range is out of bounds");
+                return {};
+            }
         p.type = determineViewType(p.type, p.range);
         if ((int) p.type < 0) return {};
         auto & view = _views[p];
@@ -881,8 +878,6 @@ public:
             return false;
         }
 
-        // TODO: validate mip level and array layer.
-
         // adjust area to fit image size
         auto area = clampRect3D(params.area, mipExtent);
         if (area.w == 0 || area.h == 0 || area.d == 0) return false;
@@ -902,11 +897,10 @@ public:
         staging.unmap();
 
         // determine subresource aspect
-        auto aspect = determineImageAspect(_desc.format);
 
         // Setup buffer copy regions for the subresource
         auto copyRegion = vk::BufferImageCopy()
-                              .setImageSubresource({aspect, params.mipLevel, params.arrayLayer, 1})
+                              .setImageSubresource({_state.validAspects, params.mipLevel, params.arrayLayer, 1})
                               .setImageOffset({(int) area.x, (int) area.y, (int) area.z})
                               .setImageExtent({area.w, area.h, area.d});
 
@@ -919,7 +913,7 @@ public:
         }
 
         CmdDebugLabel label(c, ("set image content of " + _owner.name()).c_str());
-        auto          r = vk::ImageSubresourceRange(aspect, params.mipLevel, 1, params.arrayLayer, 1);
+        auto          r = vk::ImageSubresourceRange(_state.validAspects, params.mipLevel, 1, params.arrayLayer, 1);
         Barrier {}
             .s(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer)
             .i(_desc.handle, vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead,
@@ -928,10 +922,14 @@ public:
         c.handle().copyBufferToImage(staging, _desc.handle, vk::ImageLayout::eTransferDstOptimal, {copyRegion});
         label.end();
         q.wait(q.submit({{c}}));
+
+        // Update per-plane state to reflect the transfer destination layout.
+        forEachAspectBit(_state.validAspects,
+                         [&](vk::ImageAspectFlagBits bit) { setStatePlane(params.mipLevel, params.arrayLayer, bit, State::PlaneState::TRANSFER_DST()); });
         return true;
     }
 
-    Content readContent(const ReadContentParameters & params) const {
+    Content readContent(const ReadContentParameters & params) {
         // uint32_t mipLevel   = params.mipLevel;
         // uint32_t levelCount = params.layerCount;
         // uint32_t arrayLayer = params.arrayLayer;
@@ -941,7 +939,6 @@ public:
         // if (0 == levelCount || 0 == layerCount) return {};
 
         auto formatDesc = VkFormatDesc::get(_desc.format);
-        auto aspect     = determineImageAspect(_desc.format);
         auto mipExtents = buildMipExtentArray();
 
         Content                          content;
@@ -956,7 +953,7 @@ public:
                                           .setBufferOffset(dataSize)
                                           .setBufferRowLength(extent.width)
                                           .setBufferImageHeight(extent.height)
-                                          .setImageSubresource({aspect, m, a, 1})
+                                          .setImageSubresource({_state.validAspects, m, a, 1})
                                           .setImageOffset({0, 0, 0})
                                           .setImageExtent(extent));
                 content.subresources.push_back({m, a, extent, rowPitch, dataSize});
@@ -967,14 +964,19 @@ public:
         // Allocate staging buffer
         auto staging = Buffer(Buffer::ConstructParameters {{_owner.name()}, _gi, dataSize}.setStaging());
 
+        // Derive current layout from internal state. readContent() blits the entire image with one
+        // barrier, so all subresources must already share the same layout; mip 0 / layer 0 is representative.
+        vk::ImageLayout currentLayout = vk::ImageLayout::eUndefined;
+        if (!_state.subresources.empty() && !_state.subresources[0].planes.empty()) { currentLayout = _state.subresources[0].planes.begin()->second.layout; }
+
         // Copy image content into the staging buffer
         auto q = CommandQueue({{_owner.name()}, _gi, params.queueFamily, params.queueIndex});
         auto c = q.begin(_owner.name().data());
         if (c) {
-            auto r = vk::ImageSubresourceRange(aspect, 0, _desc.mipLevels, 0, _desc.arrayLayers);
+            auto r = vk::ImageSubresourceRange(_state.validAspects, 0, _desc.mipLevels, 0, _desc.arrayLayers);
             Barrier {}
                 .s(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer)
-                .i(_desc.handle, vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead, params.currentLayout,
+                .i(_desc.handle, vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead, currentLayout,
                    vk::ImageLayout::eTransferSrcOptimal, r)
                 .cmdWrite(c);
             c.handle().copyImageToBuffer(_desc.handle, vk::ImageLayout::eTransferSrcOptimal, staging, copyRegions);
@@ -986,7 +988,9 @@ public:
         RVI_ASSERT(mapped.size == dataSize);
         content.storage.assign(mapped.data, mapped.data + mapped.size);
 
-        // done
+        // Update internal state: entire image is now in transfer-src layout.
+        setState(State::PlaneState::TRANSFER_SRC(), vk::ImageSubresourceRange(_state.validAspects, 0, _desc.mipLevels, 0, _desc.arrayLayers));
+
         content.format = _desc.format;
         return content;
     }
@@ -1023,8 +1027,85 @@ private:
     vk::DeviceMemory   _memory {};
     VmaAllocation      _allocation {};
     mutable ViewMap    _views;
+    State              _state;
+
+public:
+    bool validateSubresourceRange(vk::ImageSubresourceRange & range) const {
+        clampRange(range.baseMipLevel, range.levelCount, _state.numMips);
+        clampRange(range.baseArrayLayer, range.layerCount, _state.numLayers);
+        if (0 == range.levelCount || 0 == range.layerCount) return false;
+        range.aspectMask &= _state.validAspects;
+        return !!range.aspectMask;
+    }
+
+    // Update all planes in range; called by Image::setState().
+    void setState(const State::PlaneState & newState, const vk::ImageSubresourceRange & range) {
+        auto validateRange = range;
+        if (!validateSubresourceRange(validateRange)) return;
+        for (uint32_t i = validateRange.baseMipLevel; i < validateRange.baseMipLevel + validateRange.levelCount; ++i)
+            for (uint32_t j = validateRange.baseArrayLayer; j < validateRange.baseArrayLayer + validateRange.layerCount; ++j)
+                forEachAspectBit(validateRange.aspectMask, [&](vk::ImageAspectFlagBits bit) { setStatePlane(i, j, bit, newState); });
+    }
 
 private:
+    vk::ImageAspectFlags determineAvailableImageAspects(vk::Format format) {
+        switch (format) {
+        // depth only format
+        case vk::Format::eD16Unorm:
+        case vk::Format::eD32Sfloat:
+        case vk::Format::eX8D24UnormPack32:
+            return vk::ImageAspectFlagBits::eDepth;
+
+        // stencil only format
+        case vk::Format::eS8Uint:
+            return vk::ImageAspectFlagBits::eStencil;
+
+        // depth + stencil format
+        case vk::Format::eD16UnormS8Uint:
+        case vk::Format::eD24UnormS8Uint:
+        case vk::Format::eD32SfloatS8Uint:
+            return vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil;
+
+        // TODO: multi-planar formats
+
+        // default format
+        default:
+            return vk::ImageAspectFlagBits::eColor;
+        }
+    }
+
+    // Iterate each set bit in aspects, calling fn(vk::ImageAspectFlagBits). The m & -m
+    // idiom isolates the lowest set bit without a hard-coded aspect list.
+    template<typename Fn>
+    static void forEachAspectBit(vk::ImageAspectFlags aspects, Fn && fn) {
+        auto remaining = static_cast<vk::ImageAspectFlags::MaskType>(aspects);
+        while (remaining) {
+            auto lowBit = remaining & (~remaining + 1u);
+            fn(static_cast<vk::ImageAspectFlagBits>(lowBit));
+            remaining ^= lowBit;
+        }
+    }
+
+    // Initialize state storage from the image's format and dimensions. Called once from constructors.
+    void initState(const State::PlaneState & initial) {
+        _state.validAspects = determineAvailableImageAspects(_desc.format);
+        _state.numMips      = _desc.mipLevels;
+        _state.numLayers    = _desc.arrayLayers;
+        _state.subresources.assign((size_t) _desc.mipLevels * (size_t) _desc.arrayLayers, State::SubresourceState {});
+        for (auto & sr : _state.subresources) forEachAspectBit(_state.validAspects, [&](vk::ImageAspectFlagBits bit) { sr.planes.emplace(bit, initial); });
+    }
+
+    // Update a single plane; logs the layout transition at verbose level.
+    void setStatePlane(uint32_t mip, uint32_t arrayLayer, vk::ImageAspectFlagBits aspect, const State::PlaneState & newState) {
+        auto & sr = _state.subresources[_state.subresourceIndex(mip, arrayLayer)];
+        auto   it = sr.planes.find(aspect);
+        if (it == sr.planes.end()) return; // not a valid plane for this format
+        if (it->second == newState) return;
+        RVI_LOGV("image '%s': mip=%u layer=%u aspect=0x%x layout %d->%d", _owner.name().c_str(), mip, arrayLayer, static_cast<uint32_t>(aspect),
+                 static_cast<int>(it->second.layout), static_cast<int>(newState.layout));
+        it->second = newState;
+    }
+
     vk::ImageViewType determineViewType(vk::ImageViewType candidate, const vk::ImageSubresourceRange & range) const {
         if (vk::ImageViewType::e1D <= candidate && candidate <= vk::ImageViewType::eCubeArray) return candidate;
         switch (_desc.type) {
@@ -1090,34 +1171,7 @@ Image::ReadContentParameters & Image::ReadContentParameters::setQueue(const Comm
     queueIndex  = queue.index();
     return *this;
 }
-vk::ImageAspectFlags Image::determineImageAspect(vk::Format format, vk::ImageAspectFlags aspect) {
-    switch (format) {
-    // depth only format
-    case vk::Format::eD16Unorm:
-    case vk::Format::eD32Sfloat:
-    case vk::Format::eX8D24UnormPack32:
-        return vk::ImageAspectFlagBits::eDepth;
 
-    // stencil only format
-    case vk::Format::eS8Uint:
-        return vk::ImageAspectFlagBits::eStencil;
-
-    // depth + stencil format
-    case vk::Format::eD16UnormS8Uint:
-    case vk::Format::eD24UnormS8Uint:
-    case vk::Format::eD32SfloatS8Uint:
-        if (vk::ImageAspectFlagBits::eDepth == aspect || vk::ImageAspectFlagBits::eStencil == aspect)
-            return aspect;
-        else
-            return vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil;
-
-    // TODO: multi-planar formats
-
-    // default format
-    default:
-        return vk::ImageAspectFlagBits::eColor;
-    }
-}
 Image::Image(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this, cp); }
 Image::Image(const ImportParameters & cp): Root(cp) { _impl = new Impl(*this, cp); }
 Image::~Image() {
@@ -1127,7 +1181,9 @@ Image::~Image() {
 auto Image::desc() const -> const Desc & { return _impl->desc(); }
 auto Image::getView(const GetViewParameters & p) const -> vk::ImageView { return _impl->getView(p); }
 bool Image::setContent(const SetContentParameters & p) { return _impl->setContent(p); }
-auto Image::readContent(const ReadContentParameters & p) const -> Content { return _impl->readContent(p); }
+auto Image::readContent(const ReadContentParameters & p) -> Content { return _impl->readContent(p); }
+auto Image::getState() const -> const State & { return _impl->state(); }
+void Image::setState(const State::PlaneState & newState, const vk::ImageSubresourceRange & range) { _impl->setState(newState, range); }
 void Image::onNameChanged(const std::string &) { _impl->onNameChanged(); }
 // *********************************************************************************************************************
 // Shader
@@ -3109,7 +3165,7 @@ public:
         _renderPass->cmdBegin(cb, vk::RenderPassBeginInfo {{}, bb.framebuffer, vk::Rect2D({0, 0}, {extent.width, extent.height})}.setClearValues(cv));
     }
 
-    BackbufferStatus cmdEndBuiltInRenderPass(vk::CommandBuffer cb) {
+    void cmdEndBuiltInRenderPass(vk::CommandBuffer cb) {
         // can't begin render pass if the frame is not begun.
         RVI_REQUIRE(READY == _frameStatus);
 
@@ -3117,7 +3173,9 @@ public:
 
         _renderPass->cmdEnd(cb);
 
-        return DESIRED_PRESENT_STATUS;
+        // The render pass's finalLayout transitions the backbuffer to DESIRED_PRESENT_STATUS implicitly.
+        auto & bb = *currentFrame().backbuffer;
+        bb.image->setState(DESIRED_PRESENT_STATUS, Image::FULL_RANGE);
     }
 
     Frame beginFrame() {
@@ -3176,20 +3234,25 @@ public:
         auto & frame = currentFrame();
         auto & bb    = (BackbufferImpl &) *frame.backbuffer;
 
+        // Derive the current image state from the image's own tracking.
+        const auto * colorPlane = bb.image->getState().get(0, 0, vk::ImageAspectFlagBits::eColor);
+        auto         curStatus  = colorPlane ? *colorPlane : Image::State::PlaneState::UNDEFINED();
+
         // Transition the backbuffer image to present source layout.
         auto cb = _graphicsQueue->begin("frame end");
-        if (pp.backbufferStatus.layout != DESIRED_PRESENT_STATUS.layout) {
+        if (curStatus.layout != DESIRED_PRESENT_STATUS.layout) {
             Barrier()
-                .i(bb.image->handle(), pp.backbufferStatus.access, DESIRED_PRESENT_STATUS.access, pp.backbufferStatus.layout, DESIRED_PRESENT_STATUS.layout,
+                .i(bb.image->handle(), curStatus.access, DESIRED_PRESENT_STATUS.access, curStatus.layout, DESIRED_PRESENT_STATUS.layout,
                    vk::ImageAspectFlagBits::eColor)
-                .s(pp.backbufferStatus.stages, DESIRED_PRESENT_STATUS.stages)
+                .s(curStatus.stages, DESIRED_PRESENT_STATUS.stages)
                 .cmdWrite(cb);
         }
+        // Keep the image's tracked state in sync with the GPU layout after the transition.
+        bb.image->setState(DESIRED_PRESENT_STATUS, Image::FULL_RANGE);
         frame.frameEndSubmission = _graphicsQueue->submit({cb, {}, pp.renderFinished, {bb.frameEndSemaphore}});
 
         PresentResult pr;
-        pr.backbufferStatus = DESIRED_PRESENT_STATUS;
-        pr.status           = PresentResult::SUCCESS;
+        pr.status = PresentResult::SUCCESS;
 
         // present current frame
         if (_handle) {
@@ -3235,8 +3298,7 @@ private:
         uint32_t                   imageIndex {};
         CommandQueue::SubmissionID frameEndSubmission {};
 
-        // Back buffer is always in the desired present status when it is acquired.
-        FrameImpl() { backbufferStatus = DESIRED_PRESENT_STATUS; }
+        FrameImpl() = default;
 
         void waitForFrameEnd() {
             if (frameEndSubmission) {
@@ -3265,8 +3327,8 @@ private:
     std::vector<BackbufferImpl> _backbuffers;
     Ref<Image>                  _depthBuffer;
 
-    inline static constexpr BackbufferStatus DESIRED_PRESENT_STATUS = {vk::ImageLayout::ePresentSrcKHR, vk::AccessFlagBits::eMemoryRead,
-                                                                       vk::PipelineStageFlagBits::eBottomOfPipe};
+    inline static constexpr Image::State::PlaneState DESIRED_PRESENT_STATUS = {vk::ImageLayout::ePresentSrcKHR, vk::AccessFlagBits::eMemoryRead,
+                                                                               vk::PipelineStageFlagBits::eBottomOfPipe};
 
 private:
     const FrameImpl & currentFrame() const { return _frames[_frameCounter % std::size(_frames)]; }
@@ -3555,6 +3617,8 @@ private:
                    vk::ImageAspectFlagBits::eColor)
                 .s(vk::PipelineStageFlagBits::eAllCommands, DESIRED_PRESENT_STATUS.stages)
                 .cmdWrite(c);
+            // Keep image state in sync with the GPU layout we just transitioned into.
+            bb.image->setState(DESIRED_PRESENT_STATUS, Image::FULL_RANGE);
         }
 
         // execute the command buffer to update image layout
@@ -3604,6 +3668,8 @@ private:
                    vk::ImageAspectFlagBits::eColor)
                 .s(vk::PipelineStageFlagBits::eAllCommands, DESIRED_PRESENT_STATUS.stages)
                 .cmdWrite(c);
+            // Keep image state in sync with the GPU layout we just transitioned into.
+            bb.image->setState(DESIRED_PRESENT_STATUS, Image::FULL_RANGE);
 
             // create back buffer view
             bb.view = bb.image->getView({vk::ImageViewType::e2D, _cp.backbufferFormat});
@@ -3634,7 +3700,7 @@ auto Swapchain::cp() const -> const ConstructParameters & { return _impl->cp(); 
 auto Swapchain::renderPass() const -> vk::RenderPass { return _impl->renderPass().handle(); }
 auto Swapchain::graphics() const -> CommandQueue & { return _impl->graphics(); }
 void Swapchain::cmdBeginBuiltInRenderPass(vk::CommandBuffer cb, const BeginRenderPassParameters & bp) { return _impl->cmdBeginBuiltInRenderPass(cb, bp); }
-auto Swapchain::cmdEndBuiltInRenderPass(vk::CommandBuffer cb) -> BackbufferStatus { return _impl->cmdEndBuiltInRenderPass(cb); }
+void Swapchain::cmdEndBuiltInRenderPass(vk::CommandBuffer cb) { _impl->cmdEndBuiltInRenderPass(cb); }
 auto Swapchain::beginFrame() -> Frame { return _impl->beginFrame(); }
 auto Swapchain::present(const PresentParameters & pp) -> PresentResult { return _impl->present(pp); }
 

@@ -36,9 +36,8 @@ TEST_CASE("clear-screen") {
         q.submit({c}).wait();
     };
 
-    // readContent() requires the caller to specify the current image layout. After cmdEndBuiltInRenderPass,
-    // the backbuffer is in ePresentSrcKHR layout.
-    auto readBackbuffer = [](const Image * img) { return img->readContent(Image::ReadContentParameters {}.setCurrentLayout(vk::ImageLayout::ePresentSrcKHR)); };
+    // readContent() derives the current image layout from the image's own tracked state.
+    auto readBackbuffer = [](Image * img) { return img->readContent(Image::ReadContentParameters {}); };
 
     auto frame = sw.beginFrame();
 
@@ -110,12 +109,12 @@ TEST_CASE("vertex-buffer") {
     sw.cmdBeginBuiltInRenderPass(c, Swapchain::BeginRenderPassParameters {}.setClearColorF({0.0f, 1.0f, 0.0f, 1.0f})); // clear to green
     c.handle().bindVertexBuffers(0, {vb.handle()}, {0});                                                               // bind the vertex buffer
     p.cmdDraw(c, GraphicsPipeline::DrawParameters {}.setNonIndexed(3));                                                // then draw a blue triangle.
-    auto bbStatus = sw.cmdEndBuiltInRenderPass(c);
+    sw.cmdEndBuiltInRenderPass(c);
     q.submit({c, {}, {f.imageAvailable}, {}}).wait();
     rdc.end();
 
-    // read content of back buffer. Pass the post-render layout returned by cmdEndBuiltInRenderPass.
-    auto pixels = f.backbuffer->image->readContent(Image::ReadContentParameters {}.setCurrentLayout(bbStatus.layout));
+    // readContent() derives the current layout from the image's own tracked state (set by cmdEndBuiltInRenderPass).
+    auto pixels = f.backbuffer->image->readContent(Image::ReadContentParameters {});
 
     // Since we clear the whole screen to green, then draw a blue triangle to cover the lower left half of the screen,
     // then pixel (1, 0) should be green, and pixel (0, 1) should be blue.

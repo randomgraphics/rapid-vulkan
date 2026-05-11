@@ -106,8 +106,7 @@ void entry(const Options & options) {
     glfw.show();
     for (;;) {
         if (!options.headless && !glfw.processEvents()) break;
-        auto                                      frame = sw.beginFrame();
-        rapid_vulkan::Swapchain::BackbufferStatus backbufferStatus;
+        auto frame = sw.beginFrame();
         if (frame.valid()) {
             // Standard boilerplate of rendering a frame. It is basically the same as triangle.cpp.
             if (options.headless) {
@@ -134,15 +133,15 @@ void entry(const Options & options) {
             // enqueue the draw pack to command buffer.
             c.render(dp);
 
-            // end render pass
-            backbufferStatus = sw.cmdEndBuiltInRenderPass(c);
+            // end render pass (also updates image state to DESIRED_PRESENT_STATUS)
+            sw.cmdEndBuiltInRenderPass(c);
 
             // submit the command buffer
             q.submit({c, {}, {frame.imageAvailable}, {renderFinished.get()}});
         }
 
         // end of the frame.
-        sw.present(Swapchain::PresentParameters(backbufferStatus).setRenderFinished({renderFinished.get()}));
+        sw.present(Swapchain::PresentParameters {}.setRenderFinished({renderFinished.get()}));
     }
     device.waitIdle();
 }
