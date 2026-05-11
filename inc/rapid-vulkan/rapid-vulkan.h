@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identifies the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 29
+#define RAPID_VULKAN_HEADER_REVISION 30
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -1360,8 +1360,9 @@ public:
     };
 
     struct ReadContentParameters {
-        uint32_t queueFamily = 0;
-        uint32_t queueIndex  = 0;
+        uint32_t        queueFamily   = 0;
+        uint32_t        queueIndex    = 0;
+        vk::ImageLayout currentLayout = vk::ImageLayout::eTransferSrcOptimal;
 
         ReadContentParameters & setQueue(uint32_t family, uint32_t index) {
             queueFamily = family;
@@ -1370,6 +1371,11 @@ public:
         }
 
         ReadContentParameters & setQueue(const CommandQueue &);
+
+        ReadContentParameters & setCurrentLayout(vk::ImageLayout l) {
+            currentLayout = l;
+            return *this;
+        }
     };
 
     struct SubresourceContent {
@@ -1382,13 +1388,15 @@ public:
 
     struct Content {
         /// @brief The format of the pixel.
-        vk::Format format;
+        vk::Format format = vk::Format::eUndefined;
 
         /// @brief The storage of all pixels.
         std::vector<uint8_t> storage;
 
         /// @brief content of each subresource. index by (mipLevel * layerCount + arrayLayer)
         std::vector<SubresourceContent> subresources;
+
+        operator bool() const { return format != vk::Format::eUndefined && !storage.empty() && !subresources.empty(); }
     };
 
     /// @brief A utility function to determine image aspect flags from a format.
@@ -1414,10 +1422,11 @@ public:
 
     /// @brief Synchronously set content of one subresource
     /// This method, if succeeded, will transfer the subresource into vk::ImageLayout::eTransferDstOptimal layout.
-    void setContent(const SetContentParameters &);
+    bool setContent(const SetContentParameters &);
 
     /// @brief Synchronously read content of the whole image.
-    /// This method, if succeeded, will transfer the image into vk::ImageLayout::eTransferSrcOptimal layout.
+    /// This method, if succeeded, will transfer the entire image into vk::ImageLayout::eTransferSrcOptimal layout.
+    /// If failed, returns empty content with undefined format.
     Content readContent(const ReadContentParameters &) const;
 
     vk::Image handle() const { return desc().handle; }
