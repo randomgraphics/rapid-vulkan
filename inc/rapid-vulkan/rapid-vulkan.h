@@ -1831,7 +1831,7 @@ public:
         /// in the middle uninitialized. It is caller's responsibility to ensure all vertex attributes are properly initialized before creating the pipeline.
         ConstructParameters & setVertexAttribute(size_t location, size_t binding, size_t offset, vk::Format format) {
             if (va.size() <= location) va.resize(location + 1);
-            auto & desc = va[location];
+            auto & desc   = va[location];
             desc.binding  = (uint32_t) binding;
             desc.location = (uint32_t) location;
             desc.offset   = (uint32_t) offset;

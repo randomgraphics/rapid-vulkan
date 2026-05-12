@@ -1732,7 +1732,8 @@ GraphicsPipeline::GraphicsPipeline(const ConstructParameters & params): Pipeline
 
     // setup vertex input stage
     const auto & refl = _impl->layout().reflection();
-    if (refl.vertex.size() != params.va.size()) {
+    // param.va might contains attributes that is not used by shader, which is fine.
+    if (refl.vertex.size() > params.va.size()) {
         RVI_LOGE("Failed to create graphics pipeline (%s): vertex input stage requires %zu attributes, but only %zu are provided.", params.name.c_str(),
                  refl.vertex.size(), params.va.size());
         return;
@@ -2805,7 +2806,9 @@ private:
         for (const auto & buf : pack.dependencies.buffers) _buffers.insert(buf);
         for (const auto & img : pack.dependencies.images) _images.insert(img);
         for (const auto & smp : pack.dependencies.samplers) _samplers.insert(smp);
-        for (const auto & vb : pack.vertexBuffers) { if (vb) _buffers.insert(vb); }
+        for (const auto & vb : pack.vertexBuffers) {
+            if (vb) _buffers.insert(vb);
+        }
         if (pack.indexBuffer) _buffers.insert(pack.indexBuffer);
     }
 };
