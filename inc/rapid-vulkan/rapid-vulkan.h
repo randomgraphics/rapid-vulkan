@@ -235,9 +235,11 @@ SOFTWARE.
 #define RVI_LOGI(...) RAPID_VULKAN_LOG(RAPID_VULKAN_NAMESPACE::LogSeverity::INFO, "[RAPID-VULKAN] [INFO] ", RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
 #define RVI_LOGV(...) \
     RAPID_VULKAN_LOG(RAPID_VULKAN_NAMESPACE::LogSeverity::VERBOSE, "[RAPID-VULKAN] [VERBOSE] ", RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
+#define RVI_LOGB(...) \
+    RAPID_VULKAN_LOG(RAPID_VULKAN_NAMESPACE::LogSeverity::BABBLE, "[RAPID-VULKAN] [BABBLE] ", RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
 #if RAPID_VULKAN_ENABLE_DEBUG_BUILD
 #define RVI_LOGD(...) \
-    RAPID_VULKAN_LOG(RAPID_VULKAN_NAMESPACE::LogSeverity::DEBUG, "[RAPID-VULKAN] [DEBUG] ", RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
+    RAPID_VULKAN_LOG(RAPID_VULKAN_NAMESPACE::LogSeverity::VERBOSE, "[RAPID-VULKAN] [DEBUG] ", RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
 #else
 #define RVI_LOGD(...) void(0)
 #endif
@@ -315,8 +317,8 @@ enum class LogSeverity {
     ERROR_  = 10,
     WARNING = 20,
     INFO    = 30,
-    DEBUG   = 40,
-    VERBOSE = 50,
+    VERBOSE = 40,
+    BABBLE  = 50,
 };
 
 // namespace rv_details {
@@ -1758,7 +1760,7 @@ public:
         uint32_t                                           subpass {};
         std::vector<vk::Format>                            dynamicRenderingColorFormats {}; ///< non-empty => use dynamic rendering (ignore pass)
         vk::Format                                         dynamicRenderingDepthFormat {vk::Format::eUndefined};
-        const Shader *                                     vs {}; ///< vertex shasder. can't be null.
+        const Shader *                                     vs {}; ///< vertex shader. can't be null.
         const Shader *                                     fs {}; ///< fragment shader. can be null.
         std::vector<vk::VertexInputAttributeDescription>   va {};
         std::vector<vk::VertexInputBindingDescription>     vb {};
@@ -1821,6 +1823,19 @@ public:
             desc.offset   = (uint32_t) offset;
             desc.format   = format;
             va.push_back(desc);
+            return *this;
+        }
+
+        /// @brief Set vertex attribute for a specific location. The location may be specified out of order.
+        /// The method will expand the vertex attribute array if necessary to accommodate the specified location. But this may leave some vertex attributes
+        /// in the middle uninitialized. It is caller's responsibility to ensure all vertex attributes are properly initialized before creating the pipeline.
+        ConstructParameters & setVertexAttribute(size_t location, size_t binding, size_t offset, vk::Format format) {
+            if (va.size() <= location) va.resize(location + 1);
+            auto & desc = va[location];
+            desc.binding  = (uint32_t) binding;
+            desc.location = (uint32_t) location;
+            desc.offset   = (uint32_t) offset;
+            desc.format   = format;
             return *this;
         }
 

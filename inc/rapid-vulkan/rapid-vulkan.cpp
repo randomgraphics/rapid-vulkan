@@ -1101,7 +1101,7 @@ private:
         auto   it = sr.planes.find(aspect);
         if (it == sr.planes.end()) return; // not a valid plane for this format
         if (it->second == newState) return;
-        RVI_LOGV("image '%s': mip=%u layer=%u aspect=0x%x layout %d->%d", _owner.name().c_str(), mip, arrayLayer, static_cast<uint32_t>(aspect),
+        RVI_LOGD("image '%s': mip=%u layer=%u aspect=0x%x layout %d->%d", _owner.name().c_str(), mip, arrayLayer, static_cast<uint32_t>(aspect),
                  static_cast<int>(it->second.layout), static_cast<int>(newState.layout));
         it->second = newState;
     }
