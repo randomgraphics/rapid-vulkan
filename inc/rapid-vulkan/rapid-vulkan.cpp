@@ -2585,8 +2585,13 @@ public:
         return _gi->device.allocateDescriptorSets({_pool, 1, &_layout})[0];
     }
 
-    /// Release all already-full descriptor pools.
-    void purge() {
+    /// Reset the pool to intial state, release all allocated sets.
+    void reset() {
+        if (_pool) {
+            _gi->device.resetDescriptorPool(_pool);
+            _availableSets = _maxSets;
+        }
+        // Release all already-full descriptor pools.
         for (auto & p : _full) { _gi->safeDestroy(p); }
         _full.clear();
     }
@@ -2772,7 +2777,7 @@ private:
         auto gi = _queue.desc().gi;
         gi->safeDestroy(_handle, _pool);
         gi->device.resetCommandPool(_pool);
-        for (auto & p : _descriptorPools) p.second.purge();
+        for (auto & p : _descriptorPools) p.second.reset();
         _last = {};
         _pipelines.clear();
         _buffers.clear();

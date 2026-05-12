@@ -2478,14 +2478,12 @@ public:
     };
 
     struct PresentResult {
-        enum Status {
-            FAILED     = -1, ///< Present failed. The back buffer image state is undefined; consider recreating the swapchain.
-            SUCCESS    = 0,  ///< Present succeeded. The back buffer image is in VK_IMAGE_LAYOUT_PRESENT_SRC_KHR.
-            SUBOPTIMAL = 1,  ///< Present succeeded, but the swapchain is suboptimal.
-        };
+        inline static constexpr int FAILED = -1;
+        inline static constexpr int SUCCESS = 0;
+        inline static constexpr int SUBOPTIMAL = 1;
 
         /// The result status of the present() call.
-        Status status = FAILED;
+        int status = FAILED;
 
         operator bool() const { return status != FAILED; }
     };
