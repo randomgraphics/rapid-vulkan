@@ -2757,6 +2757,8 @@ private:
     DescriptorPoolMap      _descriptorPools;
     Ref<const DrawPack>    _last;
 
+    // resources referneced by draw/dispatch commands recorded in this command buffer. We need to keep references to
+    // them to ensure their lifetime covers the execution of this command buffer on the GPU.
     std::set<Ref<const Pipeline>> _pipelines;
     std::set<Ref<const Buffer>>   _buffers;
     std::set<Ref<const Image>>    _images;
@@ -2795,9 +2797,16 @@ private:
         return iter->second.allocate();
     }
 
-    void updateResourceReferenceList(const DrawPack &) {
-        //
-        // RVI_ASSERT(false, "not implemented yet.");
+    void updateResourceReferenceList(const DrawPack & pack) {
+        // Keep every resource the draw pack references alive for the lifetime of this command buffer.
+        // Vulkan requires that all objects bound via vkCmd* remain valid until the command buffer
+        // finishes executing on the GPU; clear() releases these refs when the buffer is retired.
+        if (pack.pipeline) _pipelines.insert(pack.pipeline);
+        for (const auto & buf : pack.dependencies.buffers) _buffers.insert(buf);
+        for (const auto & img : pack.dependencies.images) _images.insert(img);
+        for (const auto & smp : pack.dependencies.samplers) _samplers.insert(smp);
+        for (const auto & vb : pack.vertexBuffers) { if (vb) _buffers.insert(vb); }
+        if (pack.indexBuffer) _buffers.insert(pack.indexBuffer);
     }
 };
 
