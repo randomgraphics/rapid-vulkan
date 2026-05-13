@@ -459,7 +459,7 @@ inline void setVkHandleName(vk::Device device, T handle, const char * name) {
 // ---------------------------------------------------------------------------------------------------------------------
 /// Helper function to set Vulkan opaque handle's name (VK_EXT_debug_utils).
 template<typename T>
-inline void setVkHandleName(vk::Device device, T handle, std::string name) {
+inline void setVkHandleName(vk::Device device, T handle, const std::string & name) {
     setVkHandleName(device, handle, name.c_str());
 }
 
@@ -2478,8 +2478,8 @@ public:
     };
 
     struct PresentResult {
-        inline static constexpr int FAILED = -1;
-        inline static constexpr int SUCCESS = 0;
+        inline static constexpr int FAILED     = -1;
+        inline static constexpr int SUCCESS    = 0;
         inline static constexpr int SUBOPTIMAL = 1;
 
         /// The result status of the present() call.
@@ -2655,12 +2655,12 @@ public:
     vk::Device operator->() const { return _gi.device; }
 
 private:
-    ConstructParameters         _cp;
-    GlobalInfo                  _gi {};
-    std::vector<CommandQueue *> _queues; // one for each queue family
-    CommandQueue *              _graphics = nullptr;
-    CommandQueue *              _compute  = nullptr;
-    CommandQueue *              _transfer = nullptr;
+    ConstructParameters            _cp;
+    GlobalInfo                     _gi {};
+    std::vector<Ref<CommandQueue>> _queues; // one for each queue family
+    CommandQueue *                 _graphics = nullptr;
+    CommandQueue *                 _compute  = nullptr;
+    CommandQueue *                 _transfer = nullptr;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------

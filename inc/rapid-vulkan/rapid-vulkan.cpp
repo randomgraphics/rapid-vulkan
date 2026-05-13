@@ -4142,7 +4142,6 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
 //
 Device::~Device() {
     waitIdle();
-    for (auto q : _queues) delete q;
     _queues.clear();
 #if RAPID_VULKAN_ENABLE_VMA
     if (_gi.vmaAllocator) vmaDestroyAllocator(_gi.vmaAllocator), _gi.vmaAllocator = nullptr;
