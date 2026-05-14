@@ -17,7 +17,7 @@ TEST_CASE("noop-compute") {
     auto q = CommandQueue({{"main"}, gi, device->graphics()->family(), device->graphics()->index()});
     if (auto c = q.begin("main")) {
         p.cmdDispatch(c, {1, 1, 1});
-        q.submit({c});
+        q.submit1({c});
     }
     q.waitIdle();
 }
@@ -58,7 +58,7 @@ TEST_CASE("cs-buffer-args") {
         ap        = nullptr; // release drawable object to verify that all resource are kept alive by the draw pack object.
         c.render(pack);
         pack = nullptr; // release draw pack object to verify that all resource are kept alive by the command buffer.
-        q->submit({c});
+        q->submit1({c});
     }
 
     REQUIRE(Buffer::instanceCount() == numBuffers + 2);

@@ -352,20 +352,6 @@ struct GlobalInfo {
     vk::Device                      device              = nullptr;
     uint32_t                        graphicsQueueFamily = VK_QUEUE_FAMILY_IGNORED;
 
-    union {
-        uint32_t features = 0;
-
-        struct {
-            /// True when vkQueueSubmit2 is available — either Vulkan 1.3 core or VK_KHR_synchronization2
-            /// extension enabled. The Device constructor sets this; callers must not write to it.
-            bool synchronization2 : 1;
-
-            /// True when timeline semaphores are available — either Vulkan 1.2 core or
-            /// VK_KHR_timeline_semaphore extension enabled. The Device constructor sets this.
-            bool timelineSemaphore : 1;
-        };
-    };
-
 #if RAPID_VULKAN_ENABLE_VMA
     VmaAllocator vmaAllocator = nullptr;
 #endif
@@ -2333,11 +2319,13 @@ public:
     /// @brief Begin recording a command buffer.
     CommandBuffer begin(const char * name, vk::CommandBufferLevel level = vk::CommandBufferLevel::ePrimary);
 
-    /// @brief Submit command buffers to the queue for asynchronous processing.
-    /// After this call, all command buffer pointers are inaccessible. The caller should not use them anymore.
-    /// @return A submission ID that later to check/wait for the completion of the submission. Return an empty
-    /// handle on failure.
-    SubmissionID submit(const SubmitParameters &);
+    /// Submit using VkSubmitInfo (Vulkan 1.0+). Supports timeline semaphores via the
+    /// VkTimelineSemaphoreSubmitInfo pNext chain when waitPoints/signalPoints are non-empty.
+    SubmissionID submit1(const SubmitParameters &);
+
+    /// Submit using VkSubmitInfo2 (requires synchronization2 — Vulkan 1.3 core or
+    /// VK_KHR_synchronization2 extension). Caller must ensure the feature is enabled.
+    SubmissionID submit2(const SubmitParameters &);
 
     /// @brief Drop command buffers. Discard all contents of them.
     /// After this call, the command buffer pointers are inaccessible. The caller should not use them anymore.

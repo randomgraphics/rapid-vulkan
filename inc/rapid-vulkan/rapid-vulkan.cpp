@@ -331,7 +331,7 @@ public:
             CmdDebugLabel label(cb, ("set buffer content of " + _owner.name()).c_str());
             staging.cmdCopy({cb, _owner.handle(), _desc.size, dstOffset, 0, size});
             label.end();
-            queue.wait(queue.submit({{cb}}));
+            queue.wait(queue.submit1({{cb}}));
         }
     }
 
@@ -362,7 +362,7 @@ public:
 
         // copy data from the source buffer to the staging buffer. wait for it to complete.
         cmdCopy({cb, staging.handle(), size, 0, offset});
-        queue.wait(queue.submit({cb}));
+        queue.wait(queue.submit1({cb}));
 
         // read data from the staging buffer
         auto m = Map<uint8_t>(staging);
@@ -921,7 +921,7 @@ public:
             .cmdWrite(c);
         c.handle().copyBufferToImage(staging, _desc.handle, vk::ImageLayout::eTransferDstOptimal, {copyRegion});
         label.end();
-        q.wait(q.submit({{c}}));
+        q.wait(q.submit1({{c}}));
 
         // Update per-plane state to reflect the transfer destination layout.
         forEachAspectBit(_state.validAspects,
@@ -980,7 +980,7 @@ public:
                    vk::ImageLayout::eTransferSrcOptimal, r)
                 .cmdWrite(c);
             c.handle().copyImageToBuffer(_desc.handle, vk::ImageLayout::eTransferSrcOptimal, staging, copyRegions);
-            q.wait(q.submit({c}));
+            q.wait(q.submit1({c}));
         }
 
         // read data out of the staging buffer
@@ -2866,7 +2866,10 @@ public:
         return cb;
     }
 
-    SubmissionID submit(const SubmitParameters & sp) {
+    SubmissionID submit1(const SubmitParameters & sp) { return submitImpl(sp, false); }
+    SubmissionID submit2(const SubmitParameters & sp) { return submitImpl(sp, true); }
+
+    SubmissionID submitImpl(const SubmitParameters & sp, bool useV2) {
         // remove duplicated command buffers
         auto uniqueCommandBuffers = unique(sp.commandBuffers);
 
@@ -2901,8 +2904,8 @@ public:
             return vk::PipelineStageFlags2 {VkPipelineStageFlags2 {static_cast<uint32_t>(f)}};
         };
 
-        if (!_desc.gi->synchronization2) {
-            // VkSubmitInfo + chained VkTimelineSemaphoreSubmitInfo (synchronization2 unavailable)
+        if (!useV2) {
+            // VkSubmitInfo + optional VkTimelineSemaphoreSubmitInfo pNext chain
             std::vector<vk::Semaphore>          waitSems;
             std::vector<vk::PipelineStageFlags> waitStages;
             std::vector<uint64_t>               waitValues;
@@ -2967,7 +2970,7 @@ public:
             vk::SubmitInfo2 si2;
             si2.setWaitSemaphoreInfos(waitSems).setCommandBufferInfos(cbInfos).setSignalSemaphoreInfos(signalSems);
             _desc.handle.submit2({si2}, s->fence);
-        }
+        } // end if (!useV2)
 
         // Mark the command buffers as pending. remove them from the active list.
         for (auto cb : s->commandBuffers) {
@@ -3181,7 +3184,8 @@ CommandQueue::~CommandQueue() {
 }
 auto CommandQueue::desc() const -> const Desc & { return _impl->desc(); }
 auto CommandQueue::begin(const char * purpose, vk::CommandBufferLevel level) -> CommandBuffer { return _impl->begin(purpose, level); }
-auto CommandQueue::submit(const SubmitParameters & sp) -> SubmissionID { return _impl->submit(sp); }
+auto CommandQueue::submit1(const SubmitParameters & sp) -> SubmissionID { return _impl->submit1(sp); }
+auto CommandQueue::submit2(const SubmitParameters & sp) -> SubmissionID { return _impl->submit2(sp); }
 void CommandQueue::drop(vk::ArrayProxy<const CommandBuffer> commandBuffers) { _impl->drop(commandBuffers); }
 auto CommandQueue::wait(const vk::ArrayProxy<const SubmissionID> & s) -> CommandQueue & { return _impl->wait(s); }
 auto CommandQueue::waitIdle() -> CommandQueue & { return _impl->waitIdle(); }
@@ -3337,7 +3341,7 @@ public:
         waitSps.reserve(pp.renderFinished.size());
         for (auto s : pp.renderFinished) waitSps.push_back({s});
         CommandQueue::SyncPoint endSp {bb.frameEndSemaphore};
-        frame.frameEndSubmission = _graphicsQueue->submit({cb, {}, waitSps, {}, {1, &endSp}});
+        frame.frameEndSubmission = _graphicsQueue->submit1({cb, {}, waitSps, {}, {1, &endSp}});
 
         PresentResult pr;
         pr.status = PresentResult::SUCCESS;
@@ -3366,7 +3370,7 @@ public:
             auto                    dummySwap = _graphicsQueue->begin("headless dummy swap");
             CommandQueue::SyncPoint waitSp2 {bb.frameEndSemaphore};
             CommandQueue::SyncPoint iaSp {frame.imageAvailable};
-            frame.frameEndSubmission = _graphicsQueue->submit({dummySwap, {}, {1, &waitSp2}, {}, {1, &iaSp}});
+            frame.frameEndSubmission = _graphicsQueue->submit1({dummySwap, {}, {1, &waitSp2}, {}, {1, &iaSp}});
         }
 
         // Move to the next frame.
@@ -3564,7 +3568,7 @@ private:
             // then signal it.
             auto                    cb = _graphicsQueue->begin(format("dummy submit to signal image available semaphore for headless frame %zu", i).c_str());
             CommandQueue::SyncPoint iaSp2 {frame.imageAvailable};
-            _graphicsQueue->submit({cb, {}, {}, {}, {1, &iaSp2}});
+            _graphicsQueue->submit1({cb, {}, {}, {}, {1, &iaSp2}});
         }
 
         recreateHeadlessSwapchain();
@@ -3713,7 +3717,7 @@ private:
         }
 
         // execute the command buffer to update image layout
-        _graphicsQueue->submit({c}).wait();
+        _graphicsQueue->submit1({c}).wait();
     }
 
     void recreateHeadlessSwapchain() {
@@ -3775,7 +3779,7 @@ private:
         }
 
         // execute the command buffer to update image layout
-        _graphicsQueue->submit({c});
+        _graphicsQueue->submit1({c});
         _graphicsQueue->waitIdle();
     }
 };
@@ -4146,50 +4150,50 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
     // make sure all extensions are actually supported by the hardware.
     auto availableDeviceExtensions = enumerateDeviceExtensions(_gi.physical);
 
-    // Detect synchronization2 support: either Vulkan 1.3 core (where it is a required feature)
-    // or the VK_KHR_synchronization2 extension on pre-1.3 devices.
-    if (_gi.apiVersion >= vk::ApiVersion13) {
-        // Promoted to required core feature in 1.3; vkQueueSubmit2 is always available.
-        vk::PhysicalDeviceSynchronization2FeaturesKHR sync2 {};
-        sync2.synchronization2 = VK_TRUE;
-        deviceFeatures.addFeature(sync2);
-        _gi.synchronization2                                           = true;
-        askedDeviceExtensions[VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME] = true; // required.
-    } else {
-        // Enable the KHR extension if available; also enable the corresponding feature bit.
-        auto extIt = std::find_if(availableDeviceExtensions.begin(), availableDeviceExtensions.end(), [](const vk::ExtensionProperties & e) {
-            return std::string_view(e.extensionName) == VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME;
-        });
-        if (extIt != availableDeviceExtensions.end()) {
-            askedDeviceExtensions[VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME] = false; // optional
-            vk::PhysicalDeviceSynchronization2FeaturesKHR sync2 {};
-            sync2.synchronization2 = VK_TRUE;
-            deviceFeatures.addFeature(sync2);
-            _gi.synchronization2 = true;
-        }
-    }
+    // // Detect synchronization2 support: either Vulkan 1.3 core (where it is a required feature)
+    // // or the VK_KHR_synchronization2 extension on pre-1.3 devices.
+    // if (_gi.apiVersion >= vk::ApiVersion13) {
+    //     // Promoted to required core feature in 1.3; vkQueueSubmit2 is always available.
+    //     vk::PhysicalDeviceSynchronization2FeaturesKHR sync2 {};
+    //     sync2.synchronization2 = VK_TRUE;
+    //     deviceFeatures.addFeature(sync2);
+    //     _gi.synchronization2                                           = true;
+    //     askedDeviceExtensions[VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME] = true; // required.
+    // } else {
+    //     // Enable the KHR extension if available; also enable the corresponding feature bit.
+    //     auto extIt = std::find_if(availableDeviceExtensions.begin(), availableDeviceExtensions.end(), [](const vk::ExtensionProperties & e) {
+    //         return std::string_view(e.extensionName) == VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME;
+    //     });
+    //     if (extIt != availableDeviceExtensions.end()) {
+    //         askedDeviceExtensions[VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME] = false; // optional
+    //         vk::PhysicalDeviceSynchronization2FeaturesKHR sync2 {};
+    //         sync2.synchronization2 = VK_TRUE;
+    //         deviceFeatures.addFeature(sync2);
+    //         _gi.synchronization2 = true;
+    //     }
+    // }
 
-    // Detect timeline semaphore support: Vulkan 1.2 core (required feature) or
-    // VK_KHR_timeline_semaphore extension on pre-1.2 devices.
-    if (_gi.apiVersion >= vk::ApiVersion12) {
-        // Promoted to required core feature in 1.2; always available.
-        vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR tsf {};
-        tsf.timelineSemaphore = VK_TRUE;
-        deviceFeatures.addFeature(tsf);
-        askedDeviceExtensions[VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME] = true; // required
-        _gi.timelineSemaphore                                           = true;
-    } else {
-        auto extIt = std::find_if(availableDeviceExtensions.begin(), availableDeviceExtensions.end(), [](const vk::ExtensionProperties & e) {
-            return std::string_view(e.extensionName) == VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME;
-        });
-        if (extIt != availableDeviceExtensions.end()) {
-            askedDeviceExtensions[VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME] = false; // optional
-            vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR tsf {};
-            tsf.timelineSemaphore = VK_TRUE;
-            deviceFeatures.addFeature(tsf);
-            _gi.timelineSemaphore = true;
-        }
-    }
+    // // Detect timeline semaphore support: Vulkan 1.2 core (required feature) or
+    // // VK_KHR_timeline_semaphore extension on pre-1.2 devices.
+    // if (_gi.apiVersion >= vk::ApiVersion12) {
+    //     // Promoted to required core feature in 1.2; always available.
+    //     vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR tsf {};
+    //     tsf.timelineSemaphore = VK_TRUE;
+    //     deviceFeatures.addFeature(tsf);
+    //     askedDeviceExtensions[VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME] = true; // required
+    //     _gi.timelineSemaphore                                           = true;
+    // } else {
+    //     auto extIt = std::find_if(availableDeviceExtensions.begin(), availableDeviceExtensions.end(), [](const vk::ExtensionProperties & e) {
+    //         return std::string_view(e.extensionName) == VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME;
+    //     });
+    //     if (extIt != availableDeviceExtensions.end()) {
+    //         askedDeviceExtensions[VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME] = false; // optional
+    //         vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR tsf {};
+    //         tsf.timelineSemaphore = VK_TRUE;
+    //         deviceFeatures.addFeature(tsf);
+    //         _gi.timelineSemaphore = true;
+    //     }
+    // }
 
     auto enabledDeviceExtensions = validateExtensions(availableDeviceExtensions, askedDeviceExtensions);
 

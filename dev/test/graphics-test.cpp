@@ -33,7 +33,7 @@ TEST_CASE("clear-screen") {
         sw.cmdBeginBuiltInRenderPass(c, bp);
         if (drawTriangle) p.cmdDraw(c, GraphicsPipeline::DrawParameters {}.setNonIndexed(3)); // draw a full screen blue triangle.
         sw.cmdEndBuiltInRenderPass(c);
-        q.submit({c}).wait();
+        q.submit1({c}).wait();
     };
 
     // readContent() derives the current image layout from the image's own tracked state.
@@ -111,7 +111,7 @@ TEST_CASE("vertex-buffer") {
     p.cmdDraw(c, GraphicsPipeline::DrawParameters {}.setNonIndexed(3));                                                // then draw a blue triangle.
     sw.cmdEndBuiltInRenderPass(c);
     CommandQueue::SyncPoint iaSp {f.imageAvailable};
-    q.submit({c, {}, {1, &iaSp}}).wait();
+    q.submit1({c, {}, {1, &iaSp}}).wait();
     rdc.end();
 
     // readContent() derives the current layout from the image's own tracked state (set by cmdEndBuiltInRenderPass).

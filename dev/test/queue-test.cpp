@@ -5,14 +5,14 @@
 TEST_CASE("queue-duplicated-command-buffers") {
     auto q = TestVulkanInstance::device->graphics()->clone();
     auto c = q.begin(nullptr); // testing null name is safe
-    q.submit({{c, c}});
-    q.submit({{c, c}});
+    q.submit1({{c, c}});
+    q.submit1({{c, c}});
 }
 
 TEST_CASE("queue-wait-idle") {
     auto q = TestVulkanInstance::device->graphics()->clone();
     auto c = q.begin(nullptr); // testing null name is safe
-    auto s = q.submit({c});
+    auto s = q.submit1({c});
     q.waitIdle(); // wait for the queue to be idle.
     q.wait(s);    // wait on an already finished submission is safe and not an error.
 }
@@ -23,7 +23,7 @@ TEST_CASE("queue-reuse") {
     SECTION("reuse-finished") {
         auto c1 = q->begin("c1");
         auto h1 = c1.handle();
-        q->wait(q->submit({c1}));
+        q->wait(q->submit1({c1}));
         auto c2 = q->begin("c2"); // should reuse c1
         auto h2 = c2.handle();
         CHECK(h1 == h2); // make sure the handles are the same.
@@ -49,16 +49,16 @@ TEST_CASE("queue-reuse") {
     SECTION("should-not-reuse-pending") {
         auto c1 = q->begin("c1");
         auto h1 = c1.handle();
-        q->submit({c1});
+        q->submit1({c1});
         auto c2 = q->begin("c2"); // should not reuse c1
         auto h2 = c2.handle();
         CHECK(h1 != h2);
     }
 }
 
-/// Verify the v1/v2 submit path handles binary semaphore wait + signal correctly.
+/// Verify submit1 handles binary semaphore wait + signal correctly.
 /// One submit signals a binary semaphore; the next waits on it.
-TEST_CASE("queue-submit-binary-semaphore") {
+TEST_CASE("queue-submit1-binary-semaphore") {
     using namespace rapid_vulkan;
     auto q  = TestVulkanInstance::device->graphics();
     auto gi = TestVulkanInstance::device->gi();
@@ -67,28 +67,24 @@ TEST_CASE("queue-submit-binary-semaphore") {
 
     CommandQueue::SyncPoint signalSp {sem.get()};
     auto                    c1 = q->begin("signal");
-    q->submit({c1, {}, {}, {}, {1, &signalSp}});
+    q->submit1({c1, {}, {}, {}, {1, &signalSp}});
 
-    // Second submit waits on the binary semaphore just signaled above.
     CommandQueue::SyncPoint waitSp {sem.get()};
     auto                    c2 = q->begin("wait");
-    q->submit({c2, {}, {1, &waitSp}});
+    q->submit1({c2, {}, {1, &waitSp}});
 
     q->waitIdle();
     CHECK(true); // reaching here means no GPU hang / deadlock
 }
 
-/// Verify the v1/v2 submit path handles timeline semaphore signal and wait correctly.
-/// One submit signals a timeline semaphore at value 1; the next waits for value 1.
-TEST_CASE("queue-submit-timeline-semaphore") {
+/// Verify submit2 handles timeline semaphore signal + wait via VkTimelineSemaphoreSubmitInfo.
+TEST_CASE("queue-submit1-timeline-semaphore") {
     using namespace rapid_vulkan;
     auto q  = TestVulkanInstance::device->graphics();
     auto gi = TestVulkanInstance::device->gi();
 
-    // Timeline semaphores require Vulkan 1.2+ (or VK_KHR_timeline_semaphore).
-    // Skip gracefully on older implementations.
-    if (!gi->timelineSemaphore) {
-        fprintf(stderr, "The current Vulkan API does not support timeline semaphore.\n");
+    if (!TestVulkanInstance::timelineSemaphore) {
+        fprintf(stderr, "timeline semaphore not available, skipping.\n");
         return;
     }
 
@@ -97,15 +93,66 @@ TEST_CASE("queue-submit-timeline-semaphore") {
     semInfo.setPNext(&timelineInfo);
     auto timeline = gi->device.createSemaphoreUnique(semInfo, gi->allocator);
 
-    // Submit 1: signal timeline at value 1.
     CommandQueue::SyncPoint signalPt {timeline.get(), 1};
     auto                    c1 = q->begin("timeline-signal");
-    q->submit({c1, {}, {}, {}, {}, {1, &signalPt}});
+    q->submit2({c1, {}, {}, {}, {}, {1, &signalPt}});
 
-    // Submit 2: wait for timeline value 1, then complete.
     CommandQueue::SyncPoint waitPt {timeline.get(), 1};
     auto                    c2 = q->begin("timeline-wait");
-    q->submit({c2, {}, {}, {1, &waitPt}});
+    q->submit2({c2, {}, {}, {1, &waitPt}});
+
+    q->waitIdle();
+    CHECK(true); // reaching here means no GPU hang / deadlock
+}
+
+/// Verify submit2 handles binary semaphore wait + signal via VkSubmitInfo2.
+TEST_CASE("queue-submit2-binary-semaphore") {
+    using namespace rapid_vulkan;
+    auto q  = TestVulkanInstance::device->graphics();
+    auto gi = TestVulkanInstance::device->gi();
+
+    if (!TestVulkanInstance::synchronization2) {
+        fprintf(stderr, "synchronization2 not available, skipping.\n");
+        return;
+    }
+
+    auto sem = gi->device.createSemaphoreUnique({}, gi->allocator);
+
+    CommandQueue::SyncPoint signalSp {sem.get()};
+    auto                    c1 = q->begin("signal2");
+    q->submit2({c1, {}, {}, {}, {1, &signalSp}});
+
+    CommandQueue::SyncPoint waitSp {sem.get()};
+    auto                    c2 = q->begin("wait2");
+    q->submit2({c2, {}, {1, &waitSp}});
+
+    q->waitIdle();
+    CHECK(true); // reaching here means no GPU hang / deadlock
+}
+
+/// Verify submit2 handles timeline semaphore signal + wait via VkSubmitInfo2.
+TEST_CASE("queue-submit2-timeline-semaphore") {
+    using namespace rapid_vulkan;
+    auto q  = TestVulkanInstance::device->graphics();
+    auto gi = TestVulkanInstance::device->gi();
+
+    if (!TestVulkanInstance::synchronization2 || !TestVulkanInstance::timelineSemaphore) {
+        fprintf(stderr, "synchronization2 or timelineSemaphore not available, skipping.\n");
+        return;
+    }
+
+    vk::SemaphoreTypeCreateInfo timelineInfo {vk::SemaphoreType::eTimeline, 0};
+    vk::SemaphoreCreateInfo     semInfo {};
+    semInfo.setPNext(&timelineInfo);
+    auto timeline = gi->device.createSemaphoreUnique(semInfo, gi->allocator);
+
+    CommandQueue::SyncPoint signalPt {timeline.get(), 1};
+    auto                    c1 = q->begin("timeline-signal2");
+    q->submit2({c1, {}, {}, {}, {}, {1, &signalPt}});
+
+    CommandQueue::SyncPoint waitPt {timeline.get(), 1};
+    auto                    c2 = q->begin("timeline-wait2");
+    q->submit2({c2, {}, {}, {1, &waitPt}});
 
     q->waitIdle();
     CHECK(true); // reaching here means no GPU hang / deadlock

@@ -139,7 +139,7 @@ void entry(const Options & options) {
             // submit the command buffer
             CommandQueue::SyncPoint iaSp {frame.imageAvailable};
             CommandQueue::SyncPoint rfSp {renderFinished.get()};
-            q.submit({c, {}, {1, &iaSp}, {}, {1, &rfSp}});
+            q.submit1({c, {}, {1, &iaSp}, {}, {1, &rfSp}});
         }
 
         // end of the frame.

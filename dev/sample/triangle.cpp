@@ -101,7 +101,7 @@ void entry(const Options & options) {
             sw.cmdEndBuiltInRenderPass(c); // also updates image state to DESIRED_PRESENT_STATUS
             CommandQueue::SyncPoint iaSp {frame.imageAvailable};
             CommandQueue::SyncPoint rfSp {renderFinished.get()};
-            q.submit({c, {}, {1, &iaSp}, {}, {1, &rfSp}});
+            q.submit1({c, {}, {1, &iaSp}, {}, {1, &rfSp}});
         }
         sw.present(Swapchain::PresentParameters {}.setRenderFinished({renderFinished.get()}));
     }
