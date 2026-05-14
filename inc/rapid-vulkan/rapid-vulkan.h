@@ -2263,6 +2263,11 @@ public:
 
     struct SubmitParameters {
         /// @brief The command buffers to submit. The command buffers must be allocated out of this queue class.
+        /// May be empty when the submission only carries semaphore operations — for example, a
+        /// timeline-to-binary bridge that waits on a timeline point and signals a binary semaphore
+        /// so that vkQueuePresentKHR (which only accepts binary semaphores) can consume it.
+        /// A submission with no command buffers AND no semaphore operations is a no-op and will
+        /// be silently ignored (submit() returns an empty SubmissionID).
         vk::ArrayProxy<const CommandBuffer> commandBuffers {};
 
         /// The optional fence object to signal once the command buffers have completed execution.

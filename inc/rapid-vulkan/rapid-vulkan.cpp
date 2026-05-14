@@ -2883,7 +2883,12 @@ public:
             s->commandBuffers.push_back(p);
             handles.push_back(p->handle());
         }
-        if (s->commandBuffers.empty()) return {};
+        // A bridge-only submission (no command buffers, but with semaphore operations) is
+        // valid and intentional: it lets a timeline sync point be waited on while signaling
+        // a binary semaphore, which is required when bridging to vkQueuePresentKHR (which
+        // only accepts binary semaphores). Reject only when there is truly nothing to do.
+        bool hasSemaphoreWork = !sp.waitBinaries.empty() || !sp.waitPoints.empty() || !sp.signalBinaries.empty() || !sp.signalPoints.empty();
+        if (s->commandBuffers.empty() && !hasSemaphoreWork) return {};
 
         // set submission index
         s->index = ++_nextSubmissionId;
