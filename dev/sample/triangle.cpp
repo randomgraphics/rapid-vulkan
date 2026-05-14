@@ -99,7 +99,9 @@ void entry(const Options & options) {
             sw.cmdBeginBuiltInRenderPass(c, Swapchain::BeginRenderPassParameters {}.setClearColorF({0.0f, 1.0f, 0.0f, 1.0f})); // clear to green
             p.cmdDraw(c, GraphicsPipeline::DrawParameters {}.setNonIndexed(3));                                                // then draw a blue triangle.
             sw.cmdEndBuiltInRenderPass(c); // also updates image state to DESIRED_PRESENT_STATUS
-            q.submit({c, {}, {frame.imageAvailable}, {renderFinished.get()}});
+            CommandQueue::SyncPoint iaSp {frame.imageAvailable};
+            CommandQueue::SyncPoint rfSp {renderFinished.get()};
+            q.submit({c, {}, {1, &iaSp}, {}, {1, &rfSp}});
         }
         sw.present(Swapchain::PresentParameters {}.setRenderFinished({renderFinished.get()}));
     }

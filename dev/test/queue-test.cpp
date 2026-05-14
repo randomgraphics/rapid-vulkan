@@ -55,3 +55,58 @@ TEST_CASE("queue-reuse") {
         CHECK(h1 != h2);
     }
 }
+
+/// Verify the v1/v2 submit path handles binary semaphore wait + signal correctly.
+/// One submit signals a binary semaphore; the next waits on it.
+TEST_CASE("queue-submit-binary-semaphore") {
+    using namespace rapid_vulkan;
+    auto q  = TestVulkanInstance::device->graphics();
+    auto gi = TestVulkanInstance::device->gi();
+
+    auto sem = gi->device.createSemaphoreUnique({}, gi->allocator);
+
+    CommandQueue::SyncPoint signalSp {sem.get()};
+    auto                    c1 = q->begin("signal");
+    q->submit({c1, {}, {}, {}, {1, &signalSp}});
+
+    // Second submit waits on the binary semaphore just signaled above.
+    CommandQueue::SyncPoint waitSp {sem.get()};
+    auto                    c2 = q->begin("wait");
+    q->submit({c2, {}, {1, &waitSp}});
+
+    q->waitIdle();
+    CHECK(true); // reaching here means no GPU hang / deadlock
+}
+
+/// Verify the v1/v2 submit path handles timeline semaphore signal and wait correctly.
+/// One submit signals a timeline semaphore at value 1; the next waits for value 1.
+TEST_CASE("queue-submit-timeline-semaphore") {
+    using namespace rapid_vulkan;
+    auto q  = TestVulkanInstance::device->graphics();
+    auto gi = TestVulkanInstance::device->gi();
+
+    // Timeline semaphores require Vulkan 1.2+ (or VK_KHR_timeline_semaphore).
+    // Skip gracefully on older implementations.
+    if (!gi->timelineSemaphore) {
+        fprintf(stderr, "The current Vulkan API does not support timeline semaphore.\n");
+        return;
+    }
+
+    vk::SemaphoreTypeCreateInfo timelineInfo {vk::SemaphoreType::eTimeline, 0};
+    vk::SemaphoreCreateInfo     semInfo {};
+    semInfo.setPNext(&timelineInfo);
+    auto timeline = gi->device.createSemaphoreUnique(semInfo, gi->allocator);
+
+    // Submit 1: signal timeline at value 1.
+    CommandQueue::SyncPoint signalPt {timeline.get(), 1};
+    auto                    c1 = q->begin("timeline-signal");
+    q->submit({c1, {}, {}, {}, {}, {1, &signalPt}});
+
+    // Submit 2: wait for timeline value 1, then complete.
+    CommandQueue::SyncPoint waitPt {timeline.get(), 1};
+    auto                    c2 = q->begin("timeline-wait");
+    q->submit({c2, {}, {}, {1, &waitPt}});
+
+    q->waitIdle();
+    CHECK(true); // reaching here means no GPU hang / deadlock
+}

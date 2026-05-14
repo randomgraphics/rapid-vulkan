@@ -110,7 +110,8 @@ TEST_CASE("vertex-buffer") {
     c.handle().bindVertexBuffers(0, {vb.handle()}, {0});                                                               // bind the vertex buffer
     p.cmdDraw(c, GraphicsPipeline::DrawParameters {}.setNonIndexed(3));                                                // then draw a blue triangle.
     sw.cmdEndBuiltInRenderPass(c);
-    q.submit({c, {}, {f.imageAvailable}, {}}).wait();
+    CommandQueue::SyncPoint iaSp {f.imageAvailable};
+    q.submit({c, {}, {1, &iaSp}}).wait();
     rdc.end();
 
     // readContent() derives the current layout from the image's own tracked state (set by cmdEndBuiltInRenderPass).

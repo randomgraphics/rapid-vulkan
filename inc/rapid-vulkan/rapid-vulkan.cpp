@@ -2894,14 +2894,80 @@ public:
             s->fence = s->builtInFence.get();
         }
 
-        // submit the command buffer
-        std::vector<vk::PipelineStageFlags> flags(sp.waitSemaphores.size(), vk::PipelineStageFlagBits::eBottomOfPipe);
-        vk::SubmitInfo                      si;
-        si.setWaitSemaphores(sp.waitSemaphores);
-        si.setSignalSemaphores(sp.signalSemaphores);
-        si.setCommandBuffers(handles);
-        si.setPWaitDstStageMask(flags.data());
-        _desc.handle.submit({si}, s->fence);
+        // SyncPoint.stages is vk::PipelineStageFlags (32-bit v1). The v2 path (VkSubmitInfo2)
+        // needs vk::PipelineStageFlags2 (64-bit). v1 and v2 flag bits are identical in the
+        // lower 32 bits by Vulkan spec design, so a plain zero-extending cast is correct.
+        auto toV2Stage = [](vk::PipelineStageFlags f) -> vk::PipelineStageFlags2 {
+            return vk::PipelineStageFlags2 {VkPipelineStageFlags2 {static_cast<uint32_t>(f)}};
+        };
+
+        if (!_desc.gi->synchronization2) {
+            // VkSubmitInfo + chained VkTimelineSemaphoreSubmitInfo (synchronization2 unavailable)
+            std::vector<vk::Semaphore>          waitSems;
+            std::vector<vk::PipelineStageFlags> waitStages;
+            std::vector<uint64_t>               waitValues;
+            waitSems.reserve(sp.waitBinaries.size() + sp.waitPoints.size());
+            waitStages.reserve(waitSems.capacity());
+            waitValues.reserve(waitSems.capacity());
+            for (const auto & e : sp.waitBinaries) {
+                waitSems.push_back(e.semaphore);
+                waitStages.push_back(e.stages); // already v1 (32-bit)
+                waitValues.push_back(0);        // driver ignores value for binary semaphores
+            }
+            for (const auto & e : sp.waitPoints) {
+                waitSems.push_back(e.semaphore);
+                waitStages.push_back(e.stages); // already v1 (32-bit)
+                waitValues.push_back(e.progress);
+            }
+
+            std::vector<vk::Semaphore> signalSems;
+            std::vector<uint64_t>      signalValues;
+            signalSems.reserve(sp.signalBinaries.size() + sp.signalPoints.size());
+            signalValues.reserve(signalSems.capacity());
+            for (const auto & e : sp.signalBinaries) {
+                signalSems.push_back(e.semaphore);
+                signalValues.push_back(0);
+            }
+            for (const auto & e : sp.signalPoints) {
+                signalSems.push_back(e.semaphore);
+                signalValues.push_back(e.progress);
+            }
+
+            vk::SubmitInfo si;
+            si.setWaitSemaphores(waitSems);
+            si.setSignalSemaphores(signalSems);
+            si.setCommandBuffers(handles);
+            if (!waitSems.empty()) si.setPWaitDstStageMask(waitStages.data());
+
+            // Chain VkTimelineSemaphoreSubmitInfo only when timeline semaphores are involved.
+            vk::TimelineSemaphoreSubmitInfo timelineInfo;
+            if (!sp.waitPoints.empty() || !sp.signalPoints.empty()) {
+                timelineInfo.setWaitSemaphoreValues(waitValues);
+                timelineInfo.setSignalSemaphoreValues(signalValues);
+                si.setPNext(&timelineInfo);
+            }
+
+            _desc.handle.submit({si}, s->fence);
+        } else {
+            // VkSubmitInfo2: native PipelineStageFlags2 and timeline values (synchronization2 available).
+            std::vector<vk::SemaphoreSubmitInfo> waitSems;
+            waitSems.reserve(sp.waitBinaries.size() + sp.waitPoints.size());
+            for (const auto & e : sp.waitBinaries) waitSems.push_back({e.semaphore, 0, toV2Stage(e.stages)});
+            for (const auto & e : sp.waitPoints) waitSems.push_back({e.semaphore, e.progress, toV2Stage(e.stages)});
+
+            std::vector<vk::SemaphoreSubmitInfo> signalSems;
+            signalSems.reserve(sp.signalBinaries.size() + sp.signalPoints.size());
+            for (const auto & e : sp.signalBinaries) signalSems.push_back({e.semaphore, 0, toV2Stage(e.stages)});
+            for (const auto & e : sp.signalPoints) signalSems.push_back({e.semaphore, e.progress, toV2Stage(e.stages)});
+
+            std::vector<vk::CommandBufferSubmitInfo> cbInfos;
+            cbInfos.reserve(handles.size());
+            for (auto h : handles) cbInfos.push_back({h});
+
+            vk::SubmitInfo2 si2;
+            si2.setWaitSemaphoreInfos(waitSems).setCommandBufferInfos(cbInfos).setSignalSemaphoreInfos(signalSems);
+            _desc.handle.submit2({si2}, s->fence);
+        }
 
         // Mark the command buffers as pending. remove them from the active list.
         for (auto cb : s->commandBuffers) {
@@ -3266,7 +3332,12 @@ public:
         }
         // Keep the image's tracked state in sync with the GPU layout after the transition.
         bb.image->setState(DESIRED_PRESENT_STATUS, Image::FULL_RANGE);
-        frame.frameEndSubmission = _graphicsQueue->submit({cb, {}, pp.renderFinished, {bb.frameEndSemaphore}});
+        // Convert binary semaphores to SyncPoints; pp.renderFinished is still typed as ArrayProxy<Semaphore>.
+        std::vector<CommandQueue::SyncPoint> waitSps;
+        waitSps.reserve(pp.renderFinished.size());
+        for (auto s : pp.renderFinished) waitSps.push_back({s});
+        CommandQueue::SyncPoint endSp {bb.frameEndSemaphore};
+        frame.frameEndSubmission = _graphicsQueue->submit({cb, {}, waitSps, {}, {1, &endSp}});
 
         PresentResult pr;
         pr.status = PresentResult::SUCCESS;
@@ -3292,8 +3363,10 @@ public:
             }
         } else {
             // For headless swapchain, we do a dummy submit to signal the image available semaphore.
-            auto dummySwap           = _graphicsQueue->begin("headless dummy swap");
-            frame.frameEndSubmission = _graphicsQueue->submit({dummySwap, {}, {bb.frameEndSemaphore}, {frame.imageAvailable}});
+            auto                    dummySwap = _graphicsQueue->begin("headless dummy swap");
+            CommandQueue::SyncPoint waitSp2 {bb.frameEndSemaphore};
+            CommandQueue::SyncPoint iaSp {frame.imageAvailable};
+            frame.frameEndSubmission = _graphicsQueue->submit({dummySwap, {}, {1, &waitSp2}, {}, {1, &iaSp}});
         }
 
         // Move to the next frame.
@@ -3489,8 +3562,9 @@ private:
             setVkHandleName(_cp.gi->device, frame.imageAvailable, format("image available semaphore for headless frame %zu", i));
 
             // then signal it.
-            auto cb = _graphicsQueue->begin(format("dummy submit to signal image available semaphore for headless frame %zu", i).c_str());
-            _graphicsQueue->submit({cb, {}, {}, {frame.imageAvailable}});
+            auto                    cb = _graphicsQueue->begin(format("dummy submit to signal image available semaphore for headless frame %zu", i).c_str());
+            CommandQueue::SyncPoint iaSp2 {frame.imageAvailable};
+            _graphicsQueue->submit({cb, {}, {}, {}, {1, &iaSp2}});
         }
 
         recreateHeadlessSwapchain();
@@ -4071,7 +4145,53 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
 
     // make sure all extensions are actually supported by the hardware.
     auto availableDeviceExtensions = enumerateDeviceExtensions(_gi.physical);
-    auto enabledDeviceExtensions   = validateExtensions(availableDeviceExtensions, askedDeviceExtensions);
+
+    // Detect synchronization2 support: either Vulkan 1.3 core (where it is a required feature)
+    // or the VK_KHR_synchronization2 extension on pre-1.3 devices.
+    if (_gi.apiVersion >= vk::ApiVersion13) {
+        // Promoted to required core feature in 1.3; vkQueueSubmit2 is always available.
+        vk::PhysicalDeviceSynchronization2FeaturesKHR sync2 {};
+        sync2.synchronization2 = VK_TRUE;
+        deviceFeatures.addFeature(sync2);
+        _gi.synchronization2                                           = true;
+        askedDeviceExtensions[VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME] = true; // required.
+    } else {
+        // Enable the KHR extension if available; also enable the corresponding feature bit.
+        auto extIt = std::find_if(availableDeviceExtensions.begin(), availableDeviceExtensions.end(), [](const vk::ExtensionProperties & e) {
+            return std::string_view(e.extensionName) == VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME;
+        });
+        if (extIt != availableDeviceExtensions.end()) {
+            askedDeviceExtensions[VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME] = false; // optional
+            vk::PhysicalDeviceSynchronization2FeaturesKHR sync2 {};
+            sync2.synchronization2 = VK_TRUE;
+            deviceFeatures.addFeature(sync2);
+            _gi.synchronization2 = true;
+        }
+    }
+
+    // Detect timeline semaphore support: Vulkan 1.2 core (required feature) or
+    // VK_KHR_timeline_semaphore extension on pre-1.2 devices.
+    if (_gi.apiVersion >= vk::ApiVersion12) {
+        // Promoted to required core feature in 1.2; always available.
+        vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR tsf {};
+        tsf.timelineSemaphore = VK_TRUE;
+        deviceFeatures.addFeature(tsf);
+        askedDeviceExtensions[VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME] = true; // required
+        _gi.timelineSemaphore                                           = true;
+    } else {
+        auto extIt = std::find_if(availableDeviceExtensions.begin(), availableDeviceExtensions.end(), [](const vk::ExtensionProperties & e) {
+            return std::string_view(e.extensionName) == VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME;
+        });
+        if (extIt != availableDeviceExtensions.end()) {
+            askedDeviceExtensions[VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME] = false; // optional
+            vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR tsf {};
+            tsf.timelineSemaphore = VK_TRUE;
+            deviceFeatures.addFeature(tsf);
+            _gi.timelineSemaphore = true;
+        }
+    }
+
+    auto enabledDeviceExtensions = validateExtensions(availableDeviceExtensions, askedDeviceExtensions);
 
     // create device, one queue for each family
     float                                  queuePriority = 1.0f;

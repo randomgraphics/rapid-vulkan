@@ -137,7 +137,9 @@ void entry(const Options & options) {
             sw.cmdEndBuiltInRenderPass(c);
 
             // submit the command buffer
-            q.submit({c, {}, {frame.imageAvailable}, {renderFinished.get()}});
+            CommandQueue::SyncPoint iaSp {frame.imageAvailable};
+            CommandQueue::SyncPoint rfSp {renderFinished.get()};
+            q.submit({c, {}, {1, &iaSp}, {}, {1, &rfSp}});
         }
 
         // end of the frame.

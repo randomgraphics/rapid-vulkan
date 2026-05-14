@@ -352,6 +352,20 @@ struct GlobalInfo {
     vk::Device                      device              = nullptr;
     uint32_t                        graphicsQueueFamily = VK_QUEUE_FAMILY_IGNORED;
 
+    union {
+        uint32_t features = 0;
+
+        struct {
+            /// True when vkQueueSubmit2 is available — either Vulkan 1.3 core or VK_KHR_synchronization2
+            /// extension enabled. The Device constructor sets this; callers must not write to it.
+            bool synchronization2 : 1;
+
+            /// True when timeline semaphores are available — either Vulkan 1.2 core or
+            /// VK_KHR_timeline_semaphore extension enabled. The Device constructor sets this.
+            bool timelineSemaphore : 1;
+        };
+    };
+
 #if RAPID_VULKAN_ENABLE_VMA
     VmaAllocator vmaAllocator = nullptr;
 #endif
@@ -2257,18 +2271,41 @@ public:
         uint32_t           index  = 0; ///< queue index within family
     };
 
+    struct SyncPoint {
+        /// The handle of the semaphore. Can be either timeline or binary semaphore.
+        vk::Semaphore semaphore = {};
+
+        // the monolithic increasing counter of the timeline.
+        uint64_t progress = {};
+
+        /// The state flag of the sync point. Ignored when the sync point is used in signal list.
+        vk::PipelineStageFlags stages = vk::PipelineStageFlagBits::eAllCommands;
+
+        bool empty() const { return !semaphore; }
+
+        operator bool() const { return !!semaphore; }
+    };
+
     struct SubmitParameters {
         /// @brief The command buffers to submit. The command buffers must be allocated out of this queue class.
         vk::ArrayProxy<const CommandBuffer> commandBuffers {};
 
-        /// The (optional) fence object to signal once the command buffers have completed execution.
+        /// The optional fence object to signal once the command buffers have completed execution.
         vk::Fence signalFence = {};
 
-        /// @brief List of semaphores to wait for before executing the command buffers.
-        vk::ArrayProxy<const vk::Semaphore> waitSemaphores {};
+        /// @brief Optional list of binary sync points to wait for before executing the command buffers.
+        vk::ArrayProxy<const SyncPoint> waitBinaries {};
 
-        /// @brief List of semaphores to signal once the command buffers have completed execution.
-        vk::ArrayProxy<const vk::Semaphore> signalSemaphores {};
+        /// @brief Optional list of timeline semaphores to wait for. Requires timeline feature enabled.
+        vk::ArrayProxy<const SyncPoint> waitPoints {};
+
+        /// @brief Optional list of binary semaphores to signal once the command buffers have completed execution.
+        /// For Vulkan 1.1 and 1.2, signal state flags are not supported and will be ignored.
+        vk::ArrayProxy<const SyncPoint> signalBinaries {};
+
+        /// @brief Optional list of timeline points to signal. Requires timeline feature enabled.
+        /// For Vulkan 1.1 and 1.2, signal state flags are not supported and will be ignored.
+        vk::ArrayProxy<const SyncPoint> signalPoints {};
     };
 
     /// @brief unique identifier of a GPU submission
@@ -2464,7 +2501,6 @@ public:
 
     /// @brief Specify parameters to call present().
     struct PresentParameters {
-
         /// @brief Optional list of semaphores that present() call uses to ensure presenting happens after all rendering of the frame is done.
         /// !!! IMPORTANT !!! : If not empty, caller MUST ensure that all semaphores in the list are signaled by the end of the frame rendering.
         /// Failing to do so will cause present() to wait forever. On the other hand, signaling these
