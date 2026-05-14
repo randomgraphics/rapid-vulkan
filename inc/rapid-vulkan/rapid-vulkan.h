@@ -2176,17 +2176,6 @@ class CommandBuffer {
 public:
     class Impl;
 
-    struct SubmitParameters {
-        /// The (optional) fence object to signal once the command buffers have completed execution.
-        vk::Fence signalFence = {};
-
-        /// @brief List of semaphores to wait for before executing the command buffers.
-        vk::ArrayProxy<const vk::Semaphore> waitSemaphores {};
-
-        /// @brief List of semaphores to signal once the command buffers have completed execution.
-        vk::ArrayProxy<const vk::Semaphore> signalSemaphores {};
-    };
-
     CommandBuffer(Impl * impl = nullptr): _impl(impl) {}
     CommandBuffer(const CommandBuffer & o): _impl(o._impl) {}
     ~CommandBuffer() = default;
