@@ -3893,6 +3893,7 @@ static void printPhysicalDeviceInfo(const std::vector<vk::PhysicalDevice> & avai
            << PRINT_LIMIT(maxPerStageDescriptorStorageImages)
            << PRINT_LIMIT(maxPerStageDescriptorInputAttachments)
            << PRINT_LIMIT(maxPerStageResources)
+           << PRINT_LIMIT(maxPushConstantsSize)
            << PRINT_LIMIT(maxDescriptorSetSamplers)
            << PRINT_LIMIT(maxDescriptorSetUniformBuffers)
            << PRINT_LIMIT(maxDescriptorSetUniformBuffersDynamic)
