@@ -41,7 +41,25 @@ struct TestVulkanInstanceImpl : public TestVulkanInstance {
         using namespace rapid_vulkan;
         auto icp = Instance::ConstructParameters {.validation = Instance::BREAK_ON_VK_ERROR, .backtrace = backtrace};
         instance = std::make_unique<Instance>(icp);
-        device   = std::make_unique<Device>(Device::ConstructParameters {*instance});
+
+        auto                               dcp = Device::ConstructParameters {*instance};
+        vk::PhysicalDeviceVulkan13Features feature13;
+        if (instance->cp().apiVersion >= VK_VERSION_1_3) {
+            // enable synchronization2 feature.
+            feature13.synchronization2 = true;
+            dcp.addFeature(feature13);
+        }
+        vk::PhysicalDeviceVulkan12Features feature12;
+        if (instance->cp().apiVersion >= VK_VERSION_1_2) {
+            // enable timeline semaphore feature.
+            feature12.timelineSemaphore = true;
+            dcp.addFeature(feature12);
+        }
+        device = std::make_unique<Device>(dcp);
+
+        // Record which optional features were actually requested so tests can skip paths that aren't available.
+        synchronization2  = (instance->cp().apiVersion >= VK_VERSION_1_3);
+        timelineSemaphore = (instance->cp().apiVersion >= VK_VERSION_1_2);
     }
 
     ~TestVulkanInstanceImpl() {

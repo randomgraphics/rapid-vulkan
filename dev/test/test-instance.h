@@ -6,6 +6,8 @@
 struct TestVulkanInstance {
     inline static std::unique_ptr<rapid_vulkan::Instance> instance;
     inline static std::unique_ptr<rapid_vulkan::Device>   device;
+    inline static bool                                    synchronization2 = false; ///< true if VK_KHR_synchronization2 / VK 1.3 was enabled at device creation
+    inline static bool timelineSemaphore = false; ///< true if VK_KHR_timeline_semaphore / VK 1.2 was enabled at device creation
 };
 
 struct ScopedTimer {

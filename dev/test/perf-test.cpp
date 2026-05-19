@@ -66,5 +66,5 @@ TEST_CASE("texture-array", "[perf]") {
         for (size_t i = 0; i < 100000; ++i) { c.render(d->compile()); }
     }
     sw.cmdEndBuiltInRenderPass(c.handle());
-    q->submit({c}).wait();
+    q->submit1({c}).wait();
 }

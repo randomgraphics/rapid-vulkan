@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identifies the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 30
+#define RAPID_VULKAN_HEADER_REVISION 31
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -235,9 +235,11 @@ SOFTWARE.
 #define RVI_LOGI(...) RAPID_VULKAN_LOG(RAPID_VULKAN_NAMESPACE::LogSeverity::INFO, "[RAPID-VULKAN] [INFO] ", RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
 #define RVI_LOGV(...) \
     RAPID_VULKAN_LOG(RAPID_VULKAN_NAMESPACE::LogSeverity::VERBOSE, "[RAPID-VULKAN] [VERBOSE] ", RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
+#define RVI_LOGB(...) \
+    RAPID_VULKAN_LOG(RAPID_VULKAN_NAMESPACE::LogSeverity::BABBLE, "[RAPID-VULKAN] [BABBLE] ", RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
 #if RAPID_VULKAN_ENABLE_DEBUG_BUILD
 #define RVI_LOGD(...) \
-    RAPID_VULKAN_LOG(RAPID_VULKAN_NAMESPACE::LogSeverity::DEBUG, "[RAPID-VULKAN] [DEBUG] ", RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
+    RAPID_VULKAN_LOG(RAPID_VULKAN_NAMESPACE::LogSeverity::VERBOSE, "[RAPID-VULKAN] [DEBUG] ", RAPID_VULKAN_NAMESPACE::format(__VA_ARGS__).c_str())
 #else
 #define RVI_LOGD(...) void(0)
 #endif
@@ -315,8 +317,8 @@ enum class LogSeverity {
     ERROR_  = 10,
     WARNING = 20,
     INFO    = 30,
-    DEBUG   = 40,
-    VERBOSE = 50,
+    VERBOSE = 40,
+    BABBLE  = 50,
 };
 
 // namespace rv_details {
@@ -457,7 +459,7 @@ inline void setVkHandleName(vk::Device device, T handle, const char * name) {
 // ---------------------------------------------------------------------------------------------------------------------
 /// Helper function to set Vulkan opaque handle's name (VK_EXT_debug_utils).
 template<typename T>
-inline void setVkHandleName(vk::Device device, T handle, std::string name) {
+inline void setVkHandleName(vk::Device device, T handle, const std::string & name) {
     setVkHandleName(device, handle, name.c_str());
 }
 
@@ -1306,10 +1308,13 @@ public:
         Desc               desc {};
     };
 
+    inline static constexpr vk::ImageSubresourceRange FULL_RANGE = {vk::FlagTraits<vk::ImageAspectFlagBits>::allFlags, 0, VK_REMAINING_MIP_LEVELS, 0,
+                                                                    VK_REMAINING_ARRAY_LAYERS};
+
     struct GetViewParameters {
         vk::ImageViewType         type   = (vk::ImageViewType) -1; ///< set to -1 to use the default view type.
         vk::Format                format = vk::Format::eUndefined; ///< set to eUndefined to use image's format.
-        vk::ImageSubresourceRange range  = {{}, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS};
+        vk::ImageSubresourceRange range  = FULL_RANGE;
 
         GetViewParameters & setType(vk::ImageViewType t) {
             type = t;
@@ -1360,9 +1365,8 @@ public:
     };
 
     struct ReadContentParameters {
-        uint32_t        queueFamily   = 0;
-        uint32_t        queueIndex    = 0;
-        vk::ImageLayout currentLayout = vk::ImageLayout::eTransferSrcOptimal;
+        uint32_t queueFamily = 0;
+        uint32_t queueIndex  = 0;
 
         ReadContentParameters & setQueue(uint32_t family, uint32_t index) {
             queueFamily = family;
@@ -1371,11 +1375,6 @@ public:
         }
 
         ReadContentParameters & setQueue(const CommandQueue &);
-
-        ReadContentParameters & setCurrentLayout(vk::ImageLayout l) {
-            currentLayout = l;
-            return *this;
-        }
     };
 
     struct SubresourceContent {
@@ -1399,11 +1398,66 @@ public:
         operator bool() const { return format != vk::Format::eUndefined && !storage.empty() && !subresources.empty(); }
     };
 
-    /// @brief A utility function to determine image aspect flags from a format.
-    /// @param format The pixel format of the image.
-    /// @param hint   The hint of the aspect flags. The function will try to use this hinted aspect flag, as long as it is compatible with the format.
-    ///               Set to vk::ImageAspectFlagBits::eNone to let the function determine the aspect flags.
-    static vk::ImageAspectFlags determineImageAspect(vk::Format format, vk::ImageAspectFlags hint = vk::ImageAspectFlagBits::eNoneKHR);
+    /// Tracks per-subresource Vulkan image state (layout, access flags, pipeline stage).
+    /// Each subresource slot holds one PlaneState per aspect plane the image's format has.
+    /// The plane set is fixed at image construction time and never grows or shrinks.
+    struct State {
+        /// State of a single aspect plane of a single subresource.
+        struct PlaneState {
+            vk::ImageLayout        layout = vk::ImageLayout::eUndefined;
+            vk::AccessFlags        access = vk::AccessFlagBits::eNone;
+            vk::PipelineStageFlags stages = vk::PipelineStageFlagBits::eBottomOfPipe;
+            const char *           usage  = "<unspecified>";
+
+            bool operator==(const PlaneState & o) const { return layout == o.layout && access == o.access && stages == o.stages; }
+            bool operator!=(const PlaneState & o) const { return !(*this == o); }
+
+            bool isWrite() const {
+                // clang-format off
+                return (access & (vk::AccessFlagBits::eShaderWrite |
+                                  vk::AccessFlagBits::eColorAttachmentWrite |
+                                  vk::AccessFlagBits::eDepthStencilAttachmentWrite |
+                                  vk::AccessFlagBits::eTransferWrite |
+                                  vk::AccessFlagBits::eHostWrite |
+                                  vk::AccessFlagBits::eMemoryWrite)) != vk::AccessFlags{};
+                // clang-format on
+            }
+
+            static constexpr PlaneState UNDEFINED() {
+                return {vk::ImageLayout::eUndefined, vk::AccessFlagBits::eNone, vk::PipelineStageFlagBits::eBottomOfPipe};
+            }
+            static constexpr PlaneState TRANSFER_SRC() {
+                return {vk::ImageLayout::eTransferSrcOptimal, vk::AccessFlagBits::eTransferRead, vk::PipelineStageFlagBits::eTransfer};
+            }
+            static constexpr PlaneState TRANSFER_DST() {
+                return {vk::ImageLayout::eTransferDstOptimal, vk::AccessFlagBits::eTransferWrite, vk::PipelineStageFlagBits::eTransfer};
+            }
+        };
+
+        struct AspectHash {
+            size_t operator()(vk::ImageAspectFlagBits a) const { return std::hash<uint32_t> {}(static_cast<uint32_t>(a)); }
+        };
+        struct SubresourceState {
+            std::unordered_map<vk::ImageAspectFlagBits, PlaneState, AspectHash> planes;
+        };
+
+        /// Returns per-plane state for (mip, arrayLayer, aspect), or nullptr if out of range or not a
+        /// valid plane for this image's format.
+        const PlaneState * get(uint32_t mip, uint32_t arrayLayer, vk::ImageAspectFlagBits aspect) const {
+            if (mip >= numMips || arrayLayer >= numLayers) RVI_UNLIKELY return nullptr;
+            const auto & sr = subresources[subresourceIndex(mip, arrayLayer)];
+            auto         it = sr.planes.find(aspect);
+            if (it == sr.planes.end()) RVI_UNLIKELY return nullptr;
+            return &it->second;
+        }
+
+        size_t subresourceIndex(uint32_t mip, uint32_t arrayLayer) const { return mip * numLayers + arrayLayer; }
+
+        vk::ImageAspectFlags          validAspects = {};
+        uint32_t                      numMips      = 0;
+        uint32_t                      numLayers    = 0;
+        std::vector<SubresourceState> subresources; // size = numMips * numLayers. Use subresourceIndex() to index into it.
+    };
 
     /// @brief Construct an image from scratch (will create a new vk::Image handle)
     Image(const ConstructParameters &);
@@ -1425,9 +1479,17 @@ public:
     bool setContent(const SetContentParameters &);
 
     /// @brief Synchronously read content of the whole image.
-    /// This method, if succeeded, will transfer the entire image into vk::ImageLayout::eTransferSrcOptimal layout.
-    /// If failed, returns empty content with undefined format.
-    Content readContent(const ReadContentParameters &) const;
+    /// Transitions every subresource to eTransferSrcOptimal and updates internal state on success.
+    /// Returns empty content with undefined format on failure.
+    Content readContent(const ReadContentParameters &);
+
+    /// @brief Returns the current per-subresource image state tracked internally.
+    const State & getState() const;
+
+    /// @brief Updates the state for all subresources in \p range.
+    /// The aspectMask in \p range is intersected with the image's valid planes; unknown bits are ignored.
+    /// The default range covers all aspects, all mips, and all array layers of the entire image.
+    void setState(const State::PlaneState & newState, const vk::ImageSubresourceRange & range = FULL_RANGE);
 
     vk::Image handle() const { return desc().handle; }
 
@@ -1698,7 +1760,7 @@ public:
         uint32_t                                           subpass {};
         std::vector<vk::Format>                            dynamicRenderingColorFormats {}; ///< non-empty => use dynamic rendering (ignore pass)
         vk::Format                                         dynamicRenderingDepthFormat {vk::Format::eUndefined};
-        const Shader *                                     vs {}; ///< vertex shasder. can't be null.
+        const Shader *                                     vs {}; ///< vertex shader. can't be null.
         const Shader *                                     fs {}; ///< fragment shader. can be null.
         std::vector<vk::VertexInputAttributeDescription>   va {};
         std::vector<vk::VertexInputBindingDescription>     vb {};
@@ -1761,6 +1823,19 @@ public:
             desc.offset   = (uint32_t) offset;
             desc.format   = format;
             va.push_back(desc);
+            return *this;
+        }
+
+        /// @brief Set vertex attribute for a specific location. The location may be specified out of order.
+        /// The method will expand the vertex attribute array if necessary to accommodate the specified location. But this may leave some vertex attributes
+        /// in the middle uninitialized. It is caller's responsibility to ensure all vertex attributes are properly initialized before creating the pipeline.
+        ConstructParameters & setVertexAttribute(size_t location, size_t binding, size_t offset, vk::Format format) {
+            if (va.size() <= location) va.resize(location + 1);
+            auto & desc   = va[location];
+            desc.binding  = (uint32_t) binding;
+            desc.location = (uint32_t) location;
+            desc.offset   = (uint32_t) offset;
+            desc.format   = format;
             return *this;
         }
 
@@ -2101,17 +2176,6 @@ class CommandBuffer {
 public:
     class Impl;
 
-    struct SubmitParameters {
-        /// The (optional) fence object to signal once the command buffers have completed execution.
-        vk::Fence signalFence = {};
-
-        /// @brief List of semaphores to wait for before executing the command buffers.
-        vk::ArrayProxy<const vk::Semaphore> waitSemaphores {};
-
-        /// @brief List of semaphores to signal once the command buffers have completed execution.
-        vk::ArrayProxy<const vk::Semaphore> signalSemaphores {};
-    };
-
     CommandBuffer(Impl * impl = nullptr): _impl(impl) {}
     CommandBuffer(const CommandBuffer & o): _impl(o._impl) {}
     ~CommandBuffer() = default;
@@ -2182,18 +2246,46 @@ public:
         uint32_t           index  = 0; ///< queue index within family
     };
 
+    struct SyncPoint {
+        /// The handle of the semaphore. Can be either timeline or binary semaphore.
+        vk::Semaphore semaphore = {};
+
+        // the monolithic increasing counter of the timeline.
+        uint64_t progress = {};
+
+        /// The state flag of the sync point. Ignored when the sync point is used in signal list.
+        vk::PipelineStageFlags stages = vk::PipelineStageFlagBits::eAllCommands;
+
+        bool empty() const { return !semaphore; }
+
+        operator bool() const { return !!semaphore; }
+    };
+
     struct SubmitParameters {
         /// @brief The command buffers to submit. The command buffers must be allocated out of this queue class.
+        /// May be empty when the submission only carries semaphore operations — for example, a
+        /// timeline-to-binary bridge that waits on a timeline point and signals a binary semaphore
+        /// so that vkQueuePresentKHR (which only accepts binary semaphores) can consume it.
+        /// A submission with no command buffers AND no semaphore operations is a no-op and will
+        /// be silently ignored (submit() returns an empty SubmissionID).
         vk::ArrayProxy<const CommandBuffer> commandBuffers {};
 
-        /// The (optional) fence object to signal once the command buffers have completed execution.
+        /// The optional fence object to signal once the command buffers have completed execution.
         vk::Fence signalFence = {};
 
-        /// @brief List of semaphores to wait for before executing the command buffers.
-        vk::ArrayProxy<const vk::Semaphore> waitSemaphores {};
+        /// @brief Optional list of binary sync points to wait for before executing the command buffers.
+        vk::ArrayProxy<const SyncPoint> waitBinaries {};
 
-        /// @brief List of semaphores to signal once the command buffers have completed execution.
-        vk::ArrayProxy<const vk::Semaphore> signalSemaphores {};
+        /// @brief Optional list of timeline semaphores to wait for. Requires timeline feature enabled.
+        vk::ArrayProxy<const SyncPoint> waitPoints {};
+
+        /// @brief Optional list of binary semaphores to signal once the command buffers have completed execution.
+        /// For Vulkan 1.1 and 1.2, signal state flags are not supported and will be ignored.
+        vk::ArrayProxy<const SyncPoint> signalBinaries {};
+
+        /// @brief Optional list of timeline points to signal. Requires timeline feature enabled.
+        /// For Vulkan 1.1 and 1.2, signal state flags are not supported and will be ignored.
+        vk::ArrayProxy<const SyncPoint> signalPoints {};
     };
 
     /// @brief unique identifier of a GPU submission
@@ -2221,11 +2313,13 @@ public:
     /// @brief Begin recording a command buffer.
     CommandBuffer begin(const char * name, vk::CommandBufferLevel level = vk::CommandBufferLevel::ePrimary);
 
-    /// @brief Submit command buffers to the queue for asynchronous processing.
-    /// After this call, all command buffer pointers are inaccessible. The caller should not use them anymore.
-    /// @return A submission ID that later to check/wait for the completion of the submission. Return an empty
-    /// handle on failure.
-    SubmissionID submit(const SubmitParameters &);
+    /// Submit using VkSubmitInfo (Vulkan 1.0+). Supports timeline semaphores via the
+    /// VkTimelineSemaphoreSubmitInfo pNext chain when waitPoints/signalPoints are non-empty.
+    SubmissionID submit1(const SubmitParameters &);
+
+    /// Submit using VkSubmitInfo2 (requires synchronization2 — Vulkan 1.3 core or
+    /// VK_KHR_synchronization2 extension). Caller must ensure the feature is enabled.
+    SubmissionID submit2(const SubmitParameters &);
 
     /// @brief Drop command buffers. Discard all contents of them.
     /// After this call, the command buffer pointers are inaccessible. The caller should not use them anymore.
@@ -2345,13 +2439,6 @@ public:
             return *this;
         }
     };
-    /// @brief Specify the current status of the back buffer image.
-    struct BackbufferStatus {
-        vk::ImageLayout        layout {};
-        vk::AccessFlags        access {};
-        vk::PipelineStageFlags stages {};
-    };
-
     struct Backbuffer {
         Image *         image {}; // this is never null for a valid backbuffer.
         vk::ImageView   view {};
@@ -2363,9 +2450,6 @@ public:
         /// @brief Pointer to the backbuffer of the frame.
         /// The pointer value will be invalidated after each present.
         const Backbuffer * backbuffer = nullptr;
-
-        /// Status of the back buffer image at the beginning of the frame.
-        BackbufferStatus backbufferStatus {};
 
         /// @brief The semaphore that will be signaled when the last present of the current backbuffer image is done.
         /// The first rendering submission for current frame should wait for this semaphore.
@@ -2385,12 +2469,6 @@ public:
         /// @brief Specify the clear value for depth and stencil buffer.
         vk::ClearDepthStencilValue clearDepth = vk::ClearDepthStencilValue(1.0f, 0);
 
-        /// @brief Specify the current status of the back buffer image.
-        /// This is for the cmdBeginRenderPass() method insert proper barriers to transition the image to the desired layout for the render pass.
-        /// If the back buffer is already in vk::ImageLayout::eColorAttachmentOptimal layout, then no barrier will be inserted.
-        /// When built-in render pass ends, the back buffer image will be automatically transitioned into status suitable for present().
-        // BackbufferStatus backbufferStatus = {vk::ImageLayout::ePresentSrcKHR, vk::AccessFlagBits::eMemoryRead, vk::PipelineStageFlagBits::eBottomOfPipe};
-
         BeginRenderPassParameters & setClearColorF(vk::ArrayProxy<const float> color) {
             clearColor.setFloat32({color.size() > 0 ? color.data()[0] : 0.f, color.size() > 1 ? color.data()[1] : 0.f, color.size() > 2 ? color.data()[2] : 0.f,
                                    color.size() > 3 ? color.data()[3] : 1.f});
@@ -2405,23 +2483,11 @@ public:
 
     /// @brief Specify parameters to call present().
     struct PresentParameters {
-
-        /// @brief Specify the current status of the back buffer image when calling present().
-        /// The present() function will insert proper barrier to transit the current back buffer image into VK_IMAGE_LAYOUT_PRESENT_SRC_KHR layouy.
-        /// If the back buffer image is already in VK_IMAGE_LAYOUT_PRESENT_SRC_KHR layout, then no barrier will be inserted.
-        BackbufferStatus backbufferStatus;
-
         /// @brief Optional list of semaphores that present() call uses to ensure presenting happens after all rendering of the frame is done.
-        /// !!! IMPORTANT !!! : If not empty, caller MUST ensure that all semaphores in the list are signaled by th end of the frame rendering.
+        /// !!! IMPORTANT !!! : If not empty, caller MUST ensure that all semaphores in the list are signaled by the end of the frame rendering.
         /// Failing to do so will cause present() to wait forever. On the other hand, signaling these
         /// semaphores too early could cause present() showing partially rendered frame.
         vk::ArrayProxy<const vk::Semaphore> renderFinished = {};
-
-        PresentParameters(vk::ImageLayout backbufferLayuout, vk::AccessFlags backbufferAccessFlags) {
-            backbufferStatus = {backbufferLayuout, backbufferAccessFlags, vk::PipelineStageFlagBits::eBottomOfPipe};
-        }
-
-        PresentParameters(const BackbufferStatus & backbufferStatus_): backbufferStatus(backbufferStatus_) {}
 
         PresentParameters & setRenderFinished(vk::ArrayProxy<const vk::Semaphore> renderFinished_) {
             renderFinished = renderFinished_;
@@ -2430,21 +2496,12 @@ public:
     };
 
     struct PresentResult {
-        enum Status {
-            FAILED     = -1, ///< Present failed. The back buffer image is in undefined state. Consider delete and recreate the swapchain.
-            SUCCESS    = 0,  ///< Present successfully. The back buffer image is now in the layout specified by the backbufferStatus field.
-            SUBOPTIMAL = 1,  ///< Present successfully, but the swapchain is in suboptimal state. The back buffer image is now in the layout specified by the
-                             ///< backbufferStatus field.
-        };
+        inline static constexpr int FAILED     = -1;
+        inline static constexpr int SUCCESS    = 0;
+        inline static constexpr int SUBOPTIMAL = 1;
 
-        /// The result status of the present() call. If FAILED, the rest of the structure is undefined.
-        Status status = FAILED;
-
-        /// The actual status of the back buffer image after present() call.
-        /// Note that the status specified in the PresentParameters may not be the same as this value,
-        /// since present() will insert proper barriers to transition the image into a layout suitable for presentation.
-        /// Undefined if the present() call failed.
-        BackbufferStatus backbufferStatus;
+        /// The result status of the present() call.
+        int status = FAILED;
 
         operator bool() const { return status != FAILED; }
     };
@@ -2484,10 +2541,10 @@ public:
     /// @brief Begin a new built-in render pass. Can only be called between beginFrame() and present().
     void cmdBeginBuiltInRenderPass(vk::CommandBuffer, const BeginRenderPassParameters &);
 
-    /// @brief End the built-in render pass. Returns the
-    /// After built-in render pass ends, the back buffer image will be automatically transitioned into status suitable for present(). You can check the
-    /// actual value of the status via currentFrame().backbuffer->status.
-    BackbufferStatus cmdEndBuiltInRenderPass(vk::CommandBuffer);
+    /// @brief End the built-in render pass.
+    /// After the render pass ends, the back buffer image is automatically transitioned to VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+    /// and the image's tracked state is updated accordingly.
+    void cmdEndBuiltInRenderPass(vk::CommandBuffer);
 
 private:
     class Impl;
@@ -2616,12 +2673,12 @@ public:
     vk::Device operator->() const { return _gi.device; }
 
 private:
-    ConstructParameters         _cp;
-    GlobalInfo                  _gi {};
-    std::vector<CommandQueue *> _queues; // one for each queue family
-    CommandQueue *              _graphics = nullptr;
-    CommandQueue *              _compute  = nullptr;
-    CommandQueue *              _transfer = nullptr;
+    ConstructParameters            _cp;
+    GlobalInfo                     _gi {};
+    std::vector<Ref<CommandQueue>> _queues; // one for each queue family
+    CommandQueue *                 _graphics = nullptr;
+    CommandQueue *                 _compute  = nullptr;
+    CommandQueue *                 _transfer = nullptr;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------

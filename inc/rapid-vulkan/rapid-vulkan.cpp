@@ -331,7 +331,7 @@ public:
             CmdDebugLabel label(cb, ("set buffer content of " + _owner.name()).c_str());
             staging.cmdCopy({cb, _owner.handle(), _desc.size, dstOffset, 0, size});
             label.end();
-            queue.wait(queue.submit({{cb}}));
+            queue.wait(queue.submit1({{cb}}));
         }
     }
 
@@ -362,7 +362,7 @@ public:
 
         // copy data from the source buffer to the staging buffer. wait for it to complete.
         cmdCopy({cb, staging.handle(), size, 0, offset});
-        queue.wait(queue.submit({cb}));
+        queue.wait(queue.submit1({cb}));
 
         // read data from the staging buffer
         auto m = Map<uint8_t>(staging);
@@ -808,22 +808,14 @@ public:
             cp.info.flags &= ~vk::ImageCreateFlagBits::eCubeCompatible;
         }
 
-        // // create a default image view that covers the whole image
-        // auto aspect          = determineImageAspect(ci.aspect, ci.format);
-        // auto vci             = VkImageViewCreateInfo {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-        // vci.image            = image;
-        // vci.viewType         = ci.isCube() ? VK_IMAGE_VIEW_TYPE_CUBE : ci.arrayLayers > 1 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
-        // vci.format           = ci.format;
-        // vci.components       = {VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_B, VK_COMPONENT_SWIZZLE_A};
-        // vci.subresourceRange = {aspect, 0, ci.mipLevels, 0, ci.arrayLayers};
-        // RVI_VK_REQUIRE(vkCreateImageView(g.device, &vci, g.allocator, &view));
-        // setVkHandleName(g.device, view, name);
+        initState(State::PlaneState::UNDEFINED());
     }
 
     Impl(Image & o, const ImportParameters & ip): _owner(o), _gi(ip.gi) {
         RVI_REQUIRE(ip.gi);
         RVI_REQUIRE(ip.desc.handle);
         _desc = ip.desc;
+        initState(State::PlaneState::UNDEFINED());
     }
 
     ~Impl() {
@@ -843,17 +835,22 @@ public:
         }
     }
 
-    const Desc & desc() const { return _desc; }
+    const Desc &  desc() const { return _desc; }
+    const State & state() const { return _state; }
 
     vk::ImageView getView(GetViewParameters p) const {
         if (p.format == vk::Format::eUndefined) p.format = _desc.format;
-        p.range.aspectMask = determineImageAspect(p.format, p.range.aspectMask);
+        p.range.aspectMask &= _state.validAspects;
+        if (!p.range.aspectMask) RVI_UNLIKELY {
+                RVI_LOGE("Image::getView: subresource aspect mask is not valid for this image");
+                return {};
+            }
         clampRange(p.range.baseMipLevel, p.range.levelCount, _desc.mipLevels);
         clampRange(p.range.baseArrayLayer, p.range.layerCount, _desc.arrayLayers);
-        if (0 == p.range.layerCount || 0 == p.range.levelCount) {
-            RVI_LOGE("Image::getView: subresource range is out of bounds");
-            return {};
-        }
+        if (0 == p.range.layerCount || 0 == p.range.levelCount) RVI_UNLIKELY {
+                RVI_LOGE("Image::getView: subresource range is out of bounds");
+                return {};
+            }
         p.type = determineViewType(p.type, p.range);
         if ((int) p.type < 0) return {};
         auto & view = _views[p];
@@ -881,8 +878,6 @@ public:
             return false;
         }
 
-        // TODO: validate mip level and array layer.
-
         // adjust area to fit image size
         auto area = clampRect3D(params.area, mipExtent);
         if (area.w == 0 || area.h == 0 || area.d == 0) return false;
@@ -902,11 +897,10 @@ public:
         staging.unmap();
 
         // determine subresource aspect
-        auto aspect = determineImageAspect(_desc.format);
 
         // Setup buffer copy regions for the subresource
         auto copyRegion = vk::BufferImageCopy()
-                              .setImageSubresource({aspect, params.mipLevel, params.arrayLayer, 1})
+                              .setImageSubresource({_state.validAspects, params.mipLevel, params.arrayLayer, 1})
                               .setImageOffset({(int) area.x, (int) area.y, (int) area.z})
                               .setImageExtent({area.w, area.h, area.d});
 
@@ -919,7 +913,7 @@ public:
         }
 
         CmdDebugLabel label(c, ("set image content of " + _owner.name()).c_str());
-        auto          r = vk::ImageSubresourceRange(aspect, params.mipLevel, 1, params.arrayLayer, 1);
+        auto          r = vk::ImageSubresourceRange(_state.validAspects, params.mipLevel, 1, params.arrayLayer, 1);
         Barrier {}
             .s(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer)
             .i(_desc.handle, vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead,
@@ -927,11 +921,15 @@ public:
             .cmdWrite(c);
         c.handle().copyBufferToImage(staging, _desc.handle, vk::ImageLayout::eTransferDstOptimal, {copyRegion});
         label.end();
-        q.wait(q.submit({{c}}));
+        q.wait(q.submit1({{c}}));
+
+        // Update per-plane state to reflect the transfer destination layout.
+        forEachAspectBit(_state.validAspects,
+                         [&](vk::ImageAspectFlagBits bit) { setStatePlane(params.mipLevel, params.arrayLayer, bit, State::PlaneState::TRANSFER_DST()); });
         return true;
     }
 
-    Content readContent(const ReadContentParameters & params) const {
+    Content readContent(const ReadContentParameters & params) {
         // uint32_t mipLevel   = params.mipLevel;
         // uint32_t levelCount = params.layerCount;
         // uint32_t arrayLayer = params.arrayLayer;
@@ -941,7 +939,6 @@ public:
         // if (0 == levelCount || 0 == layerCount) return {};
 
         auto formatDesc = VkFormatDesc::get(_desc.format);
-        auto aspect     = determineImageAspect(_desc.format);
         auto mipExtents = buildMipExtentArray();
 
         Content                          content;
@@ -956,7 +953,7 @@ public:
                                           .setBufferOffset(dataSize)
                                           .setBufferRowLength(extent.width)
                                           .setBufferImageHeight(extent.height)
-                                          .setImageSubresource({aspect, m, a, 1})
+                                          .setImageSubresource({_state.validAspects, m, a, 1})
                                           .setImageOffset({0, 0, 0})
                                           .setImageExtent(extent));
                 content.subresources.push_back({m, a, extent, rowPitch, dataSize});
@@ -967,18 +964,23 @@ public:
         // Allocate staging buffer
         auto staging = Buffer(Buffer::ConstructParameters {{_owner.name()}, _gi, dataSize}.setStaging());
 
+        // Derive current layout from internal state. readContent() blits the entire image with one
+        // barrier, so all subresources must already share the same layout; mip 0 / layer 0 is representative.
+        vk::ImageLayout currentLayout = vk::ImageLayout::eUndefined;
+        if (!_state.subresources.empty() && !_state.subresources[0].planes.empty()) { currentLayout = _state.subresources[0].planes.begin()->second.layout; }
+
         // Copy image content into the staging buffer
         auto q = CommandQueue({{_owner.name()}, _gi, params.queueFamily, params.queueIndex});
         auto c = q.begin(_owner.name().data());
         if (c) {
-            auto r = vk::ImageSubresourceRange(aspect, 0, _desc.mipLevels, 0, _desc.arrayLayers);
+            auto r = vk::ImageSubresourceRange(_state.validAspects, 0, _desc.mipLevels, 0, _desc.arrayLayers);
             Barrier {}
                 .s(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer)
-                .i(_desc.handle, vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead, params.currentLayout,
+                .i(_desc.handle, vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead, currentLayout,
                    vk::ImageLayout::eTransferSrcOptimal, r)
                 .cmdWrite(c);
             c.handle().copyImageToBuffer(_desc.handle, vk::ImageLayout::eTransferSrcOptimal, staging, copyRegions);
-            q.wait(q.submit({c}));
+            q.wait(q.submit1({c}));
         }
 
         // read data out of the staging buffer
@@ -986,7 +988,9 @@ public:
         RVI_ASSERT(mapped.size == dataSize);
         content.storage.assign(mapped.data, mapped.data + mapped.size);
 
-        // done
+        // Update internal state: entire image is now in transfer-src layout.
+        setState(State::PlaneState::TRANSFER_SRC(), vk::ImageSubresourceRange(_state.validAspects, 0, _desc.mipLevels, 0, _desc.arrayLayers));
+
         content.format = _desc.format;
         return content;
     }
@@ -1023,8 +1027,85 @@ private:
     vk::DeviceMemory   _memory {};
     VmaAllocation      _allocation {};
     mutable ViewMap    _views;
+    State              _state;
+
+public:
+    bool validateSubresourceRange(vk::ImageSubresourceRange & range) const {
+        clampRange(range.baseMipLevel, range.levelCount, _state.numMips);
+        clampRange(range.baseArrayLayer, range.layerCount, _state.numLayers);
+        if (0 == range.levelCount || 0 == range.layerCount) return false;
+        range.aspectMask &= _state.validAspects;
+        return !!range.aspectMask;
+    }
+
+    // Update all planes in range; called by Image::setState().
+    void setState(const State::PlaneState & newState, const vk::ImageSubresourceRange & range) {
+        auto validateRange = range;
+        if (!validateSubresourceRange(validateRange)) return;
+        for (uint32_t i = validateRange.baseMipLevel; i < validateRange.baseMipLevel + validateRange.levelCount; ++i)
+            for (uint32_t j = validateRange.baseArrayLayer; j < validateRange.baseArrayLayer + validateRange.layerCount; ++j)
+                forEachAspectBit(validateRange.aspectMask, [&](vk::ImageAspectFlagBits bit) { setStatePlane(i, j, bit, newState); });
+    }
 
 private:
+    vk::ImageAspectFlags determineAvailableImageAspects(vk::Format format) {
+        switch (format) {
+        // depth only format
+        case vk::Format::eD16Unorm:
+        case vk::Format::eD32Sfloat:
+        case vk::Format::eX8D24UnormPack32:
+            return vk::ImageAspectFlagBits::eDepth;
+
+        // stencil only format
+        case vk::Format::eS8Uint:
+            return vk::ImageAspectFlagBits::eStencil;
+
+        // depth + stencil format
+        case vk::Format::eD16UnormS8Uint:
+        case vk::Format::eD24UnormS8Uint:
+        case vk::Format::eD32SfloatS8Uint:
+            return vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil;
+
+        // TODO: multi-planar formats
+
+        // default format
+        default:
+            return vk::ImageAspectFlagBits::eColor;
+        }
+    }
+
+    // Iterate each set bit in aspects, calling fn(vk::ImageAspectFlagBits). The m & -m
+    // idiom isolates the lowest set bit without a hard-coded aspect list.
+    template<typename Fn>
+    static void forEachAspectBit(vk::ImageAspectFlags aspects, Fn && fn) {
+        auto remaining = static_cast<vk::ImageAspectFlags::MaskType>(aspects);
+        while (remaining) {
+            auto lowBit = remaining & (~remaining + 1u);
+            fn(static_cast<vk::ImageAspectFlagBits>(lowBit));
+            remaining ^= lowBit;
+        }
+    }
+
+    // Initialize state storage from the image's format and dimensions. Called once from constructors.
+    void initState(const State::PlaneState & initial) {
+        _state.validAspects = determineAvailableImageAspects(_desc.format);
+        _state.numMips      = _desc.mipLevels;
+        _state.numLayers    = _desc.arrayLayers;
+        _state.subresources.assign((size_t) _desc.mipLevels * (size_t) _desc.arrayLayers, State::SubresourceState {});
+        for (auto & sr : _state.subresources) forEachAspectBit(_state.validAspects, [&](vk::ImageAspectFlagBits bit) { sr.planes.emplace(bit, initial); });
+    }
+
+    // Update a single plane; logs the layout transition at verbose level.
+    void setStatePlane(uint32_t mip, uint32_t arrayLayer, vk::ImageAspectFlagBits aspect, const State::PlaneState & newState) {
+        auto & sr = _state.subresources[_state.subresourceIndex(mip, arrayLayer)];
+        auto   it = sr.planes.find(aspect);
+        if (it == sr.planes.end()) return; // not a valid plane for this format
+        if (it->second == newState) return;
+        RVI_LOGD("image '%s': mip=%u layer=%u aspect=0x%x layout %d->%d", _owner.name().c_str(), mip, arrayLayer, static_cast<uint32_t>(aspect),
+                 static_cast<int>(it->second.layout), static_cast<int>(newState.layout));
+        it->second = newState;
+    }
+
     vk::ImageViewType determineViewType(vk::ImageViewType candidate, const vk::ImageSubresourceRange & range) const {
         if (vk::ImageViewType::e1D <= candidate && candidate <= vk::ImageViewType::eCubeArray) return candidate;
         switch (_desc.type) {
@@ -1090,34 +1171,7 @@ Image::ReadContentParameters & Image::ReadContentParameters::setQueue(const Comm
     queueIndex  = queue.index();
     return *this;
 }
-vk::ImageAspectFlags Image::determineImageAspect(vk::Format format, vk::ImageAspectFlags aspect) {
-    switch (format) {
-    // depth only format
-    case vk::Format::eD16Unorm:
-    case vk::Format::eD32Sfloat:
-    case vk::Format::eX8D24UnormPack32:
-        return vk::ImageAspectFlagBits::eDepth;
 
-    // stencil only format
-    case vk::Format::eS8Uint:
-        return vk::ImageAspectFlagBits::eStencil;
-
-    // depth + stencil format
-    case vk::Format::eD16UnormS8Uint:
-    case vk::Format::eD24UnormS8Uint:
-    case vk::Format::eD32SfloatS8Uint:
-        if (vk::ImageAspectFlagBits::eDepth == aspect || vk::ImageAspectFlagBits::eStencil == aspect)
-            return aspect;
-        else
-            return vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil;
-
-    // TODO: multi-planar formats
-
-    // default format
-    default:
-        return vk::ImageAspectFlagBits::eColor;
-    }
-}
 Image::Image(const ConstructParameters & cp): Root(cp) { _impl = new Impl(*this, cp); }
 Image::Image(const ImportParameters & cp): Root(cp) { _impl = new Impl(*this, cp); }
 Image::~Image() {
@@ -1127,7 +1181,9 @@ Image::~Image() {
 auto Image::desc() const -> const Desc & { return _impl->desc(); }
 auto Image::getView(const GetViewParameters & p) const -> vk::ImageView { return _impl->getView(p); }
 bool Image::setContent(const SetContentParameters & p) { return _impl->setContent(p); }
-auto Image::readContent(const ReadContentParameters & p) const -> Content { return _impl->readContent(p); }
+auto Image::readContent(const ReadContentParameters & p) -> Content { return _impl->readContent(p); }
+auto Image::getState() const -> const State & { return _impl->state(); }
+void Image::setState(const State::PlaneState & newState, const vk::ImageSubresourceRange & range) { _impl->setState(newState, range); }
 void Image::onNameChanged(const std::string &) { _impl->onNameChanged(); }
 // *********************************************************************************************************************
 // Shader
@@ -1676,7 +1732,8 @@ GraphicsPipeline::GraphicsPipeline(const ConstructParameters & params): Pipeline
 
     // setup vertex input stage
     const auto & refl = _impl->layout().reflection();
-    if (refl.vertex.size() != params.va.size()) {
+    // param.va might contains attributes that is not used by shader, which is fine.
+    if (refl.vertex.size() > params.va.size()) {
         RVI_LOGE("Failed to create graphics pipeline (%s): vertex input stage requires %zu attributes, but only %zu are provided.", params.name.c_str(),
                  refl.vertex.size(), params.va.size());
         return;
@@ -2528,8 +2585,13 @@ public:
         return _gi->device.allocateDescriptorSets({_pool, 1, &_layout})[0];
     }
 
-    /// Release all already-full descriptor pools.
-    void purge() {
+    /// Reset the pool to intial state, release all allocated sets.
+    void reset() {
+        if (_pool) {
+            _gi->device.resetDescriptorPool(_pool);
+            _availableSets = _maxSets;
+        }
+        // Release all already-full descriptor pools.
         for (auto & p : _full) { _gi->safeDestroy(p); }
         _full.clear();
     }
@@ -2701,6 +2763,8 @@ private:
     DescriptorPoolMap      _descriptorPools;
     Ref<const DrawPack>    _last;
 
+    // resources referneced by draw/dispatch commands recorded in this command buffer. We need to keep references to
+    // them to ensure their lifetime covers the execution of this command buffer on the GPU.
     std::set<Ref<const Pipeline>> _pipelines;
     std::set<Ref<const Buffer>>   _buffers;
     std::set<Ref<const Image>>    _images;
@@ -2713,7 +2777,7 @@ private:
         auto gi = _queue.desc().gi;
         gi->safeDestroy(_handle, _pool);
         gi->device.resetCommandPool(_pool);
-        for (auto & p : _descriptorPools) p.second.purge();
+        for (auto & p : _descriptorPools) p.second.reset();
         _last = {};
         _pipelines.clear();
         _buffers.clear();
@@ -2739,9 +2803,18 @@ private:
         return iter->second.allocate();
     }
 
-    void updateResourceReferenceList(const DrawPack &) {
-        //
-        // RVI_ASSERT(false, "not implemented yet.");
+    void updateResourceReferenceList(const DrawPack & pack) {
+        // Keep every resource the draw pack references alive for the lifetime of this command buffer.
+        // Vulkan requires that all objects bound via vkCmd* remain valid until the command buffer
+        // finishes executing on the GPU; clear() releases these refs when the buffer is retired.
+        if (pack.pipeline) _pipelines.insert(pack.pipeline);
+        for (const auto & buf : pack.dependencies.buffers) _buffers.insert(buf);
+        for (const auto & img : pack.dependencies.images) _images.insert(img);
+        for (const auto & smp : pack.dependencies.samplers) _samplers.insert(smp);
+        for (const auto & vb : pack.vertexBuffers) {
+            if (vb) _buffers.insert(vb);
+        }
+        if (pack.indexBuffer) _buffers.insert(pack.indexBuffer);
     }
 };
 
@@ -2793,7 +2866,10 @@ public:
         return cb;
     }
 
-    SubmissionID submit(const SubmitParameters & sp) {
+    SubmissionID submit1(const SubmitParameters & sp) { return submitImpl(sp, false); }
+    SubmissionID submit2(const SubmitParameters & sp) { return submitImpl(sp, true); }
+
+    SubmissionID submitImpl(const SubmitParameters & sp, bool useV2) {
         // remove duplicated command buffers
         auto uniqueCommandBuffers = unique(sp.commandBuffers);
 
@@ -2807,7 +2883,12 @@ public:
             s->commandBuffers.push_back(p);
             handles.push_back(p->handle());
         }
-        if (s->commandBuffers.empty()) return {};
+        // A bridge-only submission (no command buffers, but with semaphore operations) is
+        // valid and intentional: it lets a timeline sync point be waited on while signaling
+        // a binary semaphore, which is required when bridging to vkQueuePresentKHR (which
+        // only accepts binary semaphores). Reject only when there is truly nothing to do.
+        bool hasSemaphoreWork = !sp.waitBinaries.empty() || !sp.waitPoints.empty() || !sp.signalBinaries.empty() || !sp.signalPoints.empty();
+        if (s->commandBuffers.empty() && !hasSemaphoreWork) return {};
 
         // set submission index
         s->index = ++_nextSubmissionId;
@@ -2821,14 +2902,80 @@ public:
             s->fence = s->builtInFence.get();
         }
 
-        // submit the command buffer
-        std::vector<vk::PipelineStageFlags> flags(sp.waitSemaphores.size(), vk::PipelineStageFlagBits::eBottomOfPipe);
-        vk::SubmitInfo                      si;
-        si.setWaitSemaphores(sp.waitSemaphores);
-        si.setSignalSemaphores(sp.signalSemaphores);
-        si.setCommandBuffers(handles);
-        si.setPWaitDstStageMask(flags.data());
-        _desc.handle.submit({si}, s->fence);
+        // SyncPoint.stages is vk::PipelineStageFlags (32-bit v1). The v2 path (VkSubmitInfo2)
+        // needs vk::PipelineStageFlags2 (64-bit). v1 and v2 flag bits are identical in the
+        // lower 32 bits by Vulkan spec design, so a plain zero-extending cast is correct.
+        auto toV2Stage = [](vk::PipelineStageFlags f) -> vk::PipelineStageFlags2 {
+            return vk::PipelineStageFlags2 {VkPipelineStageFlags2 {static_cast<uint32_t>(f)}};
+        };
+
+        if (!useV2) {
+            // VkSubmitInfo + optional VkTimelineSemaphoreSubmitInfo pNext chain
+            std::vector<vk::Semaphore>          waitSems;
+            std::vector<vk::PipelineStageFlags> waitStages;
+            std::vector<uint64_t>               waitValues;
+            waitSems.reserve(sp.waitBinaries.size() + sp.waitPoints.size());
+            waitStages.reserve(waitSems.capacity());
+            waitValues.reserve(waitSems.capacity());
+            for (const auto & e : sp.waitBinaries) {
+                waitSems.push_back(e.semaphore);
+                waitStages.push_back(e.stages); // already v1 (32-bit)
+                waitValues.push_back(0);        // driver ignores value for binary semaphores
+            }
+            for (const auto & e : sp.waitPoints) {
+                waitSems.push_back(e.semaphore);
+                waitStages.push_back(e.stages); // already v1 (32-bit)
+                waitValues.push_back(e.progress);
+            }
+
+            std::vector<vk::Semaphore> signalSems;
+            std::vector<uint64_t>      signalValues;
+            signalSems.reserve(sp.signalBinaries.size() + sp.signalPoints.size());
+            signalValues.reserve(signalSems.capacity());
+            for (const auto & e : sp.signalBinaries) {
+                signalSems.push_back(e.semaphore);
+                signalValues.push_back(0);
+            }
+            for (const auto & e : sp.signalPoints) {
+                signalSems.push_back(e.semaphore);
+                signalValues.push_back(e.progress);
+            }
+
+            vk::SubmitInfo si;
+            si.setWaitSemaphores(waitSems);
+            si.setSignalSemaphores(signalSems);
+            si.setCommandBuffers(handles);
+            if (!waitSems.empty()) si.setPWaitDstStageMask(waitStages.data());
+
+            // Chain VkTimelineSemaphoreSubmitInfo only when timeline semaphores are involved.
+            vk::TimelineSemaphoreSubmitInfo timelineInfo;
+            if (!sp.waitPoints.empty() || !sp.signalPoints.empty()) {
+                timelineInfo.setWaitSemaphoreValues(waitValues);
+                timelineInfo.setSignalSemaphoreValues(signalValues);
+                si.setPNext(&timelineInfo);
+            }
+
+            _desc.handle.submit({si}, s->fence);
+        } else {
+            // VkSubmitInfo2: native PipelineStageFlags2 and timeline values (synchronization2 available).
+            std::vector<vk::SemaphoreSubmitInfo> waitSems;
+            waitSems.reserve(sp.waitBinaries.size() + sp.waitPoints.size());
+            for (const auto & e : sp.waitBinaries) waitSems.push_back({e.semaphore, 0, toV2Stage(e.stages)});
+            for (const auto & e : sp.waitPoints) waitSems.push_back({e.semaphore, e.progress, toV2Stage(e.stages)});
+
+            std::vector<vk::SemaphoreSubmitInfo> signalSems;
+            signalSems.reserve(sp.signalBinaries.size() + sp.signalPoints.size());
+            for (const auto & e : sp.signalBinaries) signalSems.push_back({e.semaphore, 0, toV2Stage(e.stages)});
+            for (const auto & e : sp.signalPoints) signalSems.push_back({e.semaphore, e.progress, toV2Stage(e.stages)});
+
+            std::vector<vk::CommandBufferSubmitInfo> cbInfos;
+            cbInfos.reserve(handles.size());
+            for (auto h : handles) cbInfos.push_back({h});
+
+            vk::SubmitInfo2 si2;
+            si2.setWaitSemaphoreInfos(waitSems).setCommandBufferInfos(cbInfos).setSignalSemaphoreInfos(signalSems);
+            _desc.handle.submit2({si2}, s->fence);
+        } // end if (!useV2)
 
         // Mark the command buffers as pending. remove them from the active list.
         for (auto cb : s->commandBuffers) {
@@ -3042,7 +3189,8 @@ CommandQueue::~CommandQueue() {
 }
 auto CommandQueue::desc() const -> const Desc & { return _impl->desc(); }
 auto CommandQueue::begin(const char * purpose, vk::CommandBufferLevel level) -> CommandBuffer { return _impl->begin(purpose, level); }
-auto CommandQueue::submit(const SubmitParameters & sp) -> SubmissionID { return _impl->submit(sp); }
+auto CommandQueue::submit1(const SubmitParameters & sp) -> SubmissionID { return _impl->submit1(sp); }
+auto CommandQueue::submit2(const SubmitParameters & sp) -> SubmissionID { return _impl->submit2(sp); }
 void CommandQueue::drop(vk::ArrayProxy<const CommandBuffer> commandBuffers) { _impl->drop(commandBuffers); }
 auto CommandQueue::wait(const vk::ArrayProxy<const SubmissionID> & s) -> CommandQueue & { return _impl->wait(s); }
 auto CommandQueue::waitIdle() -> CommandQueue & { return _impl->waitIdle(); }
@@ -3109,7 +3257,7 @@ public:
         _renderPass->cmdBegin(cb, vk::RenderPassBeginInfo {{}, bb.framebuffer, vk::Rect2D({0, 0}, {extent.width, extent.height})}.setClearValues(cv));
     }
 
-    BackbufferStatus cmdEndBuiltInRenderPass(vk::CommandBuffer cb) {
+    void cmdEndBuiltInRenderPass(vk::CommandBuffer cb) {
         // can't begin render pass if the frame is not begun.
         RVI_REQUIRE(READY == _frameStatus);
 
@@ -3117,7 +3265,9 @@ public:
 
         _renderPass->cmdEnd(cb);
 
-        return DESIRED_PRESENT_STATUS;
+        // The render pass's finalLayout transitions the backbuffer to DESIRED_PRESENT_STATUS implicitly.
+        auto & bb = *currentFrame().backbuffer;
+        bb.image->setState(DESIRED_PRESENT_STATUS, Image::FULL_RANGE);
     }
 
     Frame beginFrame() {
@@ -3176,20 +3326,30 @@ public:
         auto & frame = currentFrame();
         auto & bb    = (BackbufferImpl &) *frame.backbuffer;
 
+        // Derive the current image state from the image's own tracking.
+        const auto * colorPlane = bb.image->getState().get(0, 0, vk::ImageAspectFlagBits::eColor);
+        auto         curStatus  = colorPlane ? *colorPlane : Image::State::PlaneState::UNDEFINED();
+
         // Transition the backbuffer image to present source layout.
         auto cb = _graphicsQueue->begin("frame end");
-        if (pp.backbufferStatus.layout != DESIRED_PRESENT_STATUS.layout) {
+        if (curStatus.layout != DESIRED_PRESENT_STATUS.layout) {
             Barrier()
-                .i(bb.image->handle(), pp.backbufferStatus.access, DESIRED_PRESENT_STATUS.access, pp.backbufferStatus.layout, DESIRED_PRESENT_STATUS.layout,
+                .i(bb.image->handle(), curStatus.access, DESIRED_PRESENT_STATUS.access, curStatus.layout, DESIRED_PRESENT_STATUS.layout,
                    vk::ImageAspectFlagBits::eColor)
-                .s(pp.backbufferStatus.stages, DESIRED_PRESENT_STATUS.stages)
+                .s(curStatus.stages, DESIRED_PRESENT_STATUS.stages)
                 .cmdWrite(cb);
         }
-        frame.frameEndSubmission = _graphicsQueue->submit({cb, {}, pp.renderFinished, {bb.frameEndSemaphore}});
+        // Keep the image's tracked state in sync with the GPU layout after the transition.
+        bb.image->setState(DESIRED_PRESENT_STATUS, Image::FULL_RANGE);
+        // Convert binary semaphores to SyncPoints; pp.renderFinished is still typed as ArrayProxy<Semaphore>.
+        std::vector<CommandQueue::SyncPoint> waitSps;
+        waitSps.reserve(pp.renderFinished.size());
+        for (auto s : pp.renderFinished) waitSps.push_back({s});
+        CommandQueue::SyncPoint endSp {bb.frameEndSemaphore};
+        frame.frameEndSubmission = _graphicsQueue->submit1({cb, {}, waitSps, {}, {1, &endSp}});
 
         PresentResult pr;
-        pr.backbufferStatus = DESIRED_PRESENT_STATUS;
-        pr.status           = PresentResult::SUCCESS;
+        pr.status = PresentResult::SUCCESS;
 
         // present current frame
         if (_handle) {
@@ -3212,8 +3372,10 @@ public:
             }
         } else {
             // For headless swapchain, we do a dummy submit to signal the image available semaphore.
-            auto dummySwap           = _graphicsQueue->begin("headless dummy swap");
-            frame.frameEndSubmission = _graphicsQueue->submit({dummySwap, {}, {bb.frameEndSemaphore}, {frame.imageAvailable}});
+            auto                    dummySwap = _graphicsQueue->begin("headless dummy swap");
+            CommandQueue::SyncPoint waitSp2 {bb.frameEndSemaphore};
+            CommandQueue::SyncPoint iaSp {frame.imageAvailable};
+            frame.frameEndSubmission = _graphicsQueue->submit1({dummySwap, {}, {1, &waitSp2}, {}, {1, &iaSp}});
         }
 
         // Move to the next frame.
@@ -3235,8 +3397,7 @@ private:
         uint32_t                   imageIndex {};
         CommandQueue::SubmissionID frameEndSubmission {};
 
-        // Back buffer is always in the desired present status when it is acquired.
-        FrameImpl() { backbufferStatus = DESIRED_PRESENT_STATUS; }
+        FrameImpl() = default;
 
         void waitForFrameEnd() {
             if (frameEndSubmission) {
@@ -3265,8 +3426,8 @@ private:
     std::vector<BackbufferImpl> _backbuffers;
     Ref<Image>                  _depthBuffer;
 
-    inline static constexpr BackbufferStatus DESIRED_PRESENT_STATUS = {vk::ImageLayout::ePresentSrcKHR, vk::AccessFlagBits::eMemoryRead,
-                                                                       vk::PipelineStageFlagBits::eBottomOfPipe};
+    inline static constexpr Image::State::PlaneState DESIRED_PRESENT_STATUS = {vk::ImageLayout::ePresentSrcKHR, vk::AccessFlagBits::eMemoryRead,
+                                                                               vk::PipelineStageFlagBits::eBottomOfPipe};
 
 private:
     const FrameImpl & currentFrame() const { return _frames[_frameCounter % std::size(_frames)]; }
@@ -3410,8 +3571,9 @@ private:
             setVkHandleName(_cp.gi->device, frame.imageAvailable, format("image available semaphore for headless frame %zu", i));
 
             // then signal it.
-            auto cb = _graphicsQueue->begin(format("dummy submit to signal image available semaphore for headless frame %zu", i).c_str());
-            _graphicsQueue->submit({cb, {}, {}, {frame.imageAvailable}});
+            auto                    cb = _graphicsQueue->begin(format("dummy submit to signal image available semaphore for headless frame %zu", i).c_str());
+            CommandQueue::SyncPoint iaSp2 {frame.imageAvailable};
+            _graphicsQueue->submit1({cb, {}, {}, {}, {1, &iaSp2}});
         }
 
         recreateHeadlessSwapchain();
@@ -3555,10 +3717,12 @@ private:
                    vk::ImageAspectFlagBits::eColor)
                 .s(vk::PipelineStageFlagBits::eAllCommands, DESIRED_PRESENT_STATUS.stages)
                 .cmdWrite(c);
+            // Keep image state in sync with the GPU layout we just transitioned into.
+            bb.image->setState(DESIRED_PRESENT_STATUS, Image::FULL_RANGE);
         }
 
         // execute the command buffer to update image layout
-        _graphicsQueue->submit({c}).wait();
+        _graphicsQueue->submit1({c}).wait();
     }
 
     void recreateHeadlessSwapchain() {
@@ -3604,6 +3768,8 @@ private:
                    vk::ImageAspectFlagBits::eColor)
                 .s(vk::PipelineStageFlagBits::eAllCommands, DESIRED_PRESENT_STATUS.stages)
                 .cmdWrite(c);
+            // Keep image state in sync with the GPU layout we just transitioned into.
+            bb.image->setState(DESIRED_PRESENT_STATUS, Image::FULL_RANGE);
 
             // create back buffer view
             bb.view = bb.image->getView({vk::ImageViewType::e2D, _cp.backbufferFormat});
@@ -3618,7 +3784,7 @@ private:
         }
 
         // execute the command buffer to update image layout
-        _graphicsQueue->submit({c});
+        _graphicsQueue->submit1({c});
         _graphicsQueue->waitIdle();
     }
 };
@@ -3634,7 +3800,7 @@ auto Swapchain::cp() const -> const ConstructParameters & { return _impl->cp(); 
 auto Swapchain::renderPass() const -> vk::RenderPass { return _impl->renderPass().handle(); }
 auto Swapchain::graphics() const -> CommandQueue & { return _impl->graphics(); }
 void Swapchain::cmdBeginBuiltInRenderPass(vk::CommandBuffer cb, const BeginRenderPassParameters & bp) { return _impl->cmdBeginBuiltInRenderPass(cb, bp); }
-auto Swapchain::cmdEndBuiltInRenderPass(vk::CommandBuffer cb) -> BackbufferStatus { return _impl->cmdEndBuiltInRenderPass(cb); }
+void Swapchain::cmdEndBuiltInRenderPass(vk::CommandBuffer cb) { _impl->cmdEndBuiltInRenderPass(cb); }
 auto Swapchain::beginFrame() -> Frame { return _impl->beginFrame(); }
 auto Swapchain::present(const PresentParameters & pp) -> PresentResult { return _impl->present(pp); }
 
@@ -3727,6 +3893,7 @@ static void printPhysicalDeviceInfo(const std::vector<vk::PhysicalDevice> & avai
            << PRINT_LIMIT(maxPerStageDescriptorStorageImages)
            << PRINT_LIMIT(maxPerStageDescriptorInputAttachments)
            << PRINT_LIMIT(maxPerStageResources)
+           << PRINT_LIMIT(maxPushConstantsSize)
            << PRINT_LIMIT(maxDescriptorSetSamplers)
            << PRINT_LIMIT(maxDescriptorSetUniformBuffers)
            << PRINT_LIMIT(maxDescriptorSetUniformBuffersDynamic)
@@ -3988,7 +4155,53 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
 
     // make sure all extensions are actually supported by the hardware.
     auto availableDeviceExtensions = enumerateDeviceExtensions(_gi.physical);
-    auto enabledDeviceExtensions   = validateExtensions(availableDeviceExtensions, askedDeviceExtensions);
+
+    // // Detect synchronization2 support: either Vulkan 1.3 core (where it is a required feature)
+    // // or the VK_KHR_synchronization2 extension on pre-1.3 devices.
+    // if (_gi.apiVersion >= vk::ApiVersion13) {
+    //     // Promoted to required core feature in 1.3; vkQueueSubmit2 is always available.
+    //     vk::PhysicalDeviceSynchronization2FeaturesKHR sync2 {};
+    //     sync2.synchronization2 = VK_TRUE;
+    //     deviceFeatures.addFeature(sync2);
+    //     _gi.synchronization2                                           = true;
+    //     askedDeviceExtensions[VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME] = true; // required.
+    // } else {
+    //     // Enable the KHR extension if available; also enable the corresponding feature bit.
+    //     auto extIt = std::find_if(availableDeviceExtensions.begin(), availableDeviceExtensions.end(), [](const vk::ExtensionProperties & e) {
+    //         return std::string_view(e.extensionName) == VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME;
+    //     });
+    //     if (extIt != availableDeviceExtensions.end()) {
+    //         askedDeviceExtensions[VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME] = false; // optional
+    //         vk::PhysicalDeviceSynchronization2FeaturesKHR sync2 {};
+    //         sync2.synchronization2 = VK_TRUE;
+    //         deviceFeatures.addFeature(sync2);
+    //         _gi.synchronization2 = true;
+    //     }
+    // }
+
+    // // Detect timeline semaphore support: Vulkan 1.2 core (required feature) or
+    // // VK_KHR_timeline_semaphore extension on pre-1.2 devices.
+    // if (_gi.apiVersion >= vk::ApiVersion12) {
+    //     // Promoted to required core feature in 1.2; always available.
+    //     vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR tsf {};
+    //     tsf.timelineSemaphore = VK_TRUE;
+    //     deviceFeatures.addFeature(tsf);
+    //     askedDeviceExtensions[VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME] = true; // required
+    //     _gi.timelineSemaphore                                           = true;
+    // } else {
+    //     auto extIt = std::find_if(availableDeviceExtensions.begin(), availableDeviceExtensions.end(), [](const vk::ExtensionProperties & e) {
+    //         return std::string_view(e.extensionName) == VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME;
+    //     });
+    //     if (extIt != availableDeviceExtensions.end()) {
+    //         askedDeviceExtensions[VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME] = false; // optional
+    //         vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR tsf {};
+    //         tsf.timelineSemaphore = VK_TRUE;
+    //         deviceFeatures.addFeature(tsf);
+    //         _gi.timelineSemaphore = true;
+    //     }
+    // }
+
+    auto enabledDeviceExtensions = validateExtensions(availableDeviceExtensions, askedDeviceExtensions);
 
     // create device, one queue for each family
     float                                  queuePriority = 1.0f;
@@ -4059,7 +4272,6 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
 //
 Device::~Device() {
     waitIdle();
-    for (auto q : _queues) delete q;
     _queues.clear();
 #if RAPID_VULKAN_ENABLE_VMA
     if (_gi.vmaAllocator) vmaDestroyAllocator(_gi.vmaAllocator), _gi.vmaAllocator = nullptr;

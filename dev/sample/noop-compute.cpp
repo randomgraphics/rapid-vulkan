@@ -10,7 +10,7 @@ int main() {
     auto q        = CommandQueue({{"main"}, gi, device.graphics()->family(), device.graphics()->index()});
     if (auto c = q.begin("main")) {
         p.cmdDispatch(c, {1, 1, 1});
-        q.submit({c});
+        q.submit1({c});
     }
     q.waitIdle();
     return 0;
