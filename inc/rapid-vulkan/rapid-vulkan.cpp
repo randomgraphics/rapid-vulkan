@@ -964,21 +964,26 @@ public:
         // Allocate staging buffer
         auto staging = Buffer(Buffer::ConstructParameters {{_owner.name()}, _gi, dataSize}.setStaging());
 
-        // Derive current layout from internal state. readContent() blits the entire image with one
-        // barrier, so all subresources must already share the same layout; mip 0 / layer 0 is representative.
-        vk::ImageLayout currentLayout = vk::ImageLayout::eUndefined;
-        if (!_state.subresources.empty() && !_state.subresources[0].planes.empty()) { currentLayout = _state.subresources[0].planes.begin()->second.layout; }
-
         // Copy image content into the staging buffer
         auto q = CommandQueue({{_owner.name()}, _gi, params.queueFamily, params.queueIndex});
         auto c = q.begin(_owner.name().data());
         if (c) {
-            auto r = vk::ImageSubresourceRange(_state.validAspects, 0, _desc.mipLevels, 0, _desc.arrayLayers);
-            Barrier {}
-                .s(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer)
-                .i(_desc.handle, vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead, currentLayout,
-                   vk::ImageLayout::eTransferSrcOptimal, r)
-                .cmdWrite(c);
+            Barrier                barriers;
+            vk::PipelineStageFlags srcStages;
+            for (uint32_t m = 0; m < _desc.mipLevels; ++m) {
+                for (uint32_t a = 0; a < _desc.arrayLayers; ++a) {
+                    forEachAspectBit(_state.validAspects, [&](vk::ImageAspectFlagBits bit) {
+                        const auto * prev = _state.get(m, a, bit);
+                        if (!prev) return;
+
+                        srcStages |= prev->stages;
+                        barriers.i(_desc.handle, prev->access, vk::AccessFlagBits::eTransferRead, prev->layout, vk::ImageLayout::eTransferSrcOptimal,
+                                   vk::ImageSubresourceRange(bit, m, 1, a, 1));
+                    });
+                }
+            }
+            barriers.s(srcStages ? srcStages : vk::PipelineStageFlagBits::eBottomOfPipe, vk::PipelineStageFlagBits::eTransfer);
+            barriers.cmdWrite(c);
             c.handle().copyImageToBuffer(_desc.handle, vk::ImageLayout::eTransferSrcOptimal, staging, copyRegions);
             q.wait(q.submit1({c}));
         }
