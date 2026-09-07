@@ -65,9 +65,10 @@ After everything is built, you can use the `cit` command to launch the check-in-
 CircleCI Windows CI builds samples and tests inside `randomgraphics/garnet-windows:00001`
 on a Windows Server 2022 Docker host. The image provides VS 2026, Python,
 CMake and the Vulkan SDK. Keep tag `00001` until that image revision is merged
-to Garnet master. CI invokes `dev/docker/windows/ci-build.ps1` with clean
+to Garnet master. CI invokes `dev/docker/windows/ci.ps1` to compile debug/profile/release with clean
 container-local output. Rapid-vulkan only consumes this published image; it
-does not build or publish Docker images. The hosted Windows job checks compilation; runtime
+does not build or publish Windows Docker images. The hosted Windows job checks
+compilation; runtime
 GPU tests require a GPU-capable host and are validated separately.
 
 # Hello World
