@@ -52,6 +52,33 @@ jobs:
             build.py --clang -n p
             build.py --clang -n r
 
+  build-windows:
+    resource_class: windows.medium
+    machine:
+      image: windows-server-2022-gui:current
+      shell: powershell.exe -NoProfile -ExecutionPolicy Bypass
+    environment:
+      WINDOWS_BUILD_IMAGE: randomgraphics/garnet-windows:00001
+    steps:
+      - checkout
+      - run:
+          name: Hydrate source dependencies
+          command: |
+            $ErrorActionPreference = 'Stop'
+            git submodule update --init --recursive --depth 1
+            if ($LASTEXITCODE -ne 0) { throw 'Submodule checkout failed' }
+            git lfs pull
+            if ($LASTEXITCODE -ne 0) { throw 'Git LFS checkout failed' }
+      - run:
+          name: Compile with published Windows image
+          command: |
+            $source = (Get-Location).Path
+            docker run --rm --isolation process `
+              --mount "type=bind,source=$source,target=C:\rapid-vulkan" `
+              --workdir C:\rapid-vulkan $env:WINDOWS_BUILD_IMAGE `
+              powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\rapid-vulkan\dev\docker\windows\ci-build.ps1
+            if ($LASTEXITCODE -ne 0) { throw 'Windows container build failed' }
+
   build-android:
     docker:
       - image: randomgraphics/rapid-vulkan:android-latest
@@ -78,6 +105,9 @@ workflows:
           requires:
             - lint
       - build-linux-clang:
+          requires:
+            - lint
+      - build-windows:
           requires:
             - lint
       - build-android:
