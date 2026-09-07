@@ -1,1 +1,1 @@
-ghcr.io/randomgraphics/rapid-vulkan:windows-latest
+randomgraphics/garnet-windows:00001

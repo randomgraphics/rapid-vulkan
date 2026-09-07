@@ -3431,8 +3431,10 @@ private:
     std::vector<BackbufferImpl> _backbuffers;
     Ref<Image>                  _depthBuffer;
 
-    inline static constexpr Image::State::PlaneState DESIRED_PRESENT_STATUS = {vk::ImageLayout::ePresentSrcKHR, vk::AccessFlagBits::eMemoryRead,
-                                                                               vk::PipelineStageFlagBits::eBottomOfPipe};
+    // Headless backbuffers are ordinary images: PRESENT_SRC requires a presentation swapchain.
+    const Image::State::PlaneState DESIRED_PRESENT_STATUS = {_cp.surface ? vk::ImageLayout::ePresentSrcKHR : vk::ImageLayout::eGeneral,
+                                                             vk::AccessFlagBits::eMemoryRead,
+                                                             _cp.surface ? vk::PipelineStageFlagBits::eBottomOfPipe : vk::PipelineStageFlagBits::eAllCommands};
 
 private:
     const FrameImpl & currentFrame() const { return _frames[_frameCounter % std::size(_frames)]; }
@@ -3473,6 +3475,10 @@ private:
 
     void constructWindowSwapchain() {
         RVI_ASSERT(_cp.surface);
+        auto extensions = enumerateDeviceExtensions(_cp.gi->physical);
+        RVI_REQUIRE(std::any_of(extensions.begin(), extensions.end(),
+                                [](const auto & e) { return 0 == std::strcmp(e.extensionName, VK_KHR_SWAPCHAIN_EXTENSION_NAME); }),
+                    "Window swapchains require VK_KHR_swapchain support.");
 
         // Construct a CommandQueue instance for graphics queue.
         RVI_REQUIRE(_cp.graphicsQueueFamily != VK_QUEUE_FAMILY_IGNORED);
@@ -4149,8 +4155,9 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
     askedDeviceExtensions["VK_KHR_portability_subset"] = true;
 #endif
 
-    // enable swapchain extension regardless to support VK_IMAGE_LAYOUT_PRESENT_SRC.
-    askedDeviceExtensions[VK_KHR_SWAPCHAIN_EXTENSION_NAME] = true;
+    // Compute and headless rendering work without presentation support (e.g. Windows containers).
+    // Preserve an explicit caller requirement while enabling swapchains when available.
+    askedDeviceExtensions.try_emplace(VK_KHR_SWAPCHAIN_EXTENSION_NAME, false);
 
     // #if PH_ANDROID == 0
     //     if (isRenderDocPresent()) {                                                       // only add this when renderdoc is available
