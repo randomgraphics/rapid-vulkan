@@ -67,10 +67,21 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Submodule checkout failed' }
             git lfs pull
             if ($LASTEXITCODE -ne 0) { throw 'Git LFS checkout failed' }
+      - restore_cache:
+          keys:
+            - windows-2022-docker-tar-v1-{{ checksum "dev/docker/windows/image-lock.json" }}
+      - run:
+          name: Load cached image or pull and export published image
+          command: ./dev/docker/windows/prepare-image-cache.ps1
+      - save_cache:
+          key: windows-2022-docker-tar-v1-{{ checksum "dev/docker/windows/image-lock.json" }}
+          paths:
+            - C:\docker-image-cache\garnet-windows.tar
       - run:
           name: Compile with published Windows image
           command: |
-            ./dev/docker/windows/ci.ps1
+            $image = Get-Content dev/docker/windows/image-lock.json -Raw | ConvertFrom-Json
+            ./dev/docker/windows/ci.ps1 -Image $image.imageId
 
   build-android:
     docker:

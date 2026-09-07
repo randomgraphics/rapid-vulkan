@@ -71,6 +71,15 @@ does not build or publish Windows Docker images. The hosted Windows job checks
 compilation; runtime
 GPU tests require a GPU-capable host and are validated separately.
 
+CircleCI caches the published Windows image as
+`C:\docker-image-cache\garnet-windows.tar`. A miss pulls the digest in
+`dev/docker/windows/image-lock.json` and exports it with `docker image save`;
+a hit imports it with `docker image load`. Both paths verify the expected
+image ID, and CI runs that ID. Update the lock file when republishing the
+image, even when its tag stays `00001`; the lock checksum invalidates the
+immutable CircleCI cache. Cache restore/load and pull/save timings are being
+compared before deciding whether to keep this optimization.
+
 # Hello World
 ```c++
 #define RAPID_VULKAN_IMPLEMENTATION
