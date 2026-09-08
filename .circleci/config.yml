@@ -2,6 +2,10 @@ version: 2.1
 
 jobs:
   build-windows-native:
+    parameters:
+      variant:
+        type: enum
+        enum: [debug, profile, release]
     resource_class: windows.medium
     machine:
       image: windows-server-2022-gui:current
@@ -89,7 +93,7 @@ jobs:
             python.exe -m pip install --upgrade termcolor cmake
             if ($LASTEXITCODE -ne 0) { throw 'Build dependency installation failed' }
       - run:
-          name: Build debug natively
+          name: Build << parameters.variant >> natively
           command: |
             $ErrorActionPreference = 'Stop'
             $ver = (Get-Content vulkan-sdk-version.txt -Raw).Trim()
@@ -98,7 +102,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Python scripts directory lookup failed' }
             $env:PATH = "$scripts;$env:PATH"
             . dev\env\env.ps1
-            python.exe dev\bin\build.py d
+            python.exe dev\bin\build.py << parameters.variant >>
             if ($LASTEXITCODE -ne 0) { throw 'Windows build failed' }
 
   lint:
@@ -175,6 +179,10 @@ workflows:
     jobs:
       - lint
       - build-windows-native:
+          name: build-windows-native-<< matrix.variant >>
+          matrix:
+            parameters:
+              variant: [debug, profile, release]
           requires:
             - lint
       - build-linux-gcc-with-cit:
