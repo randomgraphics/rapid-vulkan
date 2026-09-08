@@ -2,6 +2,10 @@ version: 2.1
 
 jobs:
   build-windows-native:
+    parameters: &build-parameters
+      variant:
+        type: enum
+        enum: [debug, profile, release]
     resource_class: windows.medium
     machine:
       image: windows-server-2022-gui:current
@@ -89,7 +93,7 @@ jobs:
             python.exe -m pip install --upgrade termcolor cmake
             if ($LASTEXITCODE -ne 0) { throw 'Build dependency installation failed' }
       - run:
-          name: Build debug, profile, and release natively
+          name: Build << parameters.variant >> natively
           command: |
             $ErrorActionPreference = 'Stop'
             $ver = (Get-Content vulkan-sdk-version.txt -Raw).Trim()
@@ -98,10 +102,8 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Python scripts directory lookup failed' }
             $env:PATH = "$scripts;$env:PATH"
             . dev\env\env.ps1
-            foreach ($variant in @('debug', 'profile', 'release')) {
-              python.exe dev\bin\build.py $variant
-              if ($LASTEXITCODE -ne 0) { throw "Windows $variant build failed" }
-            }
+            python.exe dev\bin\build.py << parameters.variant >>
+            if ($LASTEXITCODE -ne 0) { throw 'Windows build failed' }
 
   lint:
     docker:
@@ -116,6 +118,7 @@ jobs:
       - run: dev/bin/cit.py -l
 
   build-linux-gcc-with-cit:
+    parameters: *build-parameters
     docker:
       - image: randomgraphics/rapid-vulkan:latest
     steps:
@@ -129,14 +132,16 @@ jobs:
           name: build
           command: |
             source dev/env/env.rc
-            build.py d
-            build.py p
-            build.py r
-            build/linux.gcc.d/dev/test/rapid-vulkan-test
-            build/linux.gcc.p/dev/test/rapid-vulkan-test
-            build/linux.gcc.r/dev/test/rapid-vulkan-test
+            build.py << parameters.variant >>
+      - run:
+          name: Test << parameters.variant >>
+          command: |
+            source dev/env/env.rc
+            variant="<< parameters.variant >>"
+            "build/linux.gcc.${variant:0:1}/dev/test/rapid-vulkan-test"
 
   build-linux-clang:
+    parameters: *build-parameters
     docker:
       - image: randomgraphics/rapid-vulkan:latest
     steps:
@@ -150,11 +155,10 @@ jobs:
           name: build
           command: |
             source dev/env/env.rc
-            build.py --clang -n d
-            build.py --clang -n p
-            build.py --clang -n r
+            build.py --clang -n << parameters.variant >>
 
   build-android:
+    parameters: *build-parameters
     docker:
       - image: randomgraphics/rapid-vulkan:android-latest
     steps:
@@ -168,23 +172,31 @@ jobs:
           name: build
           command: |
             source dev/env/env.rc
-            build.py -a d
-            build.py -a p
-            build.py -a r
+            build.py -a << parameters.variant >>
 
 workflows:
   build-and-test:
     jobs:
       - lint
       - build-windows-native:
+          name: build-windows-native-<< matrix.variant >>
+          matrix: &build-matrix
+            parameters:
+              variant: [debug, profile, release]
           requires:
             - lint
       - build-linux-gcc-with-cit:
+          name: build-linux-gcc-with-cit-<< matrix.variant >>
+          matrix: *build-matrix
           requires:
             - lint
       - build-linux-clang:
+          name: build-linux-clang-<< matrix.variant >>
+          matrix: *build-matrix
           requires:
             - lint
       - build-android:
+          name: build-android-<< matrix.variant >>
+          matrix: *build-matrix
           requires:
             - lint
