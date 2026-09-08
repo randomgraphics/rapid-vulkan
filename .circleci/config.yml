@@ -21,8 +21,10 @@ jobs:
             - windows-vulkan-sdk-v1-{{ checksum "vulkan-sdk-version.txt" }}
       - run:
           name: Prepare Vulkan SDK
+          no_output_timeout: 20m
           command: |
             $ErrorActionPreference = 'Stop'
+            $ProgressPreference = 'SilentlyContinue'
             $timer = [Diagnostics.Stopwatch]::StartNew()
             $ver = (Get-Content vulkan-sdk-version.txt -Raw).Trim()
             if ([string]::IsNullOrWhiteSpace($ver)) { throw 'Vulkan SDK version is empty' }
@@ -33,8 +35,12 @@ jobs:
               $zipName = "vulkan-sdk-for-windows-$ver.zip"
               $zip = Join-Path $env:TEMP $zipName
               New-Item -ItemType Directory -Force -Path $root | Out-Null
-              Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/randomgraphics/vulkan-sdk-for-windows/releases/download/v$ver/$zipName" -OutFile $zip
+              # Avoid Windows PowerShell's slow large-file HTTP download path.
+              curl.exe --fail --location --retry 3 --output $zip "https://github.com/randomgraphics/vulkan-sdk-for-windows/releases/download/v$ver/$zipName"
+              if ($LASTEXITCODE -ne 0) { throw 'Vulkan SDK download failed' }
+              Write-Host "SDK download seconds: $($timer.Elapsed.TotalSeconds)"
               Expand-Archive -LiteralPath $zip -DestinationPath $root
+              Write-Host "SDK download and extraction seconds: $($timer.Elapsed.TotalSeconds)"
               Remove-Item -LiteralPath $zip
             } else {
               Write-Host 'VULKAN_SDK_CACHE=hit'
