@@ -21,7 +21,7 @@ jobs:
             - windows-vulkan-sdk-v1-{{ checksum "vulkan-sdk-version.txt" }}
       - run:
           name: Prepare Vulkan SDK
-          no_output_timeout: 20m
+          no_output_timeout: 1h
           command: |
             $ErrorActionPreference = 'Stop'
             $ProgressPreference = 'SilentlyContinue'
