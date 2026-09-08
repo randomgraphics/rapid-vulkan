@@ -39,7 +39,37 @@ jobs:
               curl.exe --fail --location --retry 3 --output $zip "https://github.com/randomgraphics/vulkan-sdk-for-windows/releases/download/v$ver/$zipName"
               if ($LASTEXITCODE -ne 0) { throw 'Vulkan SDK download failed' }
               Write-Host "SDK download seconds: $($timer.Elapsed.TotalSeconds)"
-              Expand-Archive -LiteralPath $zip -DestinationPath $root
+              # Emit plain log lines because PowerShell's progress UI is not visible in CI.
+              Add-Type -AssemblyName System.IO.Compression.FileSystem
+              $archive = [IO.Compression.ZipFile]::OpenRead($zip)
+              try {
+                $totalBytes = ($archive.Entries | Measure-Object -Property Length -Sum).Sum
+                $doneBytes = 0L
+                $doneFiles = 0
+                $lastReport = -5.0
+                $destination = [IO.Path]::GetFullPath($root) + '\'
+                foreach ($entry in $archive.Entries) {
+                  $target = [IO.Path]::GetFullPath((Join-Path $destination $entry.FullName))
+                  if (-not $target.StartsWith($destination, [StringComparison]::OrdinalIgnoreCase)) {
+                    throw "ZIP entry escapes SDK directory: $($entry.FullName)"
+                  }
+                  if ([string]::IsNullOrEmpty($entry.Name)) {
+                    New-Item -ItemType Directory -Force -Path $target | Out-Null
+                  } else {
+                    New-Item -ItemType Directory -Force -Path ([IO.Path]::GetDirectoryName($target)) | Out-Null
+                    [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $target, $true)
+                  }
+                  $doneBytes += $entry.Length
+                  $doneFiles++
+                  if ($timer.Elapsed.TotalSeconds - $lastReport -ge 5 -or $doneFiles -eq $archive.Entries.Count) {
+                    $percent = if ($totalBytes -gt 0) { 100.0 * $doneBytes / $totalBytes } else { 100 }
+                    Write-Host ('Unzip: {0:N1}% ({1}/{2} entries, {3:N0}/{4:N0} MiB)' -f $percent, $doneFiles, $archive.Entries.Count, ($doneBytes / 1MB), ($totalBytes / 1MB))
+                    $lastReport = $timer.Elapsed.TotalSeconds
+                  }
+                }
+              } finally {
+                $archive.Dispose()
+              }
               Write-Host "SDK download and extraction seconds: $($timer.Elapsed.TotalSeconds)"
               Remove-Item -LiteralPath $zip
             } else {
@@ -54,16 +84,19 @@ jobs:
           paths:
             - C:\dev\vulkan-sdk
       - run:
-          name: Install Python dependency
+          name: Install build dependencies
           command: |
-            python.exe -m pip install --upgrade termcolor
-            if ($LASTEXITCODE -ne 0) { throw 'Python dependency installation failed' }
+            python.exe -m pip install --upgrade termcolor cmake
+            if ($LASTEXITCODE -ne 0) { throw 'Build dependency installation failed' }
       - run:
           name: Build debug natively
           command: |
             $ErrorActionPreference = 'Stop'
             $ver = (Get-Content vulkan-sdk-version.txt -Raw).Trim()
             $env:VULKAN_SDK = "C:\dev\vulkan-sdk\$ver\vulkan-sdk-for-windows"
+            $scripts = python.exe -c "import sysconfig; print(sysconfig.get_path('scripts'))"
+            if ($LASTEXITCODE -ne 0) { throw 'Python scripts directory lookup failed' }
+            $env:PATH = "$scripts;$env:PATH"
             . dev\env\env.ps1
             python.exe dev\bin\build.py d
             if ($LASTEXITCODE -ne 0) { throw 'Windows build failed' }
