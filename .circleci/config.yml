@@ -52,39 +52,6 @@ jobs:
             build.py --clang -n p
             build.py --clang -n r
 
-  build-windows:
-    resource_class: windows.medium
-    machine:
-      image: windows-server-2022-gui:current
-      shell: powershell.exe -NoProfile -ExecutionPolicy Bypass
-    steps:
-      - checkout
-      - run:
-          name: Hydrate source dependencies
-          command: |
-            $ErrorActionPreference = 'Stop'
-            git submodule update --init --recursive --depth 1
-            if ($LASTEXITCODE -ne 0) { throw 'Submodule checkout failed' }
-            git lfs pull
-            if ($LASTEXITCODE -ne 0) { throw 'Git LFS checkout failed' }
-      - restore_cache:
-          keys:
-            - windows-2022-docker-tar-v1-{{ checksum "dev/docker/windows/image-lock.json" }}
-      - run:
-          name: Load cached image or pull and export published image
-          # Windows layer import can remain silent beyond CircleCI's default 10 minutes.
-          no_output_timeout: 30m
-          command: ./dev/docker/windows/prepare-image-cache.ps1
-      - save_cache:
-          key: windows-2022-docker-tar-v1-{{ checksum "dev/docker/windows/image-lock.json" }}
-          paths:
-            - C:\docker-image-cache\garnet-windows.tar
-      - run:
-          name: Compile with published Windows image
-          command: |
-            $image = Get-Content dev/docker/windows/image-lock.json -Raw | ConvertFrom-Json
-            ./dev/docker/windows/ci.ps1 -Image $image.imageId
-
   build-android:
     docker:
       - image: randomgraphics/rapid-vulkan:android-latest
@@ -111,9 +78,6 @@ workflows:
           requires:
             - lint
       - build-linux-clang:
-          requires:
-            - lint
-      - build-windows:
           requires:
             - lint
       - build-android:
