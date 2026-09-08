@@ -1,6 +1,67 @@
 version: 2.1
 
 jobs:
+  build-windows-native:
+    resource_class: windows.medium
+    machine:
+      image: windows-server-2022-gui:current
+      shell: powershell.exe -NoProfile -ExecutionPolicy Bypass
+    steps:
+      - checkout
+      - run:
+          name: Hydrate source dependencies
+          command: |
+            $ErrorActionPreference = 'Stop'
+            git submodule update --init --recursive --depth 1
+            if ($LASTEXITCODE -ne 0) { throw 'Submodule checkout failed' }
+            git lfs pull
+            if ($LASTEXITCODE -ne 0) { throw 'Git LFS checkout failed' }
+      - restore_cache:
+          keys:
+            - windows-vulkan-sdk-v1-{{ checksum "vulkan-sdk-version.txt" }}
+      - run:
+          name: Prepare Vulkan SDK
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $timer = [Diagnostics.Stopwatch]::StartNew()
+            $ver = (Get-Content vulkan-sdk-version.txt -Raw).Trim()
+            if ([string]::IsNullOrWhiteSpace($ver)) { throw 'Vulkan SDK version is empty' }
+            $root = "C:\dev\vulkan-sdk\$ver"
+            $sdk = "$root\vulkan-sdk-for-windows"
+            if (-not (Test-Path "$sdk\Include\vulkan\vulkan.hpp")) {
+              Write-Host 'VULKAN_SDK_CACHE=miss'
+              $zipName = "vulkan-sdk-for-windows-$ver.zip"
+              $zip = Join-Path $env:TEMP $zipName
+              New-Item -ItemType Directory -Force -Path $root | Out-Null
+              Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/randomgraphics/vulkan-sdk-for-windows/releases/download/v$ver/$zipName" -OutFile $zip
+              Expand-Archive -LiteralPath $zip -DestinationPath $root
+              Remove-Item -LiteralPath $zip
+            } else {
+              Write-Host 'VULKAN_SDK_CACHE=hit'
+            }
+            if (-not (Test-Path "$sdk\Include\vulkan\vulkan.hpp") -or -not (Test-Path "$sdk\Lib\vulkan-1.lib")) {
+              throw 'Vulkan SDK headers or library are missing'
+            }
+            Write-Host "SDK preparation seconds: $($timer.Elapsed.TotalSeconds)"
+      - save_cache:
+          key: windows-vulkan-sdk-v1-{{ checksum "vulkan-sdk-version.txt" }}
+          paths:
+            - C:\dev\vulkan-sdk
+      - run:
+          name: Install Python dependency
+          command: |
+            python.exe -m pip install --upgrade termcolor
+            if ($LASTEXITCODE -ne 0) { throw 'Python dependency installation failed' }
+      - run:
+          name: Build debug natively
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $ver = (Get-Content vulkan-sdk-version.txt -Raw).Trim()
+            $env:VULKAN_SDK = "C:\dev\vulkan-sdk\$ver\vulkan-sdk-for-windows"
+            . dev\env\env.ps1
+            python.exe dev\bin\build.py d
+            if ($LASTEXITCODE -ne 0) { throw 'Windows build failed' }
+
   lint:
     docker:
       - image: randomgraphics/rapid-vulkan:latest
@@ -74,6 +135,9 @@ workflows:
   build-and-test:
     jobs:
       - lint
+      - build-windows-native:
+          requires:
+            - lint
       - build-linux-gcc-with-cit:
           requires:
             - lint
