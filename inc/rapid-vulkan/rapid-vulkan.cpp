@@ -3722,14 +3722,8 @@ private:
             bb.frameEndSemaphore = gi->device.createSemaphore({}, gi->allocator);
             setVkHandleName(gi->device, bb.frameEndSemaphore, format("frame end semaphore for back buffer %zu", i));
 
-            // transfer backbuffers to layout ready for presentation.
-            Barrier()
-                .i(bb.image->handle(), vk::AccessFlagBits::eNone, DESIRED_PRESENT_STATUS.access, vk::ImageLayout::eUndefined, DESIRED_PRESENT_STATUS.layout,
-                   vk::ImageAspectFlagBits::eColor)
-                .s(vk::PipelineStageFlagBits::eAllCommands, DESIRED_PRESENT_STATUS.stages)
-                .cmdWrite(c);
-            // Keep image state in sync with the GPU layout we just transitioned into.
-            bb.image->setState(DESIRED_PRESENT_STATUS, Image::FULL_RANGE);
+            // Presentable images cannot be transitioned before acquisition. Keep their
+            // initial UNDEFINED state; acquired-frame rendering/present records the first barrier.
         }
 
         // execute the command buffer to update image layout
