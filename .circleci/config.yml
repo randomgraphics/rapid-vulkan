@@ -123,6 +123,11 @@ jobs:
       - image: randomgraphics/rapid-vulkan:latest
     steps:
       - run:
+          name: Install virtual display and software Vulkan driver
+          command: |
+            apt-get update
+            apt-get install -y --no-install-recommends xvfb xauth mesa-vulkan-drivers
+      - run:
           name: prep git
           command: |
             git config --global --add safe.directory /tmp/_circleci_local_build_repo
@@ -139,6 +144,19 @@ jobs:
             source dev/env/env.rc
             variant="<< parameters.variant >>"
             "build/linux.gcc.${variant:0:1}/dev/test/rapid-vulkan-test"
+      - run:
+          name: Window swapchain regression (no physical display or GPU)
+          command: |
+            source dev/env/env.rc
+            variant="<< parameters.variant >>"
+            # Force lavapipe so the Docker job does not depend on a host GPU.
+            icds=(/usr/share/vulkan/icd.d/lvp_icd*.json)
+            test "${#icds[@]}" -eq 1
+            export VK_ICD_FILENAMES="${icds[0]}"
+            export VK_DRIVER_FILES="$VK_ICD_FILENAMES"
+            test -r "$VK_ICD_FILENAMES"
+            timeout 120s xvfb-run -a -s "-screen 0 640x480x24" \
+              "build/linux.gcc.${variant:0:1}/dev/test/rapid-vulkan-test" '[.window]'
 
   build-linux-clang:
     parameters: *build-parameters

@@ -10,5 +10,6 @@ add_executable(rapid-vulkan-test
     sample-test.cpp
     smoke-test.cpp
     test-main.cpp
+    window-swapchain-test.cpp
 )
 target_link_libraries(rapid-vulkan-test PUBLIC rapid-vulkan-static)

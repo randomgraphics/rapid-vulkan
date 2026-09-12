@@ -62,6 +62,29 @@ After that, run [env.sh](env.sh)/[env.cmd](env.cmd) to launch the dev console. T
 
 After everything is built, you can use the `cit` command to launch the check-in-test suite to verify the library.
 
+## Window swapchain regression test
+
+The ordinary test suite uses headless swapchains. The explicitly selected
+`[.window]` test additionally checks window swapchain creation, acquisition,
+rendering, presentation without rendering, and rebuilding on the same surface.
+It requires the Khronos validation layer and fails on validation errors or
+missing window-system support.
+
+Linux CI runs this test in Docker using Xvfb and Mesa lavapipe, so no physical
+display or GPU is needed. To reproduce after a debug build:
+
+```bash
+sudo apt-get install -y xvfb xauth mesa-vulkan-drivers
+icds=(/usr/share/vulkan/icd.d/lvp_icd*.json)
+export VK_ICD_FILENAMES="${icds[0]}"
+export VK_DRIVER_FILES="$VK_ICD_FILENAMES"
+timeout 120s xvfb-run -a -s "-screen 0 640x480x24" \
+  build/linux.gcc.d/dev/test/rapid-vulkan-test '[.window]'
+```
+
+On Windows with a Vulkan SDK and driver installed, run
+`build/mswin.d/dev/test/Debug/rapid-vulkan-test.exe "[.window]"`.
+
 # Hello World
 ```c++
 #define RAPID_VULKAN_IMPLEMENTATION
