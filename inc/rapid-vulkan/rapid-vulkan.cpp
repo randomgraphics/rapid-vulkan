@@ -2201,13 +2201,6 @@ public:
         _dirty.setAll();
     }
 
-    void setPipeline(Ref<const Pipeline> pipeline) {
-        if (_pipeline == pipeline) return;
-        _pipeline = pipeline;
-        _cachedPack.reset();
-        _dirty.setAll();
-    }
-
     void set(DescriptorIdentifier id, vk::ArrayProxy<const BufferView> v) {
         _descriptors[id].b(v);
         _dirty.descriptors = true;
@@ -2551,10 +2544,6 @@ Drawable::~Drawable() {
 }
 auto Drawable::reset() -> Drawable & {
     _impl->reset();
-    return *this;
-}
-auto Drawable::setPipeline(Ref<const Pipeline> p) -> Drawable & {
-    _impl->setPipeline(p);
     return *this;
 }
 auto Drawable::b(DescriptorIdentifier id, vk::ArrayProxy<const BufferView> v) -> Drawable & {

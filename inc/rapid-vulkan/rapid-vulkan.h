@@ -2104,6 +2104,9 @@ union DescriptorIdentifier {
 // ---------------------------------------------------------------------------------------------------------------------
 /// @brief Represent a pipeline and the full set of resources/parameters to issue a draw/dispatch call to GPU.
 /// The object is not thread safe. The methods can only be used in strictly sequential manner.
+///
+/// The pipeline is the invariant of a Drawable: once constructed, its pipeline cannot be changed.
+/// If you need to set up a DrawPack for another pipeline, use another Drawable instance.
 class Drawable : public Root {
 public:
     struct ConstructParameters : public Root::ConstructParameters {
@@ -2121,11 +2124,8 @@ public:
     /// @brief Destruct the drawable object.
     ~Drawable();
 
-    /// @brief reset the drawable back to default state.
+    /// @brief reset the drawable back to default state. Note that the pipeline is an invariant and is preserved.
     Drawable & reset();
-
-    /// @brief Set or change the pipeline of the drawable.
-    Drawable & setPipeline(Ref<const Pipeline> pipeline);
 
     /// @brief Set value of buffer argument. Do nothing if the argument is not used by the pipeline.
     Drawable & b(DescriptorIdentifier id, vk::ArrayProxy<const BufferView>);
