@@ -2124,6 +2124,9 @@ public:
     /// @brief reset the drawable back to default state.
     Drawable & reset();
 
+    /// @brief Set or change the pipeline of the drawable.
+    Drawable & setPipeline(Ref<const Pipeline> pipeline);
+
     /// @brief Set value of buffer argument. Do nothing if the argument is not used by the pipeline.
     Drawable & b(DescriptorIdentifier id, vk::ArrayProxy<const BufferView>);
 
