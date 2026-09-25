@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identifies the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 31
+#define RAPID_VULKAN_HEADER_REVISION 32
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.

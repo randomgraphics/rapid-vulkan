@@ -1905,9 +1905,7 @@ void DrawPack::cmdRender(vk::CommandBuffer cb, const RenderParameters & rp) cons
     auto layout = pipeline->layout();
     auto bp     = pipeline->bindPoint();
 
-    if (!rp.previous || rp.previous->pipeline != pipeline) {
-        cb.bindPipeline(bp, pipeline->handle());
-    }
+    if (!rp.previous || rp.previous->pipeline != pipeline) { cb.bindPipeline(bp, pipeline->handle()); }
 
     for (uint32_t s = 0; s < descriptors.size(); ++s) {
         auto & currentSet = const_cast<DescriptorSetArgument &>(descriptors[s]);
@@ -1956,10 +1954,9 @@ void DrawPack::cmdRender(vk::CommandBuffer cb, const RenderParameters & rp) cons
             // indexed draw
             auto ib = indexBuffer->handle();
             if (ib) {
-                bool sameIb = rp.previous && rp.previous->indexBuffer == indexBuffer && rp.previous->indexOffset == indexOffset && rp.previous->indexType == indexType;
-                if (!sameIb) {
-                    cb.bindIndexBuffer(ib, indexOffset, indexType);
-                }
+                bool sameIb =
+                    rp.previous && rp.previous->indexBuffer == indexBuffer && rp.previous->indexOffset == indexOffset && rp.previous->indexType == indexType;
+                if (!sameIb) { cb.bindIndexBuffer(ib, indexOffset, indexType); }
                 cb.drawIndexed(draw.indexCount, draw.instanceCount, draw.firstIndex, draw.vertexOffset, draw.firstInstance);
             } else {
                 RVI_LOGW("DrawPack %s has an invalid/empty index buffer.", name().c_str());
@@ -2725,9 +2722,7 @@ public:
         d->cmdRender(_handle, {_queue.desc().gi->device, [&](const Pipeline & p, uint32_t i) { return allocateDescriptorSet(p, i); }, _last.get()});
         _last = d;
 
-        if (!samePack) {
-            updateResourceReferenceList(*d);
-        }
+        if (!samePack) { updateResourceReferenceList(*d); }
     }
 
     const std::string & name() const { return _name; }
