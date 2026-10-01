@@ -1913,8 +1913,9 @@ void DrawPack::cmdRender(vk::CommandBuffer cb, const RenderParameters & rp) cons
 
         // Equal resource writes do not imply compatible stage visibility or pipeline layouts.
         // Conservatively rebind every set on a layout change, including unchanged lower sets.
-        const auto * previousSet = (rp.previous && rp.previous->pipeline && rp.previous->pipeline->layout() == layout &&
-                                   s < rp.previous->descriptors.size()) ? &rp.previous->descriptors[s] : nullptr;
+        const auto * previousSet = (rp.previous && rp.previous->pipeline && rp.previous->pipeline->layout() == layout && s < rp.previous->descriptors.size())
+                                       ? &rp.previous->descriptors[s]
+                                       : nullptr;
         if (previousSet && sameDescriptorSet(previousSet->writes, currentSet.writes)) {
             // Store the previous set in the current set. So it can be referenced by next draw pack.
             for (uint32_t i = 0; i < currentSet.writes.size(); ++i) { currentSet.writes[i].dstSet = previousSet->writes[i].dstSet; }
