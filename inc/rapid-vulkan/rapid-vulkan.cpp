@@ -25,17 +25,7 @@ SOFTWARE.
 #undef RAPID_VULKAN_IMPLEMENTATION
 #include "rapid-vulkan.h"
 
-#ifdef RAPID_VULKAN_EXTERNAL_C_IMPL
-#include "3rd-party/spriv-reflect/spirv_reflect.h"
-#else
-#include "3rd-party/spriv-reflect/spirv_reflect.c"
-#endif
-
-#if RAPID_VULKAN_ENABLE_VMA
-#if RAPID_VULKAN_INCLUDE_VMA_IMPL
-#define VMA_IMPLEMENTATION
-#endif
-// Suppress warnings in the VMA header.
+// Keep third-party implementation warnings separate from rapid-vulkan warnings.
 #ifdef _MSC_VER
 #pragma warning(push, 1)
 #elif defined(__GNUC__)
@@ -53,6 +43,16 @@ SOFTWARE.
 #pragma GCC diagnostic ignored "-Wparentheses"
 #pragma GCC diagnostic ignored "-Wimplicit-fallthrough"
 #endif
+#ifdef RAPID_VULKAN_EXTERNAL_C_IMPL
+#include "3rd-party/spriv-reflect/spirv_reflect.h"
+#else
+#include "3rd-party/spriv-reflect/spirv_reflect.c"
+#endif
+
+#if RAPID_VULKAN_ENABLE_VMA
+#if RAPID_VULKAN_INCLUDE_VMA_IMPL
+#define VMA_IMPLEMENTATION
+#endif
 #ifndef VMA_DEBUG_ERROR_LOG
 #define VMA_DEBUG_ERROR_LOG RVI_LOGI
 #endif
@@ -66,6 +66,7 @@ SOFTWARE.
 // #define VMA_DEBUG_DETECT_CORRUPTION 1
 // #define VMA_DEBUG_MARGIN            32
 #include RAPID_VULKAN_VMA_HEADER
+#endif // RAPID_VULKAN_ENABLE_VMA
 
 // restore warnings
 #ifdef _MSC_VER
@@ -73,8 +74,6 @@ SOFTWARE.
 #elif defined(__GNUC__)
 #pragma GCC diagnostic pop
 #endif
-
-#endif // RAPID_VULKAN_ENABLE_VMA
 
 #include <cmath>
 #include <csignal>
