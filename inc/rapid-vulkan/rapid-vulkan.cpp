@@ -1848,6 +1848,7 @@ void ComputePipeline::cmdDispatch(vk::CommandBuffer cb, const DispatchParameters
 // *********************************************************************************************************************
 
 static inline bool sameDescriptorSet(const std::vector<vk::WriteDescriptorSet> & a, const std::vector<vk::WriteDescriptorSet> & b) {
+    if (&a == &b) return true;
     if (a.size() != b.size()) return false;
     for (uint32_t i = 0; i < a.size(); ++i) {
         const auto & wa = a[i];
@@ -1904,7 +1905,7 @@ void DrawPack::cmdRender(vk::CommandBuffer cb, const RenderParameters & rp) cons
     auto layout = pipeline->layout();
     auto bp     = pipeline->bindPoint();
 
-    cb.bindPipeline(bp, pipeline->handle());
+    if (!rp.previous || rp.previous->pipeline != pipeline) { cb.bindPipeline(bp, pipeline->handle()); }
 
     for (uint32_t s = 0; s < descriptors.size(); ++s) {
         auto & currentSet = const_cast<DescriptorSetArgument &>(descriptors[s]);
@@ -1937,16 +1938,28 @@ void DrawPack::cmdRender(vk::CommandBuffer cb, const RenderParameters & rp) cons
     if (vk::PipelineBindPoint::eGraphics == bp) {
         if (!vertexBuffers.empty()) {
             RVI_ASSERT(vertexBuffers.size() == vertexOffsets.size());
-            std::vector<vk::Buffer> handles(vertexBuffers.size());
-            std::transform(vertexBuffers.begin(), vertexBuffers.end(), handles.begin(), [](const auto & v) { return v->handle(); });
-            cb.bindVertexBuffers(0, (uint32_t) vertexBuffers.size(), handles.data(), vertexOffsets.data());
+            bool sameVb = rp.previous && rp.previous->vertexBuffers == vertexBuffers && rp.previous->vertexOffsets == vertexOffsets;
+            if (!sameVb) {
+                constexpr size_t MAX_STACK_HANDLES = 16;
+                if (vertexBuffers.size() <= MAX_STACK_HANDLES) {
+                    vk::Buffer handles[MAX_STACK_HANDLES];
+                    for (size_t i = 0; i < vertexBuffers.size(); ++i) handles[i] = vertexBuffers[i]->handle();
+                    cb.bindVertexBuffers(0, (uint32_t) vertexBuffers.size(), handles, vertexOffsets.data());
+                } else {
+                    std::vector<vk::Buffer> handles(vertexBuffers.size());
+                    std::transform(vertexBuffers.begin(), vertexBuffers.end(), handles.begin(), [](const auto & v) { return v->handle(); });
+                    cb.bindVertexBuffers(0, (uint32_t) vertexBuffers.size(), handles.data(), vertexOffsets.data());
+                }
+            }
         }
 
         if (indexBuffer) {
             // indexed draw
             auto ib = indexBuffer->handle();
             if (ib) {
-                cb.bindIndexBuffer(ib, indexOffset, indexType);
+                bool sameIb =
+                    rp.previous && rp.previous->indexBuffer == indexBuffer && rp.previous->indexOffset == indexOffset && rp.previous->indexType == indexType;
+                if (!sameIb) { cb.bindIndexBuffer(ib, indexOffset, indexType); }
                 cb.drawIndexed(draw.indexCount, draw.instanceCount, draw.firstIndex, draw.vertexOffset, draw.firstInstance);
             } else {
                 RVI_LOGW("DrawPack %s has an invalid/empty index buffer.", name().c_str());
@@ -2205,6 +2218,13 @@ public:
 
     void set(size_t offset, size_t size, const void * data, vk::ShaderStageFlags stages) {
         if (0 == data || 0 == size || !stages) return; // ignore empty data.
+        for (auto & c : _constants) {
+            if (c.stages == stages && c.offset == (uint32_t) offset) {
+                c.value.assign((const uint8_t *) data, (const uint8_t *) data + size);
+                _dirty.constants = true;
+                return;
+            }
+        }
         _constants.push_back({stages, (uint32_t) offset});
         _constants.back().value.assign((const uint8_t *) data, (const uint8_t *) data + size);
         _dirty.constants = true;
@@ -2701,10 +2721,11 @@ public:
             RVI_LOGE("Failed to enqueue drawable: command buffer %s is not in RECORDING state!", _name.c_str());
             return;
         }
+        bool samePack = (_last.get() == d.get());
         d->cmdRender(_handle, {_queue.desc().gi->device, [&](const Pipeline & p, uint32_t i) { return allocateDescriptorSet(p, i); }, _last.get()});
         _last = d;
 
-        updateResourceReferenceList(*d);
+        if (!samePack) { updateResourceReferenceList(*d); }
     }
 
     const std::string & name() const { return _name; }
