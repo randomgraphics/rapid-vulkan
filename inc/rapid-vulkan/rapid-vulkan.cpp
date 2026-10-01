@@ -25,6 +25,17 @@ SOFTWARE.
 #undef RAPID_VULKAN_IMPLEMENTATION
 #include "rapid-vulkan.h"
 
+#ifdef RAPID_VULKAN_EXTERNAL_C_IMPL
+#include "3rd-party/spriv-reflect/spirv_reflect.h"
+#else
+#include "3rd-party/spriv-reflect/spirv_reflect.c"
+#endif
+
+#if RAPID_VULKAN_ENABLE_VMA
+#if RAPID_VULKAN_INCLUDE_VMA_IMPL
+#define VMA_IMPLEMENTATION
+#endif
+// Suppress warnings in the VMA header.
 #ifdef _MSC_VER
 #pragma warning(push, 1)
 #elif defined(__GNUC__)
@@ -42,24 +53,28 @@ SOFTWARE.
 #pragma GCC diagnostic ignored "-Wparentheses"
 #pragma GCC diagnostic ignored "-Wimplicit-fallthrough"
 #endif
-
-#ifdef RAPID_VULKAN_EXTERNAL_C_IMPL
-#include "3rd-party/spriv-reflect/spirv_reflect.h"
-#else
-#include "3rd-party/spriv-reflect/spirv_reflect.c"
+#ifndef VMA_DEBUG_ERROR_LOG
+#define VMA_DEBUG_ERROR_LOG RVI_LOGI
 #endif
-
-#ifdef RVI_NEED_VMA_IMPL
-#ifndef RAPID_VULKAN_EXTERNAL_C_IMPL
-#define VMA_IMPLEMENTATION
+#ifndef VMA_STATIC_VULKAN_FUNCTIONS
+#define VMA_STATIC_VULKAN_FUNCTIONS 0
 #endif
-#include "3rd-party/vma-3.0.1/vk_mem_alloc.h"
+#ifndef VMA_DYNAMIC_VULKAN_FUNCTIONS
+#define VMA_DYNAMIC_VULKAN_FUNCTIONS 1 // enable dynamic VMA function pointer lookup
+#endif
+// Enable these defines to help debug VK memory corruption.
+// #define VMA_DEBUG_DETECT_CORRUPTION 1
+// #define VMA_DEBUG_MARGIN            32
+#include RAPID_VULKAN_VMA_HEADER
+
+// restore warnings
 #ifdef _MSC_VER
 #pragma warning(pop)
 #elif defined(__GNUC__)
 #pragma GCC diagnostic pop
 #endif
-#endif // RVI_NEED_VMA_IMPL
+
+#endif // RAPID_VULKAN_ENABLE_VMA
 
 #include <cmath>
 #include <csignal>
@@ -238,7 +253,8 @@ public:
         ci.usage = cp.usage | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eTransferSrc;
 
 #if RAPID_VULKAN_ENABLE_VMA
-        if (_gi->vmaAllocator) {
+        // Explicit allocation flags retain the dedicated path rather than being silently dropped by VMA.
+        if (_gi->vmaAllocator && !cp.alloc) {
             VmaAllocationCreateInfo aci {};
             aci.requiredFlags = (VkMemoryPropertyFlags) cp.memory;
             RVI_VK_REQUIRE(vmaCreateBuffer(_gi->vmaAllocator, (const VkBufferCreateInfo *) &ci, &aci, (VkBuffer *) &_handle, &_allocation, nullptr));
@@ -266,6 +282,8 @@ public:
     Impl(Buffer & owner, const ImportParameters &): _owner(owner) {}
 
     ~Impl() {
+        // Some staging paths keep their mapping until destruction; VMA requires balanced map references.
+        unmap();
 #if RAPID_VULKAN_ENABLE_VMA
         if (_allocation) {
             RVI_ASSERT(!_memory);
@@ -392,13 +410,17 @@ public:
             RVI_LOGE("mapped range is invalid or empty.");
             return {};
         }
-        // TODO: VMA
-        // if (allocation) {
-        //     RVI_REQUIRE(global->vmaAllocator);
-        //     RVI_VK_REQUIRE(vmaMapMemory(global->vmaAllocator, allocation, (void **) &dst));
-        //     dst += offsetInUnitOfT;
-        // } else {
-        auto p = _gi->device.mapMemory(_memory, o, s);
+        void * p = nullptr;
+#if RAPID_VULKAN_ENABLE_VMA
+        if (_allocation) {
+            // VMA returns the allocation's base, not the containing memory block's base.
+            RVI_VK_REQUIRE(vmaMapMemory(_gi->vmaAllocator, _allocation, &p));
+            if (p) p = static_cast<uint8_t *>(p) + o;
+        } else
+#endif
+        {
+            p = _gi->device.mapMemory(_memory, o, s);
+        }
         if (!p) {
             RVI_LOGE("Failed to map buffer %s.", _owner.name().c_str());
             return {};
@@ -410,7 +432,14 @@ public:
     void unmap() {
         auto lock = std::lock_guard {_mutex};
         if (_mapped) {
-            _gi->device.unmapMemory(_memory);
+#if RAPID_VULKAN_ENABLE_VMA
+            if (_allocation) {
+                vmaUnmapMemory(_gi->vmaAllocator, _allocation);
+            } else
+#endif
+            {
+                _gi->device.unmapMemory(_memory);
+            }
             _mapped = false;
         }
     }
@@ -778,7 +807,7 @@ public:
 
         // create image handle and memory
 #if RAPID_VULKAN_ENABLE_VMA
-        if (_gi->vmaAllocator) {
+        if (_gi->vmaAllocator && !cp.alloc) {
             VmaAllocationCreateInfo aci {};
             aci.requiredFlags = (VkMemoryPropertyFlags) cp.memory;
             RVI_VK_REQUIRE(vmaCreateImage(_gi->vmaAllocator, (const VkImageCreateInfo *) &cp.info, &aci, (VkImage *) &_handle, &_allocation, nullptr));
@@ -4247,26 +4276,26 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
     deviceCreateInfo.setPEnabledExtensionNames(enabledDeviceExtensions);
     _gi.device = _gi.physical.createDevice(deviceCreateInfo, _gi.allocator);
 
-    //     // initialize a memory allocator for Vulkan images
-    //     if (cp.enableVmaAllocator) {
-    //         VmaAllocatorCreateInfo ai {};
-    //         ai.vulkanApiVersion = cp.apiVersion;
-    //         ai.physicalDevice   = _gi.physical;
-    //         ai.device           = _gi.device;
-    //         ai.instance         = _gi.instance;
-
-    // #if 0 // uncomment this section to enable vma allocation recording
-    //         VmaRecordSettings vmaRecordSettings;
-    //         vmaRecordSettings.pFilePath = "vmaReplay.csv";
-    //         vmaRecordSettings.flags = VMA_RECORD_FLUSH_AFTER_CALL_BIT;
-    //         ai.pRecordSettings = &vmaRecordSettings;
-    // #endif
-    //         if (askedDeviceExtensions.find(VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME) != askedDeviceExtensions.end()) {
-    //             RVI_LOGI("Enable VMA allocator with buffer device address.");
-    //             ai.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
-    //         }
-    //         RVI_VK_REQUIRE(vmaCreateAllocator(&ai, &_gi.vmaAllocator));
-    //     }
+#if RAPID_VULKAN_ENABLE_VMA
+    if (cp.enableVmaAllocator) {
+#if !VMA_STATIC_VULKAN_FUNCTIONS && !VMA_DYNAMIC_VULKAN_FUNCTIONS
+#error "rapid-vulkan requires either static or dynamic VMA function loading."
+#endif
+        VmaVulkanFunctions functions {};
+        functions.vkGetInstanceProcAddr = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetInstanceProcAddr;
+        functions.vkGetDeviceProcAddr   = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetDeviceProcAddr;
+        VmaAllocatorCreateInfo ai {};
+        // VMA encodes versions as major * 1000000 + minor * 1000 + patch, unlike Vulkan's packed version.
+        constexpr uint32_t vmaApiVersion = VK_MAKE_API_VERSION(0, VMA_VULKAN_VERSION / 1000000, (VMA_VULKAN_VERSION / 1000) % 1000, VMA_VULKAN_VERSION % 1000);
+        ai.vulkanApiVersion              = std::min(_gi.apiVersion, vmaApiVersion);
+        ai.physicalDevice                = _gi.physical;
+        ai.device                        = _gi.device;
+        ai.instance                      = _gi.instance;
+        ai.pAllocationCallbacks          = reinterpret_cast<const VkAllocationCallbacks *>(_gi.allocator);
+        ai.pVulkanFunctions              = &functions;
+        RVI_VK_REQUIRE(vmaCreateAllocator(&ai, &_gi.vmaAllocator));
+    }
+#endif
 
     // print device information
     if (cp.printVkInfo) {
