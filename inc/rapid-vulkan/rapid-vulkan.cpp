@@ -32,6 +32,7 @@ SOFTWARE.
 #pragma GCC diagnostic push
 #ifdef __clang__
 #pragma GCC diagnostic ignored "-Wnullability-completeness"
+#pragma GCC diagnostic ignored "-Wunused-private-field"
 #endif
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #pragma GCC diagnostic ignored "-Wunused-parameter"
@@ -4281,8 +4282,14 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
 #error "rapid-vulkan requires either static or dynamic VMA function loading."
 #endif
         VmaVulkanFunctions functions {};
+#if VULKAN_HPP_DISPATCH_LOADER_DYNAMIC == 1
         functions.vkGetInstanceProcAddr = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetInstanceProcAddr;
         functions.vkGetDeviceProcAddr   = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetDeviceProcAddr;
+#else
+        // External loaders such as Volk expose global function pointers instead of a dynamic Hpp dispatcher.
+        functions.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
+        functions.vkGetDeviceProcAddr   = vkGetDeviceProcAddr;
+#endif
         VmaAllocatorCreateInfo ai {};
         // VMA encodes versions as major * 1000000 + minor * 1000 + patch, unlike Vulkan's packed version.
         constexpr uint32_t vmaApiVersion = VK_MAKE_API_VERSION(0, VMA_VULKAN_VERSION / 1000000, (VMA_VULKAN_VERSION / 1000) % 1000, VMA_VULKAN_VERSION % 1000);
