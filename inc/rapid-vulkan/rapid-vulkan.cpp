@@ -1911,7 +1911,11 @@ void DrawPack::cmdRender(vk::CommandBuffer cb, const RenderParameters & rp) cons
         auto & currentSet = const_cast<DescriptorSetArgument &>(descriptors[s]);
         if (currentSet.writes.empty()) continue;
 
-        const auto * previousSet = (rp.previous && s < rp.previous->descriptors.size()) ? &rp.previous->descriptors[s] : nullptr;
+        // Equal resource writes do not imply compatible stage visibility or pipeline layouts.
+        // Conservatively rebind every set on a layout change, including unchanged lower sets.
+        const auto * previousSet = (rp.previous && rp.previous->pipeline && rp.previous->pipeline->layout() == layout && s < rp.previous->descriptors.size())
+                                       ? &rp.previous->descriptors[s]
+                                       : nullptr;
         if (previousSet && sameDescriptorSet(previousSet->writes, currentSet.writes)) {
             // Store the previous set in the current set. So it can be referenced by next draw pack.
             for (uint32_t i = 0; i < currentSet.writes.size(); ++i) { currentSet.writes[i].dstSet = previousSet->writes[i].dstSet; }
@@ -2769,7 +2773,8 @@ private:
                 if (a.binding != b.binding) return a.binding < b.binding;
                 if (a.descriptorType != b.descriptorType) return a.descriptorType < b.descriptorType;
                 if (a.descriptorCount != b.descriptorCount) return a.descriptorCount < b.descriptorCount;
-                return a.stageFlags < b.stageFlags;
+                // Equal early bindings must not hide differences in later (possibly sparse) slots.
+                if (a.stageFlags != b.stageFlags) return a.stageFlags < b.stageFlags;
             }
             return false;
         }

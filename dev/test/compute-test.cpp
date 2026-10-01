@@ -2,6 +2,8 @@
 #include "../3rd-party/catch2/catch.hpp"
 #include "shader/argument-test.comp.spv.h"
 #include "shader/noop.comp.spv.h"
+#include "shader/layout-before.comp.spv.h"
+#include "shader/layout-after.comp.spv.h"
 #include "rdc.h"
 
 TEST_CASE("noop-compute") {
@@ -74,4 +76,42 @@ TEST_CASE("cs-buffer-args") {
     if (rdc) rdc.end();
     REQUIRE(c2.size() == 4);
     REQUIRE(*(const float *) c2.data() == 2.0f);
+}
+TEST_CASE("descriptor-reuse-across-incompatible-pipeline-layouts", "[compute][descriptor]") {
+    using namespace rapid_vulkan;
+    auto dev          = TestVulkanInstance::device.get();
+    auto gi           = dev->gi();
+    auto beforeShader = Shader(Shader::ConstructParameters {{"layout-before"}, gi}.setSpirv(layout_before_comp));
+    auto afterShader  = Shader(Shader::ConstructParameters {{"layout-after"}, gi}.setSpirv(layout_after_comp));
+    auto before       = Ref(new ComputePipeline({{"layout-before"}, &beforeShader}));
+    auto after        = Ref(new ComputePipeline({{"layout-after"}, &afterShader}));
+    REQUIRE(before->layout() != after->layout());
+
+    auto           result    = Ref(new Buffer({{"layout-result"}, gi, 2 * sizeof(uint32_t), vk::BufferUsageFlagBits::eStorageBuffer}));
+    const uint32_t initial[] = {0, 0};
+    result->setContent(Buffer::SetContentParameters {}.setData(vk::ArrayProxy<const uint32_t>(initial)));
+    auto first  = Ref(new Drawable({{"layout-before"}, before}));
+    auto second = Ref(new Drawable({{"layout-after"}, after}));
+    first->b({0, 0}, {{result}});
+    second->b({0, 0}, {{result}});
+    second->c(0, vk::ArrayProxy<const uint32_t> {29});
+    first->dispatch({1, 1, 1});
+    second->dispatch({1, 1, 1});
+
+    auto q        = dev->graphics();
+    auto commands = q->begin("descriptor-layout-transition");
+    REQUIRE_FALSE(commands.empty());
+    commands.render(first->compile());
+    // Resource writes are identical, but the second pipeline adds push constants.
+    // Without rebinding set 0, validation rejects this dispatch (VUID 08600).
+    // Both shaders write disjoint words, so this does not depend on a data hazard.
+    commands.render(second->compile());
+    q->submit1({commands});
+    q->waitIdle();
+    auto content = result->readContent(Buffer::ReadParameters {});
+    REQUIRE(content.size() == sizeof(initial));
+    uint32_t actual[2] = {};
+    memcpy(actual, content.data(), sizeof(actual));
+    CHECK(actual[0] == 17);
+    CHECK(actual[1] == 29);
 }

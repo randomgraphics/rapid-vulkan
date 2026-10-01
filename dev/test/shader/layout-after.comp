@@ -1,0 +1,9 @@
+#version 450
+layout(local_size_x = 1) in;
+layout(set = 0, binding = 0, std430) buffer Result { uint values[2]; }
+result;
+// Identical descriptors, but a different push-constant range makes the pipeline
+// layouts incompatible for descriptor-set binding reuse.
+layout(push_constant) uniform Parameters { uint value; }
+parameters;
+void main() { result.values[1] = parameters.value; }
