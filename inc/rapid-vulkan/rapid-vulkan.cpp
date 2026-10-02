@@ -257,6 +257,8 @@ public:
         if (_gi->vmaAllocator && !cp.alloc) {
             VmaAllocationCreateInfo aci {};
             aci.requiredFlags = (VkMemoryPropertyFlags) cp.memory;
+            // Keep host-visible blocks mapped so short-lived staging maps only adjust VMA's reference count.
+            if (cp.memory & vk::MemoryPropertyFlagBits::eHostVisible) aci.flags |= VMA_ALLOCATION_CREATE_MAPPED_BIT;
             RVI_VK_REQUIRE(vmaCreateBuffer(_gi->vmaAllocator, (const VkBufferCreateInfo *) &ci, &aci, (VkBuffer *) &_handle, &_allocation, nullptr));
         } else
 #endif
@@ -2034,6 +2036,7 @@ class Argument::Impl {
 public:
     struct BufferArgs {
         std::vector<vk::DescriptorBufferInfo> infos;
+        mutable DrawPack::Dependencies::Blob  snapshot;
         std::vector<BufferView>               buffers;
         std::optional<size_t>                 dynamicOffset;
 
@@ -2051,6 +2054,7 @@ public:
             COMBINED,
         };
         std::vector<vk::DescriptorImageInfo> infos;
+        mutable DrawPack::Dependencies::Blob snapshot;
         std::vector<ImageSampler>            images;
         Type                                 type = INVALID; // all args must be of the same type.
 
@@ -2079,8 +2083,9 @@ public:
             return dynamicOffset == p->dynamicOffset;
         };
         if (sameValue()) return;
-        _value      = BufferArgs();
+        if (!std::holds_alternative<BufferArgs>(_value)) _value = BufferArgs();
         auto & args = std::get<BufferArgs>(_value);
+        args.snapshot.reset();
         args.buffers.assign(v.begin(), v.end());
         args.infos.resize(args.buffers.size());
         for (size_t i = 0; i < args.buffers.size(); ++i) {
@@ -2103,8 +2108,9 @@ public:
             return true;
         };
         if (sameValue()) return;
-        _value      = ImageArgs();
+        if (!std::holds_alternative<ImageArgs>(_value)) _value = ImageArgs();
         auto & args = std::get<ImageArgs>(_value);
+        args.snapshot.reset();
         args.images.assign(v.begin(), v.end());
         args.infos.resize(args.images.size());
         args.type = ImageArgs::INVALID;
@@ -2366,9 +2372,12 @@ private:
 
     void copyStates(const DrawPack & from, DrawPack & to) const {
         const_cast<Ref<const Pipeline> &>(to.pipeline) = from.pipeline;
-        to.descriptors                                 = from.descriptors;
-        to.dependencies                                = from.dependencies;
-        to.constants.assign(from.constants.begin(), from.constants.end());
+        // Dirty descriptors are rebuilt below; copying them first duplicates immediately discarded allocations.
+        if (!_dirty.descriptors) {
+            to.descriptors  = from.descriptors;
+            to.dependencies = from.dependencies;
+        }
+        if (!_dirty.constants) to.constants.assign(from.constants.begin(), from.constants.end());
         to.vertexBuffers.assign(from.vertexBuffers.begin(), from.vertexBuffers.end());
         to.vertexOffsets.assign(from.vertexOffsets.begin(), from.vertexOffsets.end());
         to.indexBuffer = from.indexBuffer;
@@ -2415,6 +2424,7 @@ private:
         for (uint32_t si = 0; si < refl.descriptors.size(); ++si) {
             const auto & s   = refl.descriptors[si];
             auto &       arg = descriptors[si];
+            arg.writes.reserve(s.size());
             // auto         writes = std::vector<vk::WriteDescriptorSet>();
             for (uint32_t i = 0; i < s.size(); ++i) {
                 if (s[i].empty()) continue;
@@ -2454,7 +2464,11 @@ private:
                         dep.buffers.insert(v.buffer);
                     }
                     // Store a copy of buffer info in the DrawPack class. So its value is not affected by changes in the Drawable class after compilation.
-                    auto blob = std::make_shared<std::vector<uint8_t>>((uint8_t *) buf->infos.data(), (uint8_t *) (buf->infos.data() + buf->infos.size()));
+                    // Preserve immutable descriptor data for earlier recordings when this argument changes.
+                    if (!buf->snapshot)
+                        buf->snapshot =
+                            std::make_shared<std::vector<uint8_t>>((uint8_t *) buf->infos.data(), (uint8_t *) (buf->infos.data() + buf->infos.size()));
+                    auto blob = buf->snapshot;
                     RVI_ASSERT(blob->size() == buf->infos.size() * sizeof(vk::DescriptorBufferInfo));
                     dep.blobs.push_back(blob);
                     w.setDescriptorCount((uint32_t) buf->infos.size()).setPBufferInfo((vk::DescriptorBufferInfo *) blob->data());
@@ -2484,7 +2498,11 @@ private:
                             if (v.image) dep.images.insert(v.image);
                         }
                     }
-                    auto blob = std::make_shared<std::vector<uint8_t>>((uint8_t *) img->infos.data(), (uint8_t *) (img->infos.data() + img->infos.size()));
+                    // Preserve immutable descriptor data for earlier recordings when this argument changes.
+                    if (!img->snapshot)
+                        img->snapshot =
+                            std::make_shared<std::vector<uint8_t>>((uint8_t *) img->infos.data(), (uint8_t *) (img->infos.data() + img->infos.size()));
+                    auto blob = img->snapshot;
                     RVI_ASSERT(blob->size() == img->infos.size() * sizeof(vk::DescriptorImageInfo));
                     dep.blobs.emplace_back(blob);
                     w.setDescriptorCount((uint32_t) img->infos.size()).setPImageInfo((vk::DescriptorImageInfo *) blob->data());
