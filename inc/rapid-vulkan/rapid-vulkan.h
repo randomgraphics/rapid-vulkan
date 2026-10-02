@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identifies the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 32
+#define RAPID_VULKAN_HEADER_REVISION 33
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -51,6 +51,22 @@ SOFTWARE.
 /// Set to 0 to disable VMA support. Enabled by default.
 #ifndef RAPID_VULKAN_ENABLE_VMA
 #define RAPID_VULKAN_ENABLE_VMA 1
+#endif
+
+/// \def RAPID_VULKAN_VMA_HEADER
+/// The rapid-vulkan bundle includes a VMA header in case it is not installed on the current system.
+/// If your VMA header is somewhere else (like <vma/vk_mem_alloc.h>), define this macro to point to your desired header.
+/// This flag is ignored if RAPID_VULKAN_ENABLE_VMA is 0.
+#ifndef RAPID_VULKAN_VMA_HEADER
+#define RAPID_VULKAN_VMA_HEADER "3rd-party/vma-3.4.0/vk_mem_alloc.h"
+#endif
+
+/// \def RAPID_VULKAN_INCLUDE_VMA_IMPL
+/// By default, when VMA is enabled, rapid-vulkan.cpp includes the VMA header with VMA_IMPLEMENTATION defined.
+/// If this conflicts with your own VMA implementation, set this flag to 0.
+/// This flag is ignored if RAPID_VULKAN_ENABLE_VMA is 0.
+#ifndef RAPID_VULKAN_INCLUDE_VMA_IMPL
+#define RAPID_VULKAN_INCLUDE_VMA_IMPL 1
 #endif
 
 /// \def RAPID_VULKAN_ENABLE_GLFW3
@@ -143,9 +159,7 @@ SOFTWARE.
 
 // ---------------------------------------------------------------------------------------------------------------------
 // include VMA header if not already included.
-#if RAPID_VULKAN_ENABLE_VMA
-#ifndef AMD_VULKAN_MEMORY_ALLOCATOR_H
-#define RVI_NEED_VMA_IMPL // this is to tell rapid-vulkan.cpp to include VMA implementation.
+#if RAPID_VULKAN_ENABLE_VMA && !defined(AMD_VULKAN_MEMORY_ALLOCATOR_H)
 #ifdef _MSC_VER
 #pragma warning(push, 0)
 #elif defined(__GNUC__)
@@ -160,24 +174,13 @@ SOFTWARE.
 #pragma GCC diagnostic ignored "-Wformat"
 #pragma GCC diagnostic ignored "-Wundef"
 #endif
-// Enable these defines to help debug VK memory corruption.
-// #ifndef VMA_DEBUG_DETECT_CORRUPTION
-// #define VMA_DEBUG_DETECT_CORRUPTION 1
-// #define VMA_DEBUG_MARGIN            32
-// #endif
-#ifndef VMA_DEBUG_ERROR_LOG
-#define VMA_DEBUG_ERROR_LOG RVI_LOGI
-#endif
-#define VMA_STATIC_VULKAN_FUNCTIONS  0
-#define VMA_DYNAMIC_VULKAN_FUNCTIONS 0
-#include "3rd-party/vma-3.0.1/vk_mem_alloc.h"
+#include RAPID_VULKAN_VMA_HEADER
 #ifdef _MSC_VER
 #pragma warning(pop)
 #elif defined(__GNUC__)
 #pragma GCC diagnostic pop
 #endif
-#endif // AMD_VULKAN_MEMORY_ALLOCATOR_H
-#endif // RAPID_VULKAN_ENABLE_VMA
+#endif // RAPID_VULKAN_ENABLE_VMA && !defined(AMD_VULKAN_MEMORY_ALLOCATOR_H)
 
 // ---------------------------------------------------------------------------------------------------------------------
 // include GLFW header if asked to do so
@@ -2610,6 +2613,7 @@ public:
         void * features3 = nullptr;
 
         /// Set to true to create VMA allocator and store in the GlobalInfo::vmaAllocator field.
+        /// This flag is ignored if RAPID_VULKAN_ENABLE_VMA is 0.
         bool enableVmaAllocator = true;
 
         /// set to false to make the creation log less verbose.
