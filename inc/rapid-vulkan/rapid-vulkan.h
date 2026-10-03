@@ -2642,6 +2642,14 @@ public:
             return *this;
         }
 
+        /// Additional VmaAllocatorCreateFlags to pass to vmaCreateAllocator.
+        uint32_t vmaFlags = 0;
+
+        ConstructParameters & setVmaFlags(uint32_t flags) {
+            vmaFlags = flags;
+            return *this;
+        }
+
         ConstructParameters & setEnableVmaAllocator(bool b) {
             enableVmaAllocator = b;
             return *this;

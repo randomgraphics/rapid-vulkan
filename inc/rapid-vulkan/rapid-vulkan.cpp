@@ -4309,6 +4309,19 @@ Device::Device(const ConstructParameters & cp): _cp(cp) {
         functions.vkGetDeviceProcAddr   = vkGetDeviceProcAddr;
 #endif
         VmaAllocatorCreateInfo ai {};
+        ai.flags = cp.vmaFlags;
+        for (const auto & sc : cp.features2) {
+            if (sc.buffer.size() >= sizeof(VkBaseInStructure)) {
+                auto * s = reinterpret_cast<const VkBaseInStructure *>(sc.buffer.data());
+                if (s->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES) {
+                    auto * f12 = reinterpret_cast<const VkPhysicalDeviceVulkan12Features *>(s);
+                    if (f12->bufferDeviceAddress) ai.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+                } else if (s->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES_KHR) {
+                    auto * bda = reinterpret_cast<const VkPhysicalDeviceBufferDeviceAddressFeaturesKHR *>(s);
+                    if (bda->bufferDeviceAddress) ai.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+                }
+            }
+        }
         // VMA encodes versions as major * 1000000 + minor * 1000 + patch, unlike Vulkan's packed version.
         constexpr uint32_t vmaApiVersion = VK_MAKE_API_VERSION(0, VMA_VULKAN_VERSION / 1000000, (VMA_VULKAN_VERSION / 1000) % 1000, VMA_VULKAN_VERSION % 1000);
         ai.vulkanApiVersion              = std::min(_gi.apiVersion, vmaApiVersion);
