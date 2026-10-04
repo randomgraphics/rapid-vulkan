@@ -63,12 +63,6 @@ TEST_CASE("window-swapchain-acquisition", "[.window]") {
                 glfwPollEvents();
                 auto frame = swapchain.beginFrame();
                 REQUIRE(frame.valid());
-                if (i == 0) {
-                    auto state = frame.backbuffer->image->getState().get(0, 0, vk::ImageAspectFlagBits::eColor);
-                    REQUIRE(state);
-                    // Also detects eager initialization on older validation-layer versions.
-                    CHECK(state->layout == vk::ImageLayout::eUndefined);
-                }
                 auto wait = frame.imageAvailable;
                 if (render) {
                     auto commands = queue.begin("clear acquired image");

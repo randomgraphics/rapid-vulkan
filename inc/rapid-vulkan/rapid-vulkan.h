@@ -26,7 +26,7 @@ SOFTWARE.
 #define RAPID_VULKAN_H_
 
 /// A monotonically increasing number that uniquely identifies the revision of the header.
-#define RAPID_VULKAN_HEADER_REVISION 33
+#define RAPID_VULKAN_HEADER_REVISION 34
 
 /// \def RAPID_VULKAN_NAMESPACE
 /// Define the namespace of rapid-vulkan library.
@@ -1349,8 +1349,8 @@ public:
         uint32_t     queueIndex  = 0;
         uint32_t     mipLevel    = 0;
         uint32_t     arrayLayer  = 0;
-        Rect3D       area        = {};
-        size_t       pitch       = 0; ///< size in byte of a pixel block rows. This is multiple scan line of pixels for compressed texture.
+        size_t       pitch       = 0; ///< size in bytes of a pixel block row. If 0, tightly packed row is assumed.
+        size_t       size        = 0; ///< size in bytes of the input pixel buffer.
         const void * pixels      = nullptr;
 
         SetContentParameters & setQueue(uint32_t family, uint32_t index) {
@@ -1361,7 +1361,28 @@ public:
 
         SetContentParameters & setQueue(const CommandQueue &);
 
-        SetContentParameters & setPixels(const void * p) {
+        SetContentParameters & setMipLevel(uint32_t level) {
+            mipLevel = level;
+            return *this;
+        }
+
+        SetContentParameters & setArrayLayer(uint32_t layer) {
+            arrayLayer = layer;
+            return *this;
+        }
+
+        SetContentParameters & setPitch(size_t p) {
+            pitch = p;
+            return *this;
+        }
+
+        SetContentParameters & setSize(size_t s) {
+            size = s;
+            return *this;
+        }
+
+        SetContentParameters & setPixels(size_t s, const void * p) {
+            size   = s;
             pixels = p;
             return *this;
         }
@@ -1401,67 +1422,6 @@ public:
         operator bool() const { return format != vk::Format::eUndefined && !storage.empty() && !subresources.empty(); }
     };
 
-    /// Tracks per-subresource Vulkan image state (layout, access flags, pipeline stage).
-    /// Each subresource slot holds one PlaneState per aspect plane the image's format has.
-    /// The plane set is fixed at image construction time and never grows or shrinks.
-    struct State {
-        /// State of a single aspect plane of a single subresource.
-        struct PlaneState {
-            vk::ImageLayout        layout = vk::ImageLayout::eUndefined;
-            vk::AccessFlags        access = vk::AccessFlagBits::eNone;
-            vk::PipelineStageFlags stages = vk::PipelineStageFlagBits::eBottomOfPipe;
-            const char *           usage  = "<unspecified>";
-
-            bool operator==(const PlaneState & o) const { return layout == o.layout && access == o.access && stages == o.stages; }
-            bool operator!=(const PlaneState & o) const { return !(*this == o); }
-
-            bool isWrite() const {
-                // clang-format off
-                return (access & (vk::AccessFlagBits::eShaderWrite |
-                                  vk::AccessFlagBits::eColorAttachmentWrite |
-                                  vk::AccessFlagBits::eDepthStencilAttachmentWrite |
-                                  vk::AccessFlagBits::eTransferWrite |
-                                  vk::AccessFlagBits::eHostWrite |
-                                  vk::AccessFlagBits::eMemoryWrite)) != vk::AccessFlags{};
-                // clang-format on
-            }
-
-            static constexpr PlaneState UNDEFINED() {
-                return {vk::ImageLayout::eUndefined, vk::AccessFlagBits::eNone, vk::PipelineStageFlagBits::eBottomOfPipe};
-            }
-            static constexpr PlaneState TRANSFER_SRC() {
-                return {vk::ImageLayout::eTransferSrcOptimal, vk::AccessFlagBits::eTransferRead, vk::PipelineStageFlagBits::eTransfer};
-            }
-            static constexpr PlaneState TRANSFER_DST() {
-                return {vk::ImageLayout::eTransferDstOptimal, vk::AccessFlagBits::eTransferWrite, vk::PipelineStageFlagBits::eTransfer};
-            }
-        };
-
-        struct AspectHash {
-            size_t operator()(vk::ImageAspectFlagBits a) const { return std::hash<uint32_t> {}(static_cast<uint32_t>(a)); }
-        };
-        struct SubresourceState {
-            std::unordered_map<vk::ImageAspectFlagBits, PlaneState, AspectHash> planes;
-        };
-
-        /// Returns per-plane state for (mip, arrayLayer, aspect), or nullptr if out of range or not a
-        /// valid plane for this image's format.
-        const PlaneState * get(uint32_t mip, uint32_t arrayLayer, vk::ImageAspectFlagBits aspect) const {
-            if (mip >= numMips || arrayLayer >= numLayers) RVI_UNLIKELY return nullptr;
-            const auto & sr = subresources[subresourceIndex(mip, arrayLayer)];
-            auto         it = sr.planes.find(aspect);
-            if (it == sr.planes.end()) RVI_UNLIKELY return nullptr;
-            return &it->second;
-        }
-
-        size_t subresourceIndex(uint32_t mip, uint32_t arrayLayer) const { return mip * numLayers + arrayLayer; }
-
-        vk::ImageAspectFlags          validAspects = {};
-        uint32_t                      numMips      = 0;
-        uint32_t                      numLayers    = 0;
-        std::vector<SubresourceState> subresources; // size = numMips * numLayers. Use subresourceIndex() to index into it.
-    };
-
     /// @brief Construct an image from scratch (will create a new vk::Image handle)
     Image(const ConstructParameters &);
 
@@ -1477,22 +1437,19 @@ public:
     /// @brief Retrieve a vk::ImageView of the image.
     vk::ImageView getView(const GetViewParameters &) const;
 
-    /// @brief Synchronously set content of one subresource
-    /// This method, if succeeded, will transfer the subresource into vk::ImageLayout::eTransferDstOptimal layout.
+    /// @brief Synchronously set content of one entire subresource.
+    /// Always treats the subresource as starting in UNDEFINED layout, transfers into TRANSFER_DST_OPTIMAL,
+    /// copies the full subresource pixels, and transitions into SHADER_READ_ONLY_OPTIMAL layout (Always Ready-to-Read).
     bool setContent(const SetContentParameters &);
 
     /// @brief Synchronously read content of the whole image.
-    /// Transitions every subresource to eTransferSrcOptimal and updates internal state on success.
+    /// Assumes the image is in SHADER_READ_ONLY_OPTIMAL layout, transitions to TRANSFER_SRC_OPTIMAL,
+    /// copies into a staging buffer, and restores back to SHADER_READ_ONLY_OPTIMAL layout.
     /// Returns empty content with undefined format on failure.
     Content readContent(const ReadContentParameters &);
 
-    /// @brief Returns the current per-subresource image state tracked internally.
-    const State & getState() const;
-
-    /// @brief Updates the state for all subresources in \p range.
-    /// The aspectMask in \p range is intersected with the image's valid planes; unknown bits are ignored.
-    /// The default range covers all aspects, all mips, and all array layers of the entire image.
-    void setState(const State::PlaneState & newState, const vk::ImageSubresourceRange & range = FULL_RANGE);
+    /// @brief Return valid aspect flags for the image's format.
+    vk::ImageAspectFlags validAspects() const;
 
     vk::Image handle() const { return desc().handle; }
 
