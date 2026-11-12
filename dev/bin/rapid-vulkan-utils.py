@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-import sys, subprocess, pathlib, pprint, termcolor, os, platform
+import sys, subprocess, pathlib, pprint, os, platform
 from re import search
 
 class FatalError (RuntimeError):
@@ -8,14 +8,14 @@ class FatalError (RuntimeError):
         super(FatalError, self).__init__(message)
 
 def rip(message, exit_code = -1):
-    print(termcolor.colored("\n\n[  FATAL] {0}\n\n".format(message), "magenta"))
+    print("\033[35m\n\n[  FATAL] {0}\n\n\033[0m".format(message))
     sys.exit(exit_code)
 
 def loge(message):
-    print(termcolor.colored("[  ERROR] {0}".format(message), "red"))
+    print("\033[31m[  ERROR] {0}\033[0m".format(message))
 
 def logw(message):
-    print(termcolor.colored("[WARNING] {0}".format(message), "yellow"))
+    print("\033[33m[WARNING] {0}\033[0m".format(message))
 
 def logi(message):
     print("[   INFO] {0}".format(message))

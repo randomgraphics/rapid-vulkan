@@ -155,18 +155,44 @@ std::vector<vk::PhysicalDevice> enumeratePhysicalDevices(vk::Instance instance) 
 // ---------------------------------------------------------------------------------------------------------------------
 // This function currently selects the device with the longest extension list.
 vk::PhysicalDevice selectTheMostPowerfulPhysicalDevice(vk::ArrayProxy<const vk::PhysicalDevice> phydevs) {
-    size_t result = 0;
-    size_t maxext = 0;
-    for (size_t i = 0; i < phydevs.size(); ++i) {
-        auto dev        = phydevs.data()[i];
-        auto extensions = completeEnumerate<vk::ExtensionProperties>(
-            [&](uint32_t * count, vk::ExtensionProperties * data) -> vk::Result { return dev.enumerateDeviceExtensionProperties(nullptr, count, data); });
-        if (extensions.size() > maxext) {
-            maxext = extensions.size();
-            result = i;
-        }
-    }
-    return phydevs.data()[result];
+    // sort all devices in order of favorness.
+    std::vector<size_t> order(phydevs.size());
+    for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+        auto devA = phydevs.data()[a];
+        auto devB = phydevs.data()[b];
+
+        // Sort by device type first, favor discrete GPUs.
+        auto propsA                  = devA.getProperties();
+        auto propsB                  = devB.getProperties();
+        auto physicalDeviceTypeScore = [](vk::PhysicalDeviceType type) {
+            switch (type) {
+            case vk::PhysicalDeviceType::eIntegratedGpu:
+                return 2; // Integrated GPUs is the 2nd best candidate.
+            case vk::PhysicalDeviceType::eDiscreteGpu:
+                return 1; // Prefer discrete GPUs (top choise)
+            case vk::PhysicalDeviceType::eVirtualGpu:
+                return 4; // Virtual GPUs are the 4th best candidate.
+            case vk::PhysicalDeviceType::eCpu:
+                return 3; // simulated CPUs are the 3rd best candidate.
+            default:
+                return 100;
+            }
+        };
+        auto scoreA = physicalDeviceTypeScore(propsA.deviceType);
+        auto scoreB = physicalDeviceTypeScore(propsB.deviceType);
+        if (scoreA != scoreB) return scoreA < scoreB;
+
+        // Then sort by the number of extensions available. Favor devices with more extensions.
+        auto extA = completeEnumerate<vk::ExtensionProperties>(
+            [&](uint32_t * count, vk::ExtensionProperties * data) -> vk::Result { return devA.enumerateDeviceExtensionProperties(nullptr, count, data); });
+        auto extB = completeEnumerate<vk::ExtensionProperties>(
+            [&](uint32_t * count, vk::ExtensionProperties * data) -> vk::Result { return devB.enumerateDeviceExtensionProperties(nullptr, count, data); });
+        return extA.size() > extB.size();
+    });
+
+    // The first one the in sorted list is the device we want the most.
+    return phydevs.data()[order[0]];
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
