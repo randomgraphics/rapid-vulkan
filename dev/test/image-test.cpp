@@ -25,9 +25,9 @@ TEST_CASE("image-read-write") {
 
     // set image content
     const uint32_t pixels[] = {0xff000000, 0x00ff0000, 0x0000ff00, 0x000000ff};
-    image.setContent(Image::SetContentParameters {}.setQueue(*dev->graphics()).setPixels(pixels));
+    REQUIRE(image.setContent(Image::SetContentParameters {}.setQueue(*dev->graphics()).setPixels(sizeof(pixels), pixels)));
 
-    // readContent() reads the internal state for current layout (auto-updated by setContent).
+    // readContent() reads the image into a staging buffer and restores it to SHADER_READ_ONLY_OPTIMAL.
     auto read = image.readContent(Image::ReadContentParameters {}.setQueue(*dev->graphics()));
     REQUIRE(read.format == cp.info.format);
     REQUIRE(read.storage.size() == 4 * cp.info.extent.width * cp.info.extent.height);
@@ -38,68 +38,53 @@ TEST_CASE("image-read-write") {
     CHECK(p[3] == pixels[3]);
 }
 
-TEST_CASE("image-state-initial") {
+TEST_CASE("image-valid-aspects") {
     using namespace rapid_vulkan;
     auto cp    = Image::ConstructParameters {{"st"}, TestVulkanInstance::device->gi()}.set2D(4, 4);
     auto image = Image(cp);
 
-    // Freshly constructed image starts in UNDEFINED layout on every plane.
-    const auto & st = image.getState();
-    CHECK(st.validAspects == vk::ImageAspectFlagBits::eColor);
-    const auto * plane = st.get(0, 0, vk::ImageAspectFlagBits::eColor);
-    REQUIRE(plane);
-    CHECK(plane->layout == vk::ImageLayout::eUndefined);
-    // Out-of-range queries return nullptr.
-    CHECK(!st.get(99, 0, vk::ImageAspectFlagBits::eColor));
-    CHECK(!st.get(0, 0, vk::ImageAspectFlagBits::eDepth)); // color image has no depth plane
+    CHECK(image.validAspects() == vk::ImageAspectFlagBits::eColor);
 }
 
-TEST_CASE("image-state-after-setContent") {
+TEST_CASE("image-setContent-size-validation") {
     using namespace rapid_vulkan;
-    auto dev   = TestVulkanInstance::device.get();
-    auto cp    = Image::ConstructParameters {{"sc"}, dev->gi()}.set2D(2, 2);
+    auto dev = TestVulkanInstance::device.get();
+
+    auto cp    = Image::ConstructParameters {{"sc-val"}, dev->gi()}.set2D(4, 4);
     auto image = Image(cp);
 
-    const uint32_t pixels[] = {1, 2, 3, 4};
-    image.setContent(Image::SetContentParameters {}.setQueue(*dev->graphics()).setPixels(pixels));
+    // 4x4 RGBA8 requires 4 * 4 * 4 = 64 bytes.
+    std::vector<uint32_t> pixels(16, 0xffffffff);
 
-    // setContent() transitions mip 0, layer 0 to TRANSFER_DST_OPTIMAL.
-    const auto * plane = image.getState().get(0, 0, vk::ImageAspectFlagBits::eColor);
-    REQUIRE(plane);
-    CHECK(plane->layout == vk::ImageLayout::eTransferDstOptimal);
+    // Size smaller than required must fail.
+    CHECK(!image.setContent(Image::SetContentParameters {}.setQueue(*dev->graphics()).setPixels(63, pixels.data())));
+
+    // Exact size must succeed.
+    CHECK(image.setContent(Image::SetContentParameters {}.setQueue(*dev->graphics()).setPixels(64, pixels.data())));
+
+    // Larger size must succeed.
+    CHECK(image.setContent(Image::SetContentParameters {}.setQueue(*dev->graphics()).setPixels(128, pixels.data())));
 }
 
-TEST_CASE("image-state-after-readContent") {
+TEST_CASE("image-setContent-mip-layers") {
     using namespace rapid_vulkan;
-    auto dev   = TestVulkanInstance::device.get();
-    auto cp    = Image::ConstructParameters {{"rc"}, dev->gi()}.set2D(2, 2);
+    auto dev = TestVulkanInstance::device.get();
+
+    auto cp    = Image::ConstructParameters {{"sc-mips"}, dev->gi()}.set2D(4, 4).setLevels(2).setLayers(2);
     auto image = Image(cp);
 
-    const uint32_t pixels[] = {1, 2, 3, 4};
-    image.setContent(Image::SetContentParameters {}.setQueue(*dev->graphics()).setPixels(pixels));
-    image.readContent(Image::ReadContentParameters {}.setQueue(*dev->graphics()));
+    std::vector<uint32_t> mip0(16, 0x11111111);
+    std::vector<uint32_t> mip1(4, 0x22222222);
 
-    // readContent() transitions entire image to TRANSFER_SRC_OPTIMAL.
-    const auto * plane = image.getState().get(0, 0, vk::ImageAspectFlagBits::eColor);
-    REQUIRE(plane);
-    CHECK(plane->layout == vk::ImageLayout::eTransferSrcOptimal);
-}
+    // Upload layer 0 mip 0 and mip 1
+    CHECK(image.setContent(Image::SetContentParameters {}.setQueue(*dev->graphics()).setPixels(64, mip0.data()).setMipLevel(0).setArrayLayer(0)));
+    CHECK(image.setContent(Image::SetContentParameters {}.setQueue(*dev->graphics()).setPixels(16, mip1.data()).setMipLevel(1).setArrayLayer(0)));
 
-TEST_CASE("image-setState") {
-    using namespace rapid_vulkan;
-    auto cp    = Image::ConstructParameters {{"ss"}, TestVulkanInstance::device->gi()}.set2D(4, 4).setLevels(2);
-    auto image = Image(cp);
+    // Upload layer 1 mip 0 and mip 1
+    CHECK(image.setContent(Image::SetContentParameters {}.setQueue(*dev->graphics()).setPixels(64, mip0.data()).setMipLevel(0).setArrayLayer(1)));
+    CHECK(image.setContent(Image::SetContentParameters {}.setQueue(*dev->graphics()).setPixels(16, mip1.data()).setMipLevel(1).setArrayLayer(1)));
 
-    // Set mip 1 to TRANSFER_DST.
-    image.setState(Image::State::PlaneState::TRANSFER_DST(), vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 1, 1, 0, 1));
-
-    // Mip 0 is still UNDEFINED.
-    const auto * mip0 = image.getState().get(0, 0, vk::ImageAspectFlagBits::eColor);
-    REQUIRE(mip0);
-    CHECK(mip0->layout == vk::ImageLayout::eUndefined);
-
-    // Mip 1 is now TRANSFER_DST_OPTIMAL.
-    const auto * mip1 = image.getState().get(1, 0, vk::ImageAspectFlagBits::eColor);
-    REQUIRE(mip1);
-    CHECK(mip1->layout == vk::ImageLayout::eTransferDstOptimal);
+    // Invalid layer or mip must fail
+    CHECK(!image.setContent(Image::SetContentParameters {}.setQueue(*dev->graphics()).setPixels(64, mip0.data()).setMipLevel(2)));
+    CHECK(!image.setContent(Image::SetContentParameters {}.setQueue(*dev->graphics()).setPixels(64, mip0.data()).setArrayLayer(2)));
 }
